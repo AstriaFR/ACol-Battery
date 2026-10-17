@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#ffffff"><title>ACol 电池</title><link rel="stylesheet" href="style.css?v=acol-rounded"></head>
+<body>
+<main>
+  <header class="pagehead"><h1 class="brand-title">ACol 电池</h1><button id="openSettings" class="settings-button" type="button">设置</button></header>
+  <section class="live card"><div class="status"><span id="statusDot"></span><span id="state">正在连接…</span><span class="home-actions"><button id="openBatteryInfo" class="battery-info-button" type="button">电池信息</button><a class="cutoff-button" href="cutoff/index.html">截止电压调整</a></span></div><div class="livegrid"><div><strong id="livePct">—</strong><small>电量</small></div><div><strong id="liveRm">—</strong><small>剩余容量 · mAh</small></div><div><strong id="livePower">—</strong><small>实时功率 · W</small></div></div><p id="warning" role="status"></p></section>
+  <nav><div class="tabs"><button data-kind="all" class="selected">全部</button><button data-kind="charge">充电</button><button data-kind="discharge">放电</button></div><label class="small"><input id="showSmall" type="checkbox"><span id="showSmallLabel">显示 ≤30%</span></label></nav>
+  <div class="record-scroll"><div id="records" class="records"></div><button id="more" class="wide" hidden>加载更多</button></div><p id="homeNote" class="footnote home-note">普通记录 ≤3% 自动删除；≤30% 默认隐藏。</p>
+</main>
+<section id="detail" class="detail" hidden>
+  <header class="pagehead"><button id="back">返回</button><div><small id="detailType"></small><h2 id="detailTitle">记录</h2></div><button id="delete">删除</button></header>
+  <div id="detailScroll" class="page-scroll">
+  <div id="summary" class="summary card"></div>
+  <section id="chartPanel" class="chartpanel card">
+    <div class="chartbar"><strong id="chartTitle">电量曲线</strong><div><button id="followLatest" aria-pressed="false" hidden>回到实时</button><button id="reverseCharge" aria-pressed="false" aria-controls="plot" hidden>反向</button><button id="resetZoom">复位</button><button id="fullscreen">横屏全屏</button><button id="closeFullscreen" hidden>退出</button></div></div>
+    <div id="legend" class="legend"></div>
+    <div id="chartInfo" class="chartinfo" role="status"></div>
+    <div class="plotwrap"><canvas id="plot" aria-label="可缩放的充放电曲线" role="img"></canvas><div id="tooltip" class="tooltip" hidden></div></div>
+    <p id="chartHint" class="small">长按图例切换实际刻度；双指缩放、横向拖图、上下滑动页面。</p>
+  </section>
+  <section id="performancePanel" class="chartpanel performance-panel card" hidden>
+    <div class="chartbar"><strong>性能曲线</strong><div><button id="performanceFollow" hidden>实时跟随</button><button id="performanceReset">复位</button><button id="performanceFullscreen">横屏全屏</button><button id="performanceExit" hidden>退出</button></div></div>
+    <div id="performanceLegend" class="legend performance-legend"></div>
+    <div class="plotwrap"><canvas id="performancePlot" aria-label="游戏模式的帧率、CPU 和 GPU 性能曲线" role="img"></canvas><div id="performanceTooltip" class="tooltip" hidden></div></div>
+    <div class="performance-notes"><p id="performanceHint" class="small"></p><button id="performanceSources" type="button">读取方式</button></div>
+    <p id="performanceMethod" class="small performance-method" hidden></p>
+  </section>
+  <section id="drainSummary" class="card" hidden><h3>耗电总结</h3><p id="drainStatsNote" class="small">按已记录的应用时段汇总。</p><div id="drainRows"></div></section>
+  <section id="apps" class="card"><h3>应用耗电</h3><p id="appStatsNote" class="small">按使用时段分摊整机耗电，≤2 分钟归入其他。平均功耗仅统计有效数据。</p><div id="appRows"></div></section>
+  <p id="detailNote" class="footnote"></p>
+  </div>
+</section>
+<section id="batteryInfoPanel" class="detail battery-info-panel" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="batteryInfoBack" class="back" type="button">返回</button><h1>电池信息</h1></div></header>
+  <div class="page-scroll">
+  <div class="battery-info-cards">
+    <section class="card battery-info-card"><div><small>循环计数（cycle_count）</small><strong data-info="cycles">—</strong></div><div><small data-info-label="voltage">电池电压（bcc_parms）</small><strong data-info="voltage">—</strong></div><div><small>电池温度（temp）</small><strong data-info="temp">—</strong></div></section>
+    <section class="card battery-info-card"><div><small>当前剩余电量（battery_rm）</small><strong data-info="rm">—</strong></div><div><small>完全充满时的容量（battery_fcc）</small><strong class="battery-capacity-value"><span data-info="fcc">—</span><span class="battery-capacity-help"><span id="fccDifference"></span><button id="batteryCapacityInfo" class="battery-estimate-info" type="button" aria-label="查看 FCC、Qmax 和容量比例的含义" aria-haspopup="dialog">i</button></span></strong></div><div><small>电池最大化学容量（batt_qmax）</small><strong data-info="qmax">—</strong></div><div><small>电池设计容量（design_capacity）</small><strong data-info="designCapacity">—</strong></div></section>
+    <section class="card battery-info-card battery-estimates"><div><small>原始完全充满时的容量（计算值）</small><strong data-info="rawFcc">—</strong></div><div><small>电池健康（battery_soh）</small><strong data-info="soh">—</strong></div><div><small>原始电池健康（计算值）</small><strong data-info="rawSoh">—</strong></div><div class="battery-info-note"><span>这些数值不准确，仅供参考。</span><button id="batteryEstimateInfo" class="battery-estimate-info" type="button" aria-label="查看原始值的计算说明" aria-haspopup="dialog">i</button></div></section>
+    <section class="card battery-info-card"><div><small>截止电压（vbat_uv）</small><strong data-info="cutoffMv">—</strong></div><div><small>电池序列号（battery_sn）</small><strong data-info="serial">—</strong></div><div><small>电池生产日期（battery_manu_date）</small><strong data-info="manufactureDate">—</strong></div><div><small>电池类型（battery_type）</small><strong data-info="batteryType">—</strong></div></section>
+  </div>
+  <p id="batteryInfoError" class="battery-info-error" role="status" hidden></p>
+  </div>
+</section>
+<dialog id="batteryCapacityExplanation" class="battery-capacity-explanation" aria-labelledby="batteryCapacityTitle">
+  <h3 id="batteryCapacityTitle">容量与比例怎么看？</h3>
+  <p><strong>FCC：</strong>接近电池当前真实可用的容量。</p>
+  <p><strong>Qmax：</strong>接近电池实际的最大容量。</p>
+  <p><strong>Qmax 后的括号：</strong>与设计容量相比的比例，可作为更接近真实健康度的参考。</p>
+  <p><strong>FCC 的第二个括号：</strong>与 Qmax 相比少了多少，可近似理解为锁容比例。负号表示 FCC 比 Qmax 少。</p>
+  <p>这些都是接近值，不是精确测量结果。</p>
+  <div class="battery-capacity-explanation-actions"><button id="closeBatteryCapacity" type="button">知道了</button></div>
+</dialog>
+<dialog id="batteryEstimateExplanation" class="battery-explanation" aria-labelledby="batteryEstimateTitle">
+  <h3 id="batteryEstimateTitle">两个原始值怎么算？</h3>
+  <div id="batteryExplanationPages" class="battery-explanation-pages" data-page="0">
+  <section data-explanation-page="0">
+  <p>系统显示的容量和健康度，可能加过厂家为当前截止电压设置的补偿。这里尝试把补偿前的数值倒推出来。</p>
+  <p><strong>原始电池健康：</strong>找到厂家对应的补偿比例，把显示的健康度按这个比例还原。</p>
+  <p><strong>原始满充容量：</strong>根据还原后的健康度，估算当前的容量补偿，再从显示的满充容量里扣掉。</p>
+  <p><strong>截止电压低于 3.0 V 时，不进行补偿计算。</strong>两个原始值直接沿用读取到的 FCC 和 SOH，不代表已还原出补偿前的数值。</p>
+  <p>这不是重新测量电池。厂家参数未必能完整反映实际状态，所以结果不准确，只适合参考；无法估算时显示“—”。</p>
+  </section>
+  <section data-explanation-page="1" hidden>
+    <table id="batteryCoefficientTable" class="battery-coefficient-table" hidden><thead><tr><th scope="col">截止电压<br><span>mV</span></th><th scope="col">容量偏移<br><span>mAh</span></th><th scope="col">健康度偏移<br><span>%</span></th></tr></thead><tbody id="batteryCoefficientRows"></tbody></table>
+    <p id="batteryCoefficientEmpty">正在读取补偿关系表…</p>
+    <p class="battery-coefficient-note">表内数值来自本机厂家参数。容量偏移还会按原始健康度折算；低于 3.0 V 的参数仅展示，不用于这两项原始值的反推。</p>
+  </section>
+  </div>
+  <div class="battery-explanation-actions"><div class="battery-explanation-nav"><button id="previousBatteryExplanation" type="button" aria-label="上一页" disabled>‹</button><span id="batteryExplanationCounter" aria-live="polite">1 / 2</span><button id="nextBatteryExplanation" type="button" aria-label="下一页">›</button></div><button id="closeBatteryEstimate" type="button">知道了</button></div>
+</dialog>
+<section id="settingsPanel" class="detail settings-panel" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="settingsBack" class="back" type="button">返回</button><h1>设置</h1></div></header>
+  <div class="page-scroll">
+  <section class="card setting-card recording-control"><label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label><p id="recordingHint">正在连接后台…</p></section>
+  <form id="settingsForm" novalidate>
+    <section class="card setting-card fast-control"><div class="setting-heading"><div class="setting-title"><span>游戏模式</span><button id="gameModeInfo" class="setting-info" type="button" aria-label="游戏模式介绍" aria-haspopup="dialog">i</button></div><button id="toggleFast" type="button" disabled>开启</button></div><div class="setting-group"><div class="setting-heading"><label for="fastSeconds">采样间隔</label><div class="setting-input"><input id="fastSeconds" name="fastSeconds" type="number" inputmode="none" readonly min="1" max="60" step="1" required disabled><span>秒</span></div></div></div><div class="setting-group"><label class="setting-heading setting-switch" for="fastAutoOff"><span>息屏 10 分钟后退出</span><input id="fastAutoOff" name="fastAutoOff" type="checkbox" role="switch" disabled></label></div></section>
+    <section class="card setting-card retention-settings"><div class="setting-pair"><label for="deletePct">自动删除百分比<div class="setting-input"><input id="deletePct" name="deletePct" type="number" inputmode="none" readonly min="0" max="40" step="1" required disabled><span>%</span></div></label><label for="hidePct">自动隐藏百分比<div class="setting-input"><input id="hidePct" name="hidePct" type="number" inputmode="none" readonly min="0" max="80" step="1" required disabled><span>%</span></div></label></div><p>普通记录结束后按阈值删除或隐藏。<br>清理已有记录另行确认。</p></section>
+    <section class="card setting-card"><h3>放电记录间隔</h3><div class="setting-pair"><label for="screenOnMinutes">亮屏<div class="setting-input"><input id="screenOnMinutes" name="screenOnMinutes" type="number" inputmode="none" readonly min="1" max="10" step="1" required disabled><span>分钟</span></div></label><label for="screenOffMinutes">息屏<div class="setting-input"><input id="screenOffMinutes" name="screenOffMinutes" type="number" inputmode="none" readonly min="1" max="60" step="1" required disabled><span>分钟</span></div></label></div><p>修改后沿用当前记录；充电仍每秒记录。</p></section>
+    <section class="card setting-card"><div class="setting-group"><div class="setting-heading"><label for="capacityAh">默认容量量程</label><div class="setting-input"><input id="capacityAh" name="capacityAh" type="number" inputmode="none" readonly min="0.01" max="20" step="0.01" required disabled><span>Ah</span></div></div></div><div class="setting-group"><label class="setting-heading setting-switch" for="capacityAuto"><span>容量量程自动扩展</span><input id="capacityAuto" name="capacityAuto" type="checkbox" role="switch" disabled></label><p>超出默认量程时按记录最大值扩展；关闭后固定上限。</p></div></section>
+    <section class="card setting-card"><h3>默认电压量程</h3><div class="setting-pair"><label for="voltageMin">下限<div class="setting-input"><input id="voltageMin" name="voltageMin" type="number" inputmode="none" readonly min="2.2" max="4.8" step="0.01" required disabled><span>V</span></div></label><label for="voltageMax">上限<div class="setting-input"><input id="voltageMax" name="voltageMax" type="number" inputmode="none" readonly min="2.2" max="4.8" step="0.01" required disabled><span>V</span></div></label></div><p>超出默认量程后自动扩展。</p></section>
+    <section class="card setting-card"><h3>默认温度量程</h3><div class="setting-pair"><label for="tempMin">下限<div class="setting-input"><input id="tempMin" name="tempMin" type="number" inputmode="none" readonly min="-20" max="60" step="1" required disabled><span>℃</span></div></label><label for="tempMax">上限<div class="setting-input"><input id="tempMax" name="tempMax" type="number" inputmode="none" readonly min="-20" max="60" step="1" required disabled><span>℃</span></div></label></div><p>超出默认量程后自动扩展。</p></section>
+  </form>
+
+  <p id="settingsStatus" class="settings-status" role="status" aria-live="polite" hidden></p>
+  </div>
+</section>
+<dialog id="gameModeExplanation" class="game-explanation" aria-labelledby="gameModeTitle"><h3 id="gameModeTitle">游戏模式</h3><p>按设定秒数记录瞬时功耗、帧率、CPU 各簇频率和使用率、GPU 频率和使用率，可在记录内查看独立性能图。</p><p>耗电统计按 RM 容量变化计算，每分钟及亮灭屏时结算，按应用和亮屏、息屏时长分配；退出时补结算。</p><p>开启、关闭时都会结束当前记录并开始新记录。游戏记录不自动删除或隐藏，接入充电会退出；可选择息屏 10 分钟后自动退出。</p><p>仅此模式采集性能数据。使用率采用系统或驱动已有计数，帧率采用实际呈现帧；缺少接口的指标留空。</p><div class="game-explanation-actions"><button id="closeGameModeInfo" type="button">知道了</button></div></dialog>
+<dialog id="recordingConfirm" class="recording-confirm" aria-labelledby="recordingConfirmTitle" aria-describedby="recordingConfirmHint"><h3 id="recordingConfirmTitle"></h3><p id="recordingConfirmHint"></p><div class="recording-confirm-actions"><button id="cancelRecording" type="button">取消</button><button id="confirmRecording" type="button">确认</button></div></dialog>
+<dialog id="settingsKeypad" class="numeric-keypad" aria-labelledby="keypadTitle">
+  <div class="keypad-heading"><h3 id="keypadTitle">修改数值</h3><div class="keypad-heading-actions"><small id="keypadRange" class="keypad-range"></small><button id="keypadCancel" type="button" aria-label="取消修改">取消</button><button id="keypadApply" class="keypad-apply" type="button">确认</button></div></div>
+  <div class="keypad-readout"><output id="keypadValue"></output><span id="keypadUnit"></span></div>
+  <p id="keypadError" class="keypad-error" role="status" hidden></p>
+  <div class="keypad-grid"><button type="button" data-key="sign" aria-label="切换正负号">−</button><button type="button" data-key="clear">清空</button><button type="button" data-key="backspace" aria-label="退格">⌫</button><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="00">00</button><button type="button" data-key="0">0</button><button type="button" data-key="dot">.</button></div>
+</dialog>
+<dialog id="settingsChangeConfirm" class="recording-confirm settings-change-confirm" aria-labelledby="settingsChangeTitle" aria-describedby="settingsChangeHint"><h3 id="settingsChangeTitle"></h3><p id="settingsChangeHint"></p><div class="recording-confirm-actions"><button id="settingsChangeCancel" type="button">取消</button><button id="settingsChangeApply" type="button">确认</button></div></dialog>
+<dialog id="settingsDeleteConfirm" class="settings-delete-confirm" aria-labelledby="settingsDeleteTitle" aria-describedby="settingsDeleteHint">
+  <h3 id="settingsDeleteTitle"></h3><p id="settingsDeleteHint"></p><p id="settingsDeleteError" class="confirmation-error" role="status" hidden></p>
+  <div class="settings-delete-actions"><button id="settingsDeleteYes" type="button">是</button><button id="settingsDeleteNo" type="button">否</button></div>
+</dialog>
+<dialog id="remainingExplanation" class="remaining-explanation" aria-labelledby="remainingExplanationTitle">
+  <h3 id="remainingExplanationTitle">剩余能量与时长</h3>
+  <p>剩余能量：用当前剩余容量，乘以按当前电压和预设关系表估算的后续平均电压。</p>
+  <p>亮屏时长：用剩余能量，除以本条记录的亮屏平均功耗。后续使用强度变化，实际时长也会变化。</p>
+  <div class="remaining-explanation-actions"><button id="closeRemainingExplanation" type="button">知道了</button></div>
+</dialog>
+<dialog id="confirm"><h3>删除此记录？</h3><p id="confirmText">曲线和应用统计将删除，无法恢复。</p><div class="dialogbuttons"><button id="cancelDelete">取消</button><button id="confirmDelete" class="danger">删除</button></div></dialog>
+<div id="toast" role="status" hidden></div>
+<script type="module" src="app.js?v=acol-1.2"></script>
+</body></html>

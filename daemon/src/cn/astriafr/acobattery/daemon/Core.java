@@ -1,0 +1,187 @@
+package cn.astriafr.acobattery.daemon;
+
+import java.util.*;
+
+/** Hardware-independent rules. All time arguments are monotonic milliseconds. */
+public final class Core {
+    public static final class Reading {
+        public long elapsed, wall;
+        public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
+        public double vmax = Double.NaN, vmin = Double.NaN, fv = Double.NaN, temp = Double.NaN;
+        public double cell1 = Double.NaN, cell2 = Double.NaN;
+        public int cellCount=2;
+        public String voltageSource="",currentSource="";
+        public boolean online, full, enabled;
+        public String source = "", error = "";
+        public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
+        // OPLUS gauge current is negative while charging.
+        public double chargingCurrent() { return -current; }
+        public double compensatedCurrent() { return chargingCurrent() * (cellCount==2?2:1); }
+        public double power() { return cellCount==0?Double.NaN:compensatedCurrent() * voltage() / 1_000_000; }
+        public boolean valid() { return finite(rm) && finite(pct) && rm >= 0 && pct >= 0 && pct <= 100; }
+    }
+    public static boolean finite(double v) { return !Double.isNaN(v) && !Double.isInfinite(v); }
+    public static int detectCellCount(String raw) {
+        String[] fields=raw.trim().split(",",-1);
+        if(fields.length<2)return 0;
+        return "1".equals(fields[1].trim())?1:"2".equals(fields[1].trim())?2:0;
+    }
+    static double parse(String raw){try{return Double.parseDouble(raw.trim());}catch(Exception e){return Double.NaN;}}
+    static boolean cellVoltage(double value){return finite(value)&&value>=2200&&value<=4800;}
+    /** Read one BCC response; single-cell devices never require field 11. */
+    public static boolean applyBcc(Reading r,String raw) {
+        String[] fields=raw.trim().split(",",-1);
+        if(fields.length!=19)return false;
+        double a=parse(fields[6]),b=r.cellCount==2?parse(fields[11]):Double.NaN;
+        if(r.cellCount==1&&cellVoltage(a)){r.cell1=a;r.cell2=Double.NaN;r.vmin=r.vmax=a;r.voltageSource="bcc";}
+        else if(r.cellCount==2&&cellVoltage(a)&&cellVoltage(b)){
+            r.cell1=a;r.cell2=b;r.vmax=Math.max(a,b);r.vmin=Math.min(a,b);r.voltageSource="bcc";
+        }
+        double current=parse(fields[8]),temp=parse(fields[7])/10;
+        if(finite(current)&&Math.abs(current)<=30000){r.current=current;r.currentSource="bcc";}
+        if(finite(temp)&&temp>=-40&&temp<=100)r.temp=temp;
+        return finite(r.voltage())&&finite(r.current);
+    }
+    /** Android voltage is mV; CURRENT_NOW is microamps, positive while charging. */
+    public static void applySystem(Reading r,double millivolts,double microamps,double temperature) {
+        if(!finite(r.voltage())&&r.cellCount>0){
+            double voltage=r.cellCount==2&&millivolts>6000?millivolts/2:millivolts;
+            if(cellVoltage(voltage)){
+                r.vmin=r.vmax=voltage;r.cell1=r.cellCount==1?voltage:Double.NaN;r.cell2=Double.NaN;r.voltageSource="android";
+            }
+        }
+        if(!finite(r.current)&&finite(microamps)&&Math.abs(microamps)<=30000000){r.current=-microamps/1000;r.currentSource="android";}
+        if(!finite(r.temp)&&finite(temperature)&&temperature>=-40&&temperature<=100)r.temp=temperature;
+    }
+    // battery_rm discharge uses the cell-mean voltage basis; do not multiply by 2S again.
+    public static double dischargeEnergyMwh(double cellMeanA,double cellMeanB,double mah) {
+        if(!finite(cellMeanA)||!finite(cellMeanB)||cellMeanA<=0||cellMeanB<=0||!finite(mah)||mah<0)return Double.NaN;
+        return mah*(cellMeanA+cellMeanB)/2000;
+    }
+    public static double averagePower(double energyMwh,long ms) {
+        return finite(energyMwh)&&energyMwh>=0&&ms>0?energyMwh*3600/ms:Double.NaN;
+    }
+    public static double instantEnergyMwh(double signedPowerA,double signedPowerB,long ms){
+        if(!finite(signedPowerA)||!finite(signedPowerB)||signedPowerA>0||signedPowerB>0||ms<=0)return Double.NaN;
+        return -(signedPowerA+signedPowerB)/2*ms/3600;
+    }
+    public static double instantChargeMah(double signedCurrentA,double signedCurrentB,long ms){
+        if(!finite(signedCurrentA)||!finite(signedCurrentB)||signedCurrentA>0||signedCurrentB>0||ms<=0)return Double.NaN;
+        return -(signedCurrentA+signedCurrentB)/2*ms/3600000;
+    }
+    public static final class Integral {
+        public final double mah,energyMwh;
+        Integral(double mah,double energyMwh){this.mah=mah;this.energyMwh=energyMwh;}
+    }
+    /** RM and percentage are deliberately independent of fast current/power integration. */
+    public static Integral integrateFast(Reading before,Reading after,long maxGap){
+        long ms=after.elapsed-before.elapsed;
+        if(ms<=0||ms>maxGap||before.cellCount<1||before.cellCount>2||before.cellCount!=after.cellCount)
+            return new Integral(Double.NaN,Double.NaN);
+        return new Integral(instantChargeMah(before.compensatedCurrent(),after.compensatedCurrent(),ms),
+            instantEnergyMwh(before.power(),after.power(),ms));
+    }
+
+    public static final class Sampling {
+        public boolean interactive=true,screenSample;
+        public long next,expected=120000;
+        public long screenOnMs=120000,screenOffMs=600000,fastMs;
+        public long interval(int state) { return state==1?1000:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
+        public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
+        public boolean screen(boolean on,long now) {
+            if(interactive==on)return false;
+            interactive=on;screenSample=true;next=now;return true;
+        }
+        public boolean takeScreenSample() { boolean pending=screenSample;screenSample=false;return pending; }
+        // Follow the previous sample's plan, even if the screen has just turned on.
+        public long maxGap() { return fastMs>0?Math.max(5000,expected*3):expected+expected/2; }
+    }
+
+    public static final class FullGate {
+        public long since = -1, last = -1;
+        private double minRm, maxRm;
+        public void reset() { since = last = -1; }
+        public boolean update(Reading r) {
+            boolean tail = r.online && r.full && r.enabled && r.valid()
+                && finite(r.current) && r.current >= -60 && r.current <= 40
+                && finite(r.fv) && r.vmin >= Math.max(4300, r.fv - 100)
+                && r.temp >= 10 && r.temp <= 45;
+            if (!tail) { reset(); return false; }
+            if (since < 0 || last < 0 || r.elapsed - last > 3500 || r.elapsed < last) {
+                since = r.elapsed; minRm = maxRm = r.rm;
+            }
+            minRm = Math.min(minRm, r.rm); maxRm = Math.max(maxRm, r.rm);
+            if (maxRm - minRm > 3) { since = r.elapsed; minRm = maxRm = r.rm; }
+            last = r.elapsed;
+            return r.elapsed - since >= 300_000;
+        }
+        public double progress(long now) { return since < 0 ? 0 : Math.min(1, (now - since) / 300_000.0); }
+    }
+
+    public static final class Depletion {
+        private double credit;
+        public void reset() { credit = 0; }
+        /** Upward corrections are carried forward to avoid counting the same drop twice. */
+        public double consume(double before, double after, long dt) {
+            return consume(before,after,dt,90000);
+        }
+        public double consume(double before,double after,long dt,long maxGap) {
+            if (!finite(before) || !finite(after) || dt <= 0 || dt > maxGap
+                || Math.abs(before - after) > Math.max(120, dt / 1000.0 * 10)) {
+                reset(); return Double.NaN;
+            }
+            credit += before - after;
+            double loss = Math.max(0, credit);
+            if (loss > 0) credit = 0;
+            return loss;
+        }
+    }
+
+    public static final class Event {
+        public final long time; public final int type; public final String pkg;
+        public final String activity; public final int instance;
+        public Event(long t, int type, String p) { this(t,type,p,null,0); }
+        public Event(long t,int type,String p,String activity,int instance) {
+            time=t;this.type=type;pkg=p;this.activity=activity;this.instance=instance;
+        }
+        String activityKey() { return pkg+"\u0000"+(instance!=0?"#"+instance:Objects.toString(activity,"")); }
+    }
+    public static final String OTHER = "__other__", OFF = "__screenoff__";
+    public static final class Timeline {
+        // Lifecycle events belong to an activity instance, not the whole package.
+        // A previous page may stop after the next page has already resumed.
+        private final LinkedHashMap<String,String> resumed = new LinkedHashMap<>();
+        private boolean screen = false, locked = true;
+        public void apply(Event e) {
+            switch(e.type) {
+                case 1:
+                    if(e.pkg!=null) {resumed.remove(e.activityKey());resumed.put(e.activityKey(),e.pkg);}
+                    break; // ACTIVITY_RESUMED
+                case 2: case 23: resumed.remove(e.activityKey()); break;
+                case 15: screen=true; break;
+                case 16: screen=false; break;
+                case 17: locked=true; break;
+                case 18: locked=false; break;
+                case 26: case 27: resumed.clear();screen=false;locked=true;break;
+            }
+        }
+        public void seed(boolean interactive, boolean keyguard) { resumed.clear();screen=interactive;locked=keyguard; }
+        private String owner() {
+            if(!screen)return OFF;if(locked)return OTHER;
+            String top=OTHER;for(String pkg:resumed.values())top=pkg;return top;
+        }
+        public Map<String,Long> split(long start, long end, List<Event> events) {
+            Map<String,Long> result = new LinkedHashMap<>();
+            long cursor=start;
+            for(Event e:events) {
+                if(e.time <= start) {apply(e);continue;}
+                if(e.time > end) break;
+                add(result,owner(),e.time-cursor); apply(e); cursor=e.time;
+            }
+            add(result,owner(),end-cursor); return result;
+        }
+        private static void add(Map<String,Long> m,String key,long dt) {
+            if(dt>0) m.put(key,m.getOrDefault(key,0L)+dt);
+        }
+    }
+}
