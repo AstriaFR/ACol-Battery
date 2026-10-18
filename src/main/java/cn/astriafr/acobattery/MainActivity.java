@@ -2,8 +2,10 @@ package cn.astriafr.acobattery;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.BitmapFactory;
@@ -43,6 +45,15 @@ public final class MainActivity extends Activity {
     final OnBackInvokedCallback backCallback=this::back;
     OnBackInvokedDispatcher backDispatcher;
     final java.util.concurrent.ConcurrentLinkedQueue<JSONObject> waitingRequests=new java.util.concurrent.ConcurrentLinkedQueue<>();
+    @Override protected void attachBaseContext(Context base){
+        // Override font scaling only; keep density, locale and orientation live.
+        Configuration fixedFont=new Configuration();fixedFont.fontScale=1.0f;
+        super.attachBaseContext(base.createConfigurationContext(fixedFont));
+    }
+    @Override public void onConfigurationChanged(Configuration configuration){
+        super.onConfigurationChanged(configuration);
+        if(web!=null)web.getSettings().setTextZoom(100);
+    }
     int dp(float value){return Math.round(getResources().getDisplayMetrics().density*value);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.WHITE);getWindow().setNavigationBarColor(Color.WHITE);
@@ -85,7 +96,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.2 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);
@@ -118,8 +129,12 @@ public final class MainActivity extends Activity {
                 root.command("umask 077; mkdir -p "+BASE+"; chmod 700 "+BASE+"; if [ -f "+BASE+"/owner.cert ] && [ \"$(cat "+BASE+"/owner.cert)\" != "+RootSession.quote(cert)+" ]; then echo '历史目录签名不一致，已停止初始化。'; false; else printf '%s' "+RootSession.quote(cert)+" > "+BASE+"/owner.cert; printf '%s' "+user+" > "+BASE+"/owner.user; fi",10);
                 String current=root.command("cat "+BASE+"/runtime.version 2>/dev/null || true",10);
                 if(!version.equals(current)){
-                    root.command("touch "+BASE+"/update.pending; if [ -f "+RUNTIME+"/bin/daemon.dex.jar ]; then "+admin("stop-update")+"; fi",20);
+                    // Run the new updater so even old recorders are suspended without
+                    // executing their old finish-and-auto-delete shutdown behavior.
+                    String stage=RUNTIME+"/update-stage";
+                    root.command("mkdir -p "+stage+"; /data/adb/ksu/bin/busybox unzip -oq "+RootSession.quote(archive.getAbsolutePath())+" -d "+stage+"; touch "+BASE+"/update.pending; CLASSPATH="+stage+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin stop-update",20);
                     root.command("mkdir -p "+RUNTIME+"; /data/adb/ksu/bin/busybox unzip -oq "+RootSession.quote(archive.getAbsolutePath())+" -d "+RUNTIME+"; chmod 700 "+RUNTIME+"/bin/aco-launcher; chmod 600 "+RUNTIME+"/bin/daemon.dex.jar; chmod 700 "+RUNTIME+"/*.sh; printf '%s' "+RootSession.quote(version)+" > "+BASE+"/runtime.version; rm -f "+BASE+"/update.pending "+BASE+"/cleanup.request",20);
+                    root.command("rm -f "+stage+"/bin/daemon.dex.jar "+stage+"/bin/libcurvewait.so "+stage+"/bin/aco-launcher "+stage+"/boot.sh "+stage+"/service.sh "+stage+"/cutoff.sh; rmdir "+stage+"/bin "+stage+" 2>/dev/null || true",10);
                 }
                 if(destroyed)return;
                 phase("检查电池接口","检查底层读数、单双电芯与采样能力。");
@@ -170,7 +185,7 @@ public final class MainActivity extends Activity {
         });
     }
     @SuppressLint({"SetJavaScriptEnabled","AddJavascriptInterface"}) void showWeb(){
-        initialized=true;web=new WebView(this);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
+        initialized=true;web=new WebView(this);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setSupportMultipleWindows(false);settings.setMediaPlaybackRequiresUserGesture(true);web.addJavascriptInterface(new Bridge(),"AcoNative");
         web.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){return !trusted(request.getUrl());}

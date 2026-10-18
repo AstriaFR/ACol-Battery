@@ -75,6 +75,7 @@ public final class Main {
     Core.Reading candidate;
     int state=-1, capabilities;
     boolean stableOnline;
+    boolean recoveryBoundary;
     boolean timelineReady;
     boolean moduleWatch,screenListenerReady;
     String screenError="";
@@ -125,7 +126,7 @@ public final class Main {
         app.framework=new FrameworkWatch(Main::interruptWait);app.framework.start();
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 1.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 1.3 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect();System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -182,19 +183,20 @@ public final class Main {
     }
 
     static JSONObject decodeSettings(JSONArray p)throws Exception {
-        if(p.length()!=8&&p.length()!=12)throw new IOException("设置项数量无效");
-        long[] v={3,30,560,1,300,450,50,60,2,10,10,1};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
+        if(p.length()!=8&&p.length()!=12&&p.length()!=13)throw new IOException("设置项数量无效");
+        long[] v={5,30,560,1,300,450,50,60,2,15,10,1,2};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
         if(v[2]<1||v[2]>2000||v[3]<0||v[3]>1)throw new IOException("容量范围 0.01–20.00 Ah");
         if(v[4]<220||v[5]>480||v[4]>=v[5])throw new IOException("电压范围 2.20–4.80 V，下限须小于上限");
         if(v[6]<0||v[7]>80||v[6]>=v[7])throw new IOException("温度范围 −20–60℃，下限须小于上限");
         if(v[8]<1||v[8]>10||v[9]<1||v[9]>60||v[10]<1||v[10]>60||v[11]<0||v[11]>1)throw new IOException("亮屏间隔 1–10 分钟，息屏间隔 1–60 分钟，游戏采样间隔 1–60 秒，仅限整数");
+        if(v[12]<1||v[12]>10||p.length()==13&&!p.get(12).toString().matches("[0-9]+"))throw new IOException("充电间隔 1–10 秒，仅限整数");
         return new JSONObject().put("deletePct",v[0]).put("hidePct",v[1]).put("capacityAh",v[2]/100.0)
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
-            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1);
+            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]);
     }
     void loadSettings()throws Exception {
-        settings=decodeSettings(new JSONArray("[3,30,560,1,300,450,50,60]"));
+        settings=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='module_settings'",null)) {
             if(c.moveToFirst())try {settings=decodeSettings(new JSONArray(c.getString(0)));}
             catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
@@ -205,7 +207,8 @@ public final class Main {
     }
     void configureSampling(boolean reschedule){
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
-        sampling.screenOffMs=settings.optLong("screenOffMinutes",10)*60000;
+        sampling.screenOffMs=settings.optLong("screenOffMinutes",15)*60000;
+        sampling.chargeMs=settings.optLong("chargeSeconds",2)*1000;
         sampling.fastMs=fastEnabled?settings.optLong("fastSeconds",10)*1000:0;
         if(reschedule&&recordingEnabled){
             long now=SystemClock.elapsedRealtime(),nextInterval=interval();
@@ -257,16 +260,18 @@ public final class Main {
         cellCount=detected;settingsVersion++;System.err.println("Remembered battery cell count: "+cellCount);
     }
     static String smallRecordWhere(JSONObject value) {
-        return "active=0 AND fast_seconds=0 AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",3);
+        return "active=0 AND fast_seconds=0 AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",5);
     }
     JSONObject saveSettings(JSONArray p)throws Exception {
-        if(p.length()!=13||(p.getInt(12)!=0&&p.getInt(12)!=1))throw new IOException("删除确认参数无效");
-        JSONArray values=new JSONArray();for(int i=0;i<12;i++)values.put(p.getLong(i));
+        int count=p.length()-1;
+        if((count!=12&&count!=13)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
+        JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
+        if(count==12)values.put(settings.optLong("chargeSeconds",2));
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
         try {
             db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('module_settings',?)",new Object[]{values.toString()});
-            if(p.getInt(12)==1)removed=db.delete("sessions",smallRecordWhere(next),null);
+            if(p.getInt(count)==1)removed=db.delete("sessions",smallRecordWhere(next),null);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
         settings=next;settingsVersion++;rangeId=-1;rangeValues=null;
@@ -381,7 +386,7 @@ public final class Main {
     }
     JSONObject batteryInfoSnapshot()throws Exception {
         Integer fcc=integer(read(BAT+"battery_fcc")),soh=integer(read(BAT+"battery_soh"));
-        Integer cutoff=integer(read(BAT+"vbat_uv")),design=integer(read(BAT+"design_capacity"));
+        Integer cutoff=BatteryDetails.termVoltage(read("/proc/oplus-votable/GAUGE_TERM_VOLTAGE/status")),design=integer(read(BAT+"design_capacity"));
         String type=read(BAT+"battery_type");byte[] coefficients=new byte[0];
         String tree="/proc/device-tree/soc/oplus,mms_gauge/";
         String[] paths=type.matches("[A-Za-z0-9_.-]+")?new String[]{tree+type+"/deep_spec,term_coeff",tree+"deep_spec,term_coeff"}:new String[]{tree+"deep_spec,term_coeff"};
@@ -500,7 +505,7 @@ public final class Main {
                                     // UsageStats publishes its matching screen event a little later.
                                     if(timelineReady)timeline.apply(new Core.Event(r.wall,sampling.interactive?15:16,null));
                                 }
-                                if(state==1 && fullGate.update(r)) {finish("full_tail_confirmed");state=2;}
+                                if(state==1 && fullGate.update(r,sampling.expected)) {finish("full_tail_confirmed");state=2;}
                             }
                             sampling.sampled(state,now);
                         }else if(fastEnabled&&state==0&&now>=fastStatsNext){
@@ -513,7 +518,12 @@ public final class Main {
         }
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
         framework.close();performance.close();
-        synchronized(mutex) {finish(stopReason);db.close();lock.release();lockFile.close();}
+        synchronized(mutex) {
+            // Updating code or reconnecting framework proxies suspends ownership,
+            // not the charge/discharge session. Completed samples are already durable.
+            if(!Core.resumableStop(stopReason))finish(stopReason);
+            db.close();lock.release();lockFile.close();
+        }
     }
     JSONObject setRecording(boolean enabled)throws Exception {
         if(stopping)throw new IOException("后台正在结束，请稍后重试。");
@@ -537,7 +547,12 @@ public final class Main {
     void requestStop(String reason)throws Exception {
         synchronized(mutex){
             if(stopping)return;
-            if(session>=0){Core.Reading r=hardwareReading(header);latest=r;append(r);finish(reason);}
+            if(session>=0){
+                Core.Reading r=hardwareReading(header);latest=r;append(r);
+                if(Core.resumableStop(reason)){
+                    if(fastStatsPrevious!=null)sampleFastStats(r,true);
+                }else finish(reason);
+            }
             stopReason=reason;stopping=true;interruptWait();
         }
     }
@@ -552,27 +567,90 @@ public final class Main {
     long interval(){return sampling.interval(state);}
 
     void recover(Core.Reading r)throws Exception {
+        session=-1;previous=null;fullGate.reset();depletion.reset();timelineReady=false;
+        fastStatsPrevious=null;fastStatsNext=Long.MAX_VALUE;recoveryBoundary=false;
+        JSONObject progress=null;
+        try{String value=runtimeValue("session_progress_v1");if(!value.isEmpty())progress=new JSONObject(value);}
+        catch(JSONException e){System.err.println("Recorder checkpoint unavailable; using committed samples.");}
         db.beginTransaction();
         try {
-            try(Cursor c=db.rawQuery("SELECT id,boot FROM sessions WHERE active=1",null)) {
+            try(Cursor c=db.rawQuery("SELECT id,boot,kind,start_elapsed,end_elapsed,start_wall,fast_seconds FROM sessions WHERE active=1 ORDER BY id DESC",null)) {
                 while(c.moveToNext()) {
                     long id=c.getLong(0);
+                    if(session<0&&Core.resumeSession(c.getString(1),boot,c.getString(2),c.getInt(6)>0,
+                            r.online,fastEnabled,c.getLong(3),c.getLong(4),r.elapsed)){
+                        Core.Reading saved=lastSample(id,c.getLong(3),c.getLong(5));
+                        if(saved!=null&&saved.elapsed>=c.getLong(3)&&saved.elapsed<=c.getLong(4)&&saved.elapsed<=r.elapsed){
+                            session=id;startElapsed=c.getLong(3);state=r.online?1:0;
+                            if(progress!=null&&progress.optLong("session",-1)==id&&boot.equals(progress.optString("boot"))){
+                                Core.Reading checkpoint=restoreReading(progress.optJSONObject("previous"));
+                                if(checkpoint!=null&&checkpoint.elapsed==saved.elapsed&&checkpoint.elapsed<=r.elapsed)saved=checkpoint;
+                                depletion.restore(progress.optDouble("credit",0));
+                                Core.Reading stats=restoreReading(progress.optJSONObject("fastPrevious"));
+                                if(fastEnabled&&stats!=null&&stats.elapsed>=startElapsed&&stats.elapsed<=r.elapsed){
+                                    fastStatsPrevious=stats;fastStatsNext=progress.optLong("fastNext",stats.elapsed+60000);
+                                    if(fastStatsNext<=stats.elapsed||fastStatsNext>stats.elapsed+60000)fastStatsNext=stats.elapsed+60000;
+                                }
+                                if(fastEnabled&&!sampling.interactive){
+                                    long offAt=progress.optLong("screenOffAt",-1);
+                                    if(offAt>=0&&offAt<=r.elapsed)fastScreenOffAt=offAt;
+                                }
+                            }
+                            previous=saved;recoveryBoundary=true;
+                            sampling.expected=progress!=null&&progress.optLong("session",-1)==id
+                                ?Math.max(1000,Math.min(3600000,progress.optLong("expectedMs",interval()))):interval();
+                            // Older collectors did not persist the minute accounting anchor.
+                            // Start that anchor here instead of double-counting an old minute.
+                            if(fastEnabled&&fastStatsPrevious==null){fastStatsPrevious=r;fastStatsNext=r.elapsed+60000;}
+                            continue;
+                        }
+                    }
                     db.execSQL("UPDATE sessions SET active=0,reason=? WHERE id=?",new Object[]{boot.equals(c.getString(1))?"collector_restart":"reboot",id});
                     db.delete("sessions","id=? AND "+smallRecordWhere(settings),new String[]{""+id});
                 }
             }
+            if(session>=0)append(r);
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
-        // A daemon interruption ends at the last saved reading. Never charge
-        // unobserved time or capacity to the next application interval.
-        session=-1;previous=null;
+        if(session>=0)return;
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='full_tail_boot'",null)) {
             if(c.moveToFirst()&&r.online&&r.full&&boot.equals(c.getString(0))){state=2;return;}
         }
         state=r.online?1:0;begin(r);
     }
+    Core.Reading lastSample(long id,long start,long wall){
+        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,cell1,cell2,temp FROM samples WHERE session=? ORDER BY x DESC LIMIT 1",new String[]{""+id})){
+            if(!c.moveToFirst())return null;
+            Core.Reading r=new Core.Reading();r.elapsed=start+c.getLong(0);r.wall=wall+c.getLong(0);
+            r.rm=c.isNull(1)?Double.NaN:c.getDouble(1);r.pct=c.isNull(2)?Double.NaN:c.getDouble(2);
+            r.current=c.isNull(3)?Double.NaN:-c.getDouble(3);r.vmin=r.vmax=c.isNull(4)?Double.NaN:c.getDouble(4);
+            r.cell1=c.isNull(5)?Double.NaN:c.getDouble(5);r.cell2=c.isNull(6)?Double.NaN:c.getDouble(6);
+            r.temp=c.isNull(7)?Double.NaN:c.getDouble(7);r.cellCount=cellCount;return r;
+        }
+    }
+    static JSONObject checkpointReading(Core.Reading r)throws JSONException {
+        if(r==null)return null;
+        return new JSONObject().put("elapsed",r.elapsed).put("wall",r.wall).put("rm",nullable(r.rm)).put("pct",nullable(r.pct))
+            .put("current",nullable(r.current)).put("vmin",nullable(r.vmin)).put("vmax",nullable(r.vmax))
+            .put("cell1",nullable(r.cell1)).put("cell2",nullable(r.cell2)).put("cellCount",r.cellCount);
+    }
+    static Core.Reading restoreReading(JSONObject o){
+        if(o==null||!o.has("elapsed")||!o.has("wall"))return null;
+        Core.Reading r=new Core.Reading();r.elapsed=o.optLong("elapsed",-1);r.wall=o.optLong("wall",-1);
+        if(r.elapsed<0||r.wall<0)return null;
+        r.rm=o.optDouble("rm",Double.NaN);r.pct=o.optDouble("pct",Double.NaN);r.current=o.optDouble("current",Double.NaN);
+        r.vmin=o.optDouble("vmin",Double.NaN);r.vmax=o.optDouble("vmax",Double.NaN);
+        r.cell1=o.optDouble("cell1",Double.NaN);r.cell2=o.optDouble("cell2",Double.NaN);r.cellCount=o.optInt("cellCount",0);return r;
+    }
+    void checkpoint(Core.Reading r)throws JSONException {
+        if(session<0||state!=0)return;
+        JSONObject progress=new JSONObject().put("session",session).put("boot",boot).put("previous",checkpointReading(r))
+            .put("fastPrevious",checkpointReading(fastStatsPrevious)).put("fastNext",fastStatsNext)
+            .put("credit",depletion.checkpoint()).put("screenOffAt",fastScreenOffAt).put("expectedMs",interval());
+        db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('session_progress_v1',?)",new Object[]{progress.toString()});
+    }
     void begin(Core.Reading r)throws Exception {
-        previous=null;fullGate.reset();depletion.reset();timelineReady=false;
+        previous=null;fullGate.reset();depletion.reset();timelineReady=false;recoveryBoundary=false;
         fastStatsPrevious=state==0&&fastEnabled?r:null;
         fastStatsNext=fastStatsPrevious!=null?r.elapsed+60000:Long.MAX_VALUE;
         db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
@@ -605,7 +683,7 @@ public final class Main {
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
         rangeId=-1;rangeValues=null;
-        session=-1;previous=null;fullGate.reset();depletion.reset();timelineReady=false;
+        session=-1;previous=null;fullGate.reset();depletion.reset();timelineReady=false;recoveryBoundary=false;
         fastStatsPrevious=null;fastStatsNext=Long.MAX_VALUE;
     }
     void append(Core.Reading r)throws Exception {
@@ -613,6 +691,8 @@ public final class Main {
         long dt=previous==null?0:r.elapsed-previous.elapsed;
         if(previous!=null&&dt<=0)return;
         int quality=0;long missed=0;
+        boolean resumed=recoveryBoundary;
+        if(resumed)quality|=9; // Bit 8 retains this break even in the <10 s discharge filter.
         if(previous!=null&&dt>sampling.maxGap()){quality|=1;missed=Math.max(0,dt/sampling.expected-1);}
         if(!r.valid() || !r.error.isEmpty())quality|=4;
         boolean fast=state==0&&fastEnabled;
@@ -628,23 +708,29 @@ public final class Main {
         try {
             db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),state==1?nullable(r.temp):null});
-            if(fast)sampleFastStats(r,false);
+            if(fast)sampleFastStats(r,resumed,resumed);
             else if(state==0&&previous!=null)attribute(previous,r,loss,(quality&3)!=0,energy);
             db.execSQL("UPDATE sessions SET end_elapsed=?,pct_end=?,rm_end=?,missed=missed+?,anomalies=anomalies+? WHERE id=?",
                 new Object[]{r.elapsed,nullable(r.pct),nullable(r.rm),missed,(quality&6)!=0?1:0,session});
+            // Minute checkpoints suffice for fast accounting. Avoid adding a WAL
+            // page write to every second of charging or game graph sampling.
+            if(!fast||previous==null||resumed)checkpoint(r);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
-        updateRanges(r,recordedPower);
-        previous=r;sampling.expected=interval();
+        updateRanges(r,recordedPower,resumed);
+        previous=r;recoveryBoundary=false;sampling.expected=interval();
         if(fast&&(performanceSession!=session||r.elapsed>=performanceNext)){
             performanceSession=session;performanceNext=r.elapsed+settings.optLong("fastSeconds",10)*1000;
             performance.sample(session,startElapsed,sampling.interactive,settings.optLong("fastSeconds",10)*1000);
         }
     }
     void sampleFastStats(Core.Reading r,boolean flush)throws Exception{
+        sampleFastStats(r,flush,false);
+    }
+    void sampleFastStats(Core.Reading r,boolean flush,boolean resumed)throws Exception{
         Core.Reading a=fastStatsPrevious;
         if(a==null||session<0||r.elapsed<=a.elapsed||!flush&&r.elapsed<fastStatsNext)return;
-        long dt=r.elapsed-a.elapsed;boolean gap=dt>90000;
+        long dt=r.elapsed-a.elapsed;boolean gap=resumed||dt>90000;
         double loss=depletion.consume(a.rm,r.rm,dt,90000);
         double energy=gap?Double.NaN:Core.dischargeEnergyMwh(a.voltage(),r.voltage(),loss);
         boolean ownTransaction=!db.inTransaction();if(ownTransaction)db.beginTransaction();
@@ -652,19 +738,19 @@ public final class Main {
             attribute(a,r,loss,gap,energy);
             db.execSQL("UPDATE sessions SET end_elapsed=?,pct_end=?,rm_end=? WHERE id=? AND end_elapsed<=?",
                 new Object[]{r.elapsed,nullable(r.pct),nullable(r.rm),session,r.elapsed});
+            fastStatsPrevious=r;
+            while(fastStatsNext<=r.elapsed)fastStatsNext+=60000;
+            checkpoint(previous);
             if(ownTransaction)db.setTransactionSuccessful();
         }finally{if(ownTransaction)db.endTransaction();}
-        fastStatsPrevious=r;
-        // Keep deadlines anchored to the minute clock, rather than adding read/IPC delays each time.
-        while(fastStatsNext<=r.elapsed)fastStatsNext+=60000;
     }
-    void updateRanges(Core.Reading r,double recordedPower)throws Exception {
+    void updateRanges(Core.Reading r,double recordedPower,boolean boundary)throws Exception {
         long x=r.elapsed-startElapsed;if(rangeId!=session||x<=rangeEnd||rangeValues==null)return;
         JSONObject next=new JSONObject(rangeValues.toString());
         String[] keys={"rm","pct","current","voltage","power","temp"};
         double[] values={r.rm,r.pct,state==1?r.chargingCurrent():Double.NaN,r.voltage(),recordedPower,state==1?r.temp:Double.NaN};
         if(state==0&&!fastEnabled) {
-            if(previous!=null&&r.elapsed-previous.elapsed<10000)Arrays.fill(values,Double.NaN);
+            if(!boundary&&previous!=null&&r.elapsed-previous.elapsed<10000)Arrays.fill(values,Double.NaN);
             else if(recordedPower>15||recordedPower<0)values[4]=Double.NaN;
         }
         for(int i=0;i<keys.length;i++)if(Core.finite(values[i])) {
@@ -896,9 +982,9 @@ public final class Main {
         return true;
     }
     JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("version","1.2").put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("version","1.3").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
-        o.put("retentionThresholdPct",settings.optInt("deletePct",3)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled);
+        o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",session).put("capabilities",capabilities).put("cellCount",cellCount);
         o.put("tailProgress",fullGate.progress(SystemClock.elapsedRealtime()));
         o.put("interactive",sampling.interactive).put("sampleIntervalMs",interval());
@@ -965,7 +1051,7 @@ public final class Main {
         for(String key:keys) {
             String value=key;
             if(!charge) {
-                String allowed="(interval_ms IS NULL OR interval_ms>=10000)";
+                String allowed="(interval_ms IS NULL OR interval_ms>=10000 OR (quality&8)!=0)";
                 if(key.equals("power"))allowed+=" AND power>=0 AND power<=15";
                 value="CASE WHEN "+allowed+" THEN "+key+" END";
             }
@@ -1036,7 +1122,7 @@ public final class Main {
         long queryFrom=from,queryTo=to;
         // Keep the nearest eligible sample outside either edge so a zoom window
         // between two discharge samples can still draw their connecting segment.
-        String eligible="(interval_ms IS NULL OR interval_ms>=10000)";
+        String eligible="(interval_ms IS NULL OR interval_ms>=10000 OR (quality&8)!=0)";
         try(Cursor c=db.rawQuery("SELECT (SELECT x FROM samples WHERE session=? AND x<? AND "+eligible+" ORDER BY x DESC LIMIT 1),(SELECT x FROM samples WHERE session=? AND x>? AND "+eligible+" ORDER BY x LIMIT 1)",
                 new String[]{""+id,""+from,""+id,""+to})) {
             c.moveToFirst();if(!c.isNull(0))queryFrom=c.getLong(0);if(!c.isNull(1))queryTo=c.getLong(1);
@@ -1046,7 +1132,7 @@ public final class Main {
         try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp FROM samples WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+queryFrom,""+queryTo})) {
             while(c.moveToNext()) {
                 double[] point=new double[11];for(int i=0;i<11;i++)point[i]=c.isNull(i)?Double.NaN:c.getDouble(i);
-                if(Core.finite(point[7])&&point[7]<10000)continue;
+                if(Core.finite(point[7])&&point[7]<10000&&((int)point[6]&8)==0)continue;
                 if(point[5]>15||point[5]<0)point[5]=Double.NaN;
                 long g=((long)point[0]-from)/width;
                 if(first!=null&&g!=group) {flushBucket(result,bucket,first,last,lo,hi);bucket.clear();Arrays.fill(lo,null);Arrays.fill(hi,null);first=last=null;}

@@ -1,12 +1,12 @@
 import{exec,fullScreen,cancelTopDialog}from'./root-bridge.js';
-import{LiveChannel}from'./live-channel.js?v=acol-1.2';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.2';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.2';
-import{SettingsPanel}from'./settings-panel.js?v=acol-1.2';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.2';
-import{PerformancePanel}from'./performance-panel.js?v=acol-1.2';
-import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.2';
-import{loadSelection,saveSelection}from'./preferences.js?v=acol-1.2';
+import{LiveChannel}from'./live-channel.js?v=acol-1.3';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3';
+import{SettingsPanel}from'./settings-panel.js?v=acol-1.3';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3';
+import{PerformancePanel}from'./performance-panel.js?v=acol-1.3';
+import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3';
+import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
@@ -16,6 +16,7 @@ document.addEventListener('pointerdown',e=>{
 function longPressFeedback(){try{navigator.vibrate?.(10);}catch{}}
 document.addEventListener('selectionchange',()=>{const selection=getSelection();if(selection?.rangeCount)selection.removeAllRanges();});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
+const startInSettings=location.hash==='#settings';
 history.replaceState({page:'home'},'',location.pathname+location.search);
 const liveChannel=new LiveChannel();
 let records=[],kind='all',detail=null,activeId=null,total=0,loading=false,request=0,expanded=false,zoomTimer;
@@ -28,6 +29,7 @@ let reverseCharge=false;
 const portrait=matchMedia('(orientation: portrait)');
 let remainingTimer,remainingGeneration=0,remainingRecordId=null;
 let uiSettings={...DEFAULT_SETTINGS};
+let homePriority=loadHomePriority();
 let gameFrequencies=null;
 function remainingEligible(){return !document.hidden&&!$('confirm').open&&detail?.record.kind==='discharge'&&activeId!==null;}
 function clearRemaining(){
@@ -60,7 +62,7 @@ async function pollRemaining(generation){
 function syncTheme(){
   const flow=detail?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind);
   document.body.dataset.flow=flow;
-  document.querySelector('meta[name=theme-color]').content=flow==='charge'?'#eaf7f2':'#fff0ee';
+  document.querySelector('meta[name=theme-color]').content=!detail||flow==='charge'?'#eaf7f2':'#fff0ee';
 }
 const recordCells=r=>[0,1,2].includes(r?.cell_count)?r.cell_count:2;
 const recordFast=r=>Number(r?.fast_seconds)>0;
@@ -70,16 +72,31 @@ function capacityChange(r){
   const change=r.rm_end-r.rm_start;
   return`${change>0?'+':change<0?'−':r.kind==='charge'?'+':'−'}${fmt(Math.abs(change))}`;
 }
-function updateRecordTitle(title,r){
+function percentChange(r){
   const change=valid(r.pct_start)&&valid(r.pct_end)?r.pct_end-r.pct_start:null;
-  const delta=el('span',change===null?'—':`${change>0?'+':change<0?'−':r.kind==='charge'?'+':'−'}${fmt(Math.abs(change))}%`,'record-pct-change');
-  if(change!==null)delta.dataset.flow=change===0?r.kind:change>0?'charge':'discharge';
+  return change===null?'—':`${change>0?'+':change<0?'−':r.kind==='charge'?'+':'−'}${fmt(Math.abs(change))}%`;
+}
+function percentFlow(r){return valid(r.pct_start)&&valid(r.pct_end)&&r.pct_start!==r.pct_end?(r.pct_end>r.pct_start?'charge':'discharge'):r.kind;}
+function appendGameMarker(node,r){
   if(recordFast(r)){
     const marker=el('span',undefined,'fast-record-marker');marker.setAttribute('aria-label','游戏模式记录');
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS('http://www.w3.org/2000/svg','path');
-    svg.setAttribute('viewBox','0 0 12 16');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M7 0 1 9h4l-1 7 8-10H7z');svg.append(path);marker.append(svg);delta.append(marker);
+    svg.setAttribute('viewBox','0 0 12 16');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M7 0 1 9h4l-1 7 8-10H7z');svg.append(path);marker.append(svg);node.append(marker);
   }
+}
+function updateRecordTitle(title,r){
+  const preferPercent=homePriority==='percentage';
+  const delta=el('span',preferPercent?capacityChange(r):percentChange(r),'record-pct-change');
+  delta.dataset.flow=preferPercent?r.kind:percentFlow(r);
+  if(!preferPercent)appendGameMarker(delta,r);
   title.replaceChildren(el('span',`${r.kind==='charge'?'充电':'放电'} · ${fmt(r.pct_start)}% → ${fmt(r.pct_end)}%`),delta);
+}
+function updateRecordDelta(delta,r){
+  const preferPercent=homePriority==='percentage',value=delta.querySelector('.delta-value');
+  value.textContent=preferPercent?percentChange(r):capacityChange(r);
+  value.dataset.flow=preferPercent?percentFlow(r):r.kind;
+  if(preferPercent)appendGameMarker(value,r);
+  delta.querySelector('small').textContent=preferPercent?'百分比变化':'容量变化';
 }
 const stamp=t=>new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
 const reasons={recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'系统服务重启',module_stopped:'模块停止',recording_stopped:'记录已停止',app_uninstalled:'卸载前结束',service_updated:'后台更新',fast_started:'切换游戏模式',fast_stopped:'游戏记录结束',fast_idle_timeout:'息屏自动结束'};
@@ -115,7 +132,7 @@ async function api(action,...args){
 }
 const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
 chart.onInteract=()=>pauseFollowing();
-const settingsPanel=new SettingsPanel(api,value=>{applySettings(value);refresh();});
+const settingsPanel=new SettingsPanel(api,value=>{applySettings(value);refresh();},value=>{homePriority=value;renderRecords();});
 const batteryPanel=new BatteryInfoPanel();
 const performancePanel=new PerformancePanel(api);
 window.__acoBack=()=>{
@@ -145,6 +162,7 @@ async function openSettings(){
 }
 $('openSettings').onclick=openSettings;
 $('settingsBack').onclick=()=>history.back();
+$('openCutoff').onclick=async e=>{e.preventDefault();const button=e.currentTarget;if(button.getAttribute('aria-disabled')==='true'){toast('当前设备缺少截止电压调整接口。');return;}const url=button.href;if(await settingsPanel.flush())location.assign(url);};
 async function openBatteryInfo(){
   performancePanel.close();
   stopRemaining();settingsPanel.closeEditor();if(expanded)await toggleFullscreen(false);
@@ -185,11 +203,11 @@ async function readDetail(id,from,to,budget,cancelled=()=>false){
 }
 function scheduleZoom(){pauseFollowing();clearTimeout(zoomTimer);zoomTimer=setTimeout(()=>loadWindow(),180);}
 function applyChart(data,view,live=false){
-  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),ranges:data.ranges??{},live});renderChartInfo();renderFollow();
+  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,ranges:data.ranges??{},live});renderChartInfo();renderFollow();
 }
 function renderChartInfo(){
   if(!detail)return;const r=detail.record,raw=r.kind==='charge';
-  const plan=raw?'每秒记录':recordFast(r)?`游戏模式${r.active?' · 每 '+uiSettings.fastSeconds+' 秒':''} · 实时功耗`:r.active?`亮屏 ${uiSettings.screenOnMinutes} 分钟 / 息屏 ${uiSettings.screenOffMinutes} 分钟`:'按屏幕状态记录';
+  const plan=raw?(r.active?`每 ${uiSettings.chargeSeconds} 秒记录`:'充电原始采样'):recordFast(r)?`游戏模式${r.active?' · 每 '+uiSettings.fastSeconds+' 秒':''} · 实时功耗`:r.active?`亮屏 ${uiSettings.screenOnMinutes} 分钟 / 息屏 ${uiSettings.screenOffMinutes} 分钟`:'按屏幕状态记录';
   $('chartInfo').textContent=`${r.active?(followLive?'实时跟随':'已暂停跟随'):'已结束'} · ${plan}`;
   for(const s of seriesFor(r.kind,recordCells(r),recordFast(r))){
     const label=$('legend').querySelector(`[data-series="${s.key}"]`);if(!label)continue;
@@ -242,23 +260,34 @@ async function pollLive(){
       }
     }
     if(token===request&&recordFast(detail?.record))renderGameFrequencies(packet.frequencies??null);
-  }catch(e){if(infoMode!==batteryPanel.active)return;failed=true;gameFrequencies=null;renderGameFrequencies(null);if(infoMode)batteryPanel.error(e.message);else{$('state').textContent='连接失败';$('warning').textContent=e.message;if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}}
+  }catch(e){if(infoMode!==batteryPanel.active)return;failed=true;gameFrequencies=null;renderGameFrequencies(null);if(infoMode)batteryPanel.error(e.message);else{$('warning').textContent=e.message;if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}}
   finally{
     liveBusy=false;const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:1000;
     schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
   }
 }
 function renderStatus(s){
-  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled);settingsPanel.updateFast(s.fastEnabled);const cutoff=document.querySelector('.cutoff-button');cutoff.setAttribute('aria-disabled',String(s.cutoffAvailable===false));cutoff.onclick=s.cutoffAvailable===false?e=>{e.preventDefault();toast('当前设备缺少截止电压调整接口。');}:null;
-  const r=s.reading??{};$('state').textContent=s.recordingEnabled===false?'记录已停止':({0:'放电中',1:'充电中',2:'已充满'})[s.state]||'正在启动';
+  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled);settingsPanel.updateFast(s.fastEnabled);$('openCutoff').setAttribute('aria-disabled',String(s.cutoffAvailable===false));
+  const r=s.reading??{};
   syncTheme();
   document.querySelector('.live').dataset.flow=s.state===0?'discharge':'charge';
-  $('livePct').textContent=fmt(r.pct)+'%';$('liveRm').textContent=fmt(r.rm);
+  $('livePct').textContent=valid(r.pct)?fmt(r.pct):'—';$('liveRm').textContent=fmt(r.rm);
+  const cells=r.cellCount??s.cellCount;
+  const current=valid(r.displayCurrent)?r.displayCurrent:valid(r.current)?r.current*(cells===2?2:1):null;
+  const amps=valid(current)&&Math.abs(current)>=1000,currentUnit=amps?'A':'mA';
+  $('liveCurrent').textContent=valid(current)?`${current<0?'−':current>0?'+':''}${(Math.abs(current)/(amps?1000:1)).toFixed(amps?2:0)}`:'—';
+  $('liveCurrentUnit').textContent=currentUnit;
+  $('liveCurrent').parentElement.dataset.flow=valid(current)&&current!==0?(current>0?'charge':'discharge'):'';
+  const voltage=cells===2?(valid(r.cell1)&&valid(r.cell2)?(r.cell1+r.cell2)/2:r.voltage):valid(r.cell1)?r.cell1:r.voltage;
+  $('liveVoltage').textContent=valid(voltage)?(voltage/1000).toFixed(2):'—';
+  $('liveVoltage').setAttribute('aria-label',`${cells===2?'电芯平均':'电池'}电压 ${valid(voltage)?(voltage/1000).toFixed(2):'未知'} V`);
+  $('liveTemp').textContent=valid(r.temp)?r.temp.toFixed(1):'—';
   const flow=valid(r.power)&&r.power!==0?(r.power>0?'charge':'discharge'):s.state===0?'discharge':'charge';
   $('livePower').dataset.flow=flow;
+  $('livePower').parentElement.dataset.flow=valid(r.power)&&r.power!==0?flow:'';
   $('livePower').textContent=valid(r.power)?`${r.power>0?'+':r.power<0?'−':''}${Math.abs(r.power).toFixed(2)}`:'—';
   $('livePower').setAttribute('aria-label',`${flow==='charge'?'充电':'放电'}功率 ${valid(r.power)?fmt(Math.abs(r.power),2):'—'} W`);
-  const warnings=[];if(!(s.capabilities&1))warnings.push('休眠采样受限。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
+  const warnings=[];if(s.recordingEnabled===false)warnings.push('记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
   if(s.frameworkHealthy===false)warnings.push('系统服务已断开，后台正在自动恢复。');
   if(s.error)warnings.push('采样异常。');if(r.error)warnings.push('电池数据读取失败。');if(s.usageError&&s.state===0&&s.recordingEnabled!==false)warnings.push('应用统计暂不可用。');
   if(s.screenError)warnings.push('屏幕检测受限，放电每 2 分钟记录。');
@@ -278,11 +307,12 @@ function renderRecords(){
   $('more').hidden=records.length>=total;
 }
 function updateRecordRow(row,r){
-  const content=[r.kind,r.pct_start,r.pct_end,r.start_wall,r.start_elapsed,r.end_elapsed,r.reason,r.rm_start,r.rm_end,r.fast_seconds].join('|');
+  row.dataset.active=r.active?'1':'0';
+  const content=[homePriority,r.kind,r.pct_start,r.pct_end,r.start_wall,r.start_elapsed,r.end_elapsed,r.reason,r.rm_start,r.rm_end,r.fast_seconds].join('|');
   if(row.dataset.content!==content){
     updateRecordTitle(row.querySelector('.info strong'),r);
     row.querySelector('.info small').textContent=`${stamp(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`;
-    row.querySelector('.delta-value').textContent=capacityChange(r);row.dataset.content=content;
+    updateRecordDelta(row.querySelector('.delta'),r);row.dataset.content=content;
   }
   const remove=row.querySelector('.record-delete');remove.hidden=revealedRecordId!==r.id;
   remove.parentElement.classList.toggle('delete-revealed',!remove.hidden);
@@ -294,7 +324,7 @@ function createRecordRow(r){
     const title=el('strong');updateRecordTitle(title,r);info.append(title);
     info.append(el('small',`${stamp(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`));b.append(info);
     const action=el('span',undefined,'record-action'),delta=el('span',undefined,'delta');
-    delta.append(el('span',capacityChange(r),'delta-value'),el('small','容量变化'));
+    delta.append(el('span',undefined,'delta-value'),el('small'));updateRecordDelta(delta,r);
     const remove=el('button','删除','record-delete');remove.type='button';remove.dataset.deleteId=r.id;
     remove.hidden=revealedRecordId!==r.id;action.classList.toggle('delete-revealed',!remove.hidden);
     remove.onclick=e=>{e.stopPropagation();confirmRecordDelete(records.find(item=>item.id===r.id)??r);};
@@ -607,4 +637,5 @@ window.addEventListener('pageshow',e=>{if(e.persisted){refresh();startRemaining(
 document.addEventListener('pointerup',()=>{if(followLive&&detail?.record.active&&!chart.pointers.size)showDetail({...detail,points:streamPoints},true,true);});
 $('confirm').addEventListener('close',()=>{deleteTarget=null;schedulePoll(0);startRemaining();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&expanded)toggleFullscreen(false);});
+if(startInSettings)openSettings();
 refresh();

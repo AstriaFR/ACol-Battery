@@ -51,7 +51,7 @@ final class PerformanceCollector implements AutoCloseable {
                 boolean same=previousSession==session;
                 JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(JSONObject.NULL)
                     .put(frequency.opt("gpuMHz")).put(number(gpu.utilization())).put(JSONObject.NULL).put(JSONObject.NULL)
-                    .put(same&&elapsed-previousAt>Math.max(5000,interval*3)?1:0).put(same?elapsed-previousAt:0);
+                    .put(!same||elapsed-previousAt>Math.max(5000,interval*3)?1:0).put(same?elapsed-previousAt:0);
                 JSONArray cpuFrequencies=frequency.getJSONArray("clusters");
                 for(int i=0;i<clusters.size();i++){
                     Cluster c=clusters.get(i);

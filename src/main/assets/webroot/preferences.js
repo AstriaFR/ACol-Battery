@@ -12,3 +12,13 @@ export function saveSelection(kind,enabled,available){
   try{localStorage.setItem(prefix+kind,JSON.stringify(available.filter(key=>enabled.has(key))));return true;}
   catch{return false;}
 }
+const homePriorityKey='acol.home.recordPriority';
+export function loadHomePriority(){
+  try{return localStorage.getItem(homePriorityKey)==='percentage'?'percentage':'capacity';}
+  catch{return'capacity';}
+}
+export function saveHomePriority(value){
+  if(!['capacity','percentage'].includes(value))return false;
+  try{localStorage.setItem(homePriorityKey,value);return true;}
+  catch{return false;}
+}

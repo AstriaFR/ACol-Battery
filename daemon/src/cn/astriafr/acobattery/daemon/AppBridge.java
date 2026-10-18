@@ -35,7 +35,7 @@ public final class AppBridge {
         else if(command.startsWith(cutoff)){route="cutoff";command=command.substring(cutoff.length());}
         else throw new IllegalArgumentException("不支持的操作");
         String[] words=command.trim().split(" +");
-        if(words.length<1||words.length>14)throw new IllegalArgumentException("参数无效");
+        if(words.length<1||words.length>15)throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
             if(!java.util.Arrays.asList("status","list","detail","performance","delete","live","watch","stop_watch","settings","set_settings","set_recording","set_fast").contains(action))throw new IllegalArgumentException("未知操作");

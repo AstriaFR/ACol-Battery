@@ -7,6 +7,7 @@ umask 077
 mkdir -p "$BASE"
 echo $$ > "$BASE/supervisor.pid"
 while [ -f "$RUNTIME/bin/daemon.dex.jar" ]; do
+  [ -f "$BASE/update.pending" ] && exit 0
   if [ -f "$BASE/cleanup.request" ]; then
     /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin cleanup
     exit 0

@@ -21,6 +21,15 @@ public final class Core {
         public boolean valid() { return finite(rm) && finite(pct) && rm >= 0 && pct >= 0 && pct <= 100; }
     }
     public static boolean finite(double v) { return !Double.isNaN(v) && !Double.isInfinite(v); }
+    /** elapsedRealtime survives a framework restart, but never a kernel reboot. */
+    public static boolean resumeSession(String savedBoot,String boot,String kind,boolean wasFast,
+            boolean online,boolean fast,long start,long end,long now) {
+        return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot)&&start>=0&&end>=start&&now>=end
+            &&(online?"charge":"discharge").equals(kind)&&wasFast==(!online&&fast);
+    }
+    public static boolean resumableStop(String reason) {
+        return "service_updated".equals(reason)||"framework_restarted".equals(reason);
+    }
     public static int detectCellCount(String raw) {
         String[] fields=raw.trim().split(",",-1);
         if(fields.length<2)return 0;
@@ -85,8 +94,8 @@ public final class Core {
     public static final class Sampling {
         public boolean interactive=true,screenSample;
         public long next,expected=120000;
-        public long screenOnMs=120000,screenOffMs=600000,fastMs;
-        public long interval(int state) { return state==1?1000:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
+        public long screenOnMs=120000,screenOffMs=900000,chargeMs=2000,fastMs;
+        public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
         public boolean screen(boolean on,long now) {
             if(interactive==on)return false;
@@ -102,12 +111,16 @@ public final class Core {
         private double minRm, maxRm;
         public void reset() { since = last = -1; }
         public boolean update(Reading r) {
+            return update(r,1000);
+        }
+        public boolean update(Reading r,long expectedMs) {
             boolean tail = r.online && r.full && r.enabled && r.valid()
                 && finite(r.current) && r.current >= -60 && r.current <= 40
                 && finite(r.fv) && r.vmin >= Math.max(4300, r.fv - 100)
                 && r.temp >= 10 && r.temp <= 45;
             if (!tail) { reset(); return false; }
-            if (since < 0 || last < 0 || r.elapsed - last > 3500 || r.elapsed < last) {
+            long maxGap=Math.max(3500,expectedMs+expectedMs/2);
+            if (since < 0 || last < 0 || r.elapsed - last > maxGap || r.elapsed < last) {
                 since = r.elapsed; minRm = maxRm = r.rm;
             }
             minRm = Math.min(minRm, r.rm); maxRm = Math.max(maxRm, r.rm);
@@ -121,6 +134,8 @@ public final class Core {
     public static final class Depletion {
         private double credit;
         public void reset() { credit = 0; }
+        public double checkpoint() { return credit; }
+        public void restore(double value) { credit=finite(value)&&value<=0?value:0; }
         /** Upward corrections are carried forward to avoid counting the same drop twice. */
         public double consume(double before, double after, long dt) {
             return consume(before,after,dt,90000);

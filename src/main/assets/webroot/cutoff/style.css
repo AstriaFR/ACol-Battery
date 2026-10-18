@@ -2,19 +2,19 @@
 *{box-sizing:border-box}body{margin:0}main{max-width:620px;margin:auto;padding:8px 20px calc(30px + env(safe-area-inset-bottom))}header{margin-bottom:25px}.eyebrow{font-size:12px;letter-spacing:.12em;color:var(--accent);font-weight:700}h1{font-size:28px;margin:10px 0}h2{font-size:17px;margin:0}.intro,.note,footer{color:var(--muted);line-height:1.65}.intro{font-size:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:23px;margin-bottom:16px}.primary{border-color:#bcdacb}.section-title{display:flex;justify-content:space-between;align-items:center}button{font:inherit;font-size:13px;border:0;border-radius:10px;background:var(--subtle);color:var(--accent);padding:11px 15px;cursor:pointer}button:disabled,input:disabled{opacity:.5}input:focus-visible{outline:3px solid #5db39e;outline-offset:3px}button,button:focus,button:focus-visible,a:focus,a:focus-visible{outline:none;outline-offset:0}dl{margin:14px 0 0}dl>div{display:flex;justify-content:space-between;gap:14px;padding:13px 0;border-bottom:1px solid var(--line)}dl>div:last-child{border:0}dt{font-size:14px;color:var(--muted)}dd{font-size:14px;font-weight:600;margin:0;text-align:right}label{display:block;font-size:14px;margin:20px 0 8px}label span{float:right;color:var(--muted)}input[type=number]{width:100%;font:inherit;font-size:22px;color:inherit;background:var(--subtle);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.note{font-size:12px;margin:12px 0 0}.actions,.dialog-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}.actions{flex-wrap:wrap}.dialog-actions{justify-content:space-between}.accent{background:var(--accent);color:white}#message{white-space:pre-wrap;font-size:13px;line-height:1.6;color:var(--accent)}#message.error{color:#b44b43}footer{font-size:11px;margin:22px 2px}dialog{color:inherit;background:var(--card);border:1px solid var(--line);border-radius:22px;padding:24px;width:min(390px,calc(100% - 36px));box-shadow:0 20px 90px #0003}dialog::backdrop{background:#12213188;backdrop-filter:blur(4px)}dialog>p{font-size:14px;line-height:1.75;white-space:pre-line}
 .page-heading{display:flex;align-items:center;gap:14px}.page-heading h1{font-size:24px}.back{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none;font-size:13px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--accent);padding:10px 14px}.back:focus-visible{outline:none}
 
-html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{position:fixed;inset:0}
 main{height:100vh;height:100dvh;overflow:hidden}
 
 *{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}body{-webkit-user-select:none;user-select:none}input{-webkit-user-select:text;user-select:text}
 
 .dialog-actions button{color:#fff;font-weight:600;transition:none;appearance:none}
-.dialog-actions #confirm{background:#c4443f}
-.dialog-actions #cancel{background:#078267}
+.dialog-actions #confirm,.dialog-actions #lowVoltageConfirm{background:#c4443f}
+.dialog-actions #cancel,.dialog-actions #lowVoltageCancel{background:#078267}
 .dialog-actions button:disabled{opacity:1}
 
 /* Larger controls and tighter spacing; keep the fixed page height. */
-header{margin-bottom:24px}
+header{margin-bottom:16px;padding-top:8px}
 .page-heading{gap:12px}
 .page-heading h1{font-size:26px;line-height:1.25;margin:8px 0}
 h2{font-size:19px;line-height:1.3}

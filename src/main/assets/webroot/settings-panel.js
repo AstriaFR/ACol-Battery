@@ -1,8 +1,18 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.2';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3';
+import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3';
 export class SettingsPanel{
-  constructor(api,onSaved){
+  constructor(api,onSaved,onHomePriority){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
     this.ready=false;this.dirty=false;this.running=null;this.timer=null;this.lastSaved='';this.editor=null;
+    this.homePriority=loadHomePriority();this.onHomePriority=onHomePriority;
+    this.priorityButtons=[...this.form.querySelectorAll('[data-home-priority]')];
+    const showPriority=()=>{for(const button of this.priorityButtons)button.setAttribute('aria-pressed',String(button.dataset.homePriority===this.homePriority));};
+    showPriority();
+    for(const button of this.priorityButtons)button.onclick=()=>{
+      if(!this.ready)return;const value=button.dataset.homePriority;if(value===this.homePriority)return;
+      if(!saveHomePriority(value)){this.setStatus('首页显示设置未能保存，请重试。',true);return;}
+      this.homePriority=value;showPriority();this.onHomePriority?.(value);
+    };
     this.fastButton=document.getElementById('toggleFast');this.fastBusy=false;this.fastValue=false;this.editorBusy=false;
     this.fastButton.onclick=()=>this.toggleFast();
     this.gameInfo=document.getElementById('gameModeExplanation');
@@ -35,7 +45,7 @@ export class SettingsPanel{
       if(!['capacityAuto','fastAutoOff'].includes(key)){
         field.readOnly=true;field.inputMode='none';field.setAttribute('aria-haspopup','dialog');
         field.addEventListener('pointerdown',e=>e.preventDefault());
-        field.addEventListener('click',()=>this.edit(key));
+        (field.closest('.setting-input')||field).addEventListener('click',()=>this.edit(key));
         field.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.edit(key);}});
       }
       const change=()=>{if(!this.ready)return;this.dirty=true;this.setStatus('');clearTimeout(this.timer);this.timer=setTimeout(()=>this.flush(),600);};
@@ -114,11 +124,11 @@ export class SettingsPanel{
   closeRecordingConfirmation(){if(this.recordingConfirm.open)this.recordingConfirm.close();const resolve=this.recordingResolve;this.recordingResolve=null;resolve?.(false);}
   edit(key,push=true){
     if(!this.ready||this.keypad.open)return;
-    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'游戏采样间隔'};
+    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'游戏采样间隔',chargeSeconds:'充电记录间隔'};
     const field=this.form.elements.namedItem(key),decimal=['capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
     this.editor={key,field,draft:field.value,fresh:true,decimal,signed};
     document.getElementById('keypadTitle').textContent=names[key];
-    const unit=key.endsWith('Pct')?'%':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':key==='fastSeconds'?'秒':'℃';
+    const unit=key.endsWith('Pct')?'%':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','chargeSeconds'].includes(key)?'秒':'℃';
     document.getElementById('keypadUnit').textContent=unit;
     const minimum=decimal?Number(field.min).toFixed(2):field.min,maximum=decimal?Number(field.max).toFixed(2):field.max;
     document.getElementById('keypadRange').textContent=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
@@ -150,10 +160,10 @@ export class SettingsPanel{
     try{value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);}
     catch(error){this.editorError(error.message);return;}
     if(e.key==='deletePct'){this.openDeleteConfirmation(value.deletePct);return;}
-    if(['screenOnMinutes','screenOffMinutes','fastSeconds'].includes(e.key)){
+    if(['screenOnMinutes','screenOffMinutes','fastSeconds','chargeSeconds'].includes(e.key)){
       this.editorBusy=true;document.getElementById('keypadApply').disabled=true;
       try{
-        const name=document.getElementById('keypadTitle').textContent,unit=e.key==='fastSeconds'?'秒':'分钟';
+        const name=document.getElementById('keypadTitle').textContent,unit=['fastSeconds','chargeSeconds'].includes(e.key)?'秒':'分钟';
         if(!await this.askChange(`修改${name}？`,`改为 ${value[e.key]} ${unit}，继续当前记录。`))return;
         if(!await this.flush())throw Error('设置未能保存，请重试。');
         value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);

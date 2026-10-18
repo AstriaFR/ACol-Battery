@@ -56,8 +56,9 @@ export class LiveChannel{
     if(packet.batteryInfo)this.infoSnapshot=packet.batteryInfo;
     this.merge(packet.previous);this.merge(packet);
     this.latest=packet;this.receivedAt=Date.now();++this.sequence;
-    this.resumeId=Math.max(0,packet.status.session);
-    this.resumeAfter=this.resumeId?(this.rows.get(this.resumeId)?.points.at(-1)?.[0]??this.resumeAfter):0;
+    const resumeId=Math.max(0,packet.status.session);
+    this.resumeAfter=resumeId?(this.rows.get(resumeId)?.points.at(-1)?.[0]??(resumeId===this.resumeId?this.resumeAfter:0)):0;
+    this.resumeId=resumeId;
     if(Array.isArray(packet.records)&&(packet.listVersion??0)>=this.minimumListVersion){
       const hidePct=packet.status.settings?.hidePct??this.lists?.hidePct;
       const normal=packet.records.filter(row=>!this.deleted.has(row.id)),all=packet.recordsAll.filter(row=>!this.deleted.has(row.id));

@@ -48,7 +48,11 @@ run(binary(jdk,'java'),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min
 with zipfile.ZipFile(build/'payload/bin/daemon.dex.jar','w',zipfile.ZIP_DEFLATED) as archive:archive.write(build/'daemon-dex/classes.dex','classes.dex')
 for source,output,flags in [('wait.c','libcurvewait.so',['-shared','-fPIC']),('launcher.c','aco-launcher',['-fPIE','-pie'])]:
     run(binary(ndk/'bin','clang'),'--target=aarch64-linux-android35','--sysroot='+str(ndk/'sysroot'),*flags,'-O2','-Wall','-Wextra','-Werror','-Wl,-z,max-page-size=16384','-Wl,-z,relro,-z,now',app/'daemon/src'/source,'-o',build/'payload/bin'/output)
-for path in (app/'runtime').glob('*.sh'):shutil.copyfile(path,build/'payload'/path.name)
+for path in (app/'runtime').glob('*.sh'):
+    # Keep Android shell scripts valid after editing or checking out on Windows.
+    script=path.read_bytes().replace(b'\r\n',b'\n').replace(b'\r',b'\n')
+    if script.startswith(b'\xef\xbb\xbf'):script=script[3:]
+    (build/'payload'/path.name).write_bytes(script)
 payload=app/'src/main/assets/payload.zip'
 with zipfile.ZipFile(payload,'w',zipfile.ZIP_DEFLATED) as archive:
     for path in sorted((build/'payload').rglob('*')):

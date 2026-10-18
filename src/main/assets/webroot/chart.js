@@ -1,7 +1,10 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.2';
-import{batteryColors}from'./curve-colors.js?v=acol-1.2';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3';
+import{batteryColors}from'./curve-colors.js?v=acol-1.3';
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
+const scaleSettingsKey=()=>JSON.stringify([chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
+const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
+  &&peak-base>=(full-base)*1.1-Math.max(1,Math.abs(full-base))*1e-12;
 export const series=[
   {key:'rm',index:1,name:'剩余容量',axis:'容量',unit:'mAh',color:batteryColors.rm,digits:0},
   {key:'pct',index:2,name:'系统电量',axis:'电量',unit:'%',color:batteryColors.pct,digits:0},
@@ -16,7 +19,7 @@ export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>k
 export function plotPoints(points,kind,cellCount=2,fast=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3]))return p;const row=[...p];row[3]*=cellCount===2?2:1;return row;});
   if(fast)return points.map(p=>{if(valid(p[5])&&p[5]<0){const row=[...p];row[5]=null;return row;}return p;});
-  return points.filter(p=>!valid(p[7])||p[7]>=10000).map(p=>{
+  return points.filter(p=>!valid(p[7])||p[7]>=10000||(p[6]&8)!==0).map(p=>{
     if(valid(p[5])&&(p[5]>15||p[5]<0)){const row=[...p];row[5]=null;return row;}
     return p;
   });
@@ -33,28 +36,55 @@ export function niceBounds(values,key){
 export function sampleText(value,digits=6){
   return valid(value)?value.toLocaleString('zh-CN',{maximumFractionDigits:digits,useGrouping:false}):'缺失';
 }
-export function signalScale(s,values,kind='charge',fast=false){
+export function signalScale(s,values,kind='charge',fast=false,previous=null){
   const known=values.filter(valid);
   if(s.key==='rm'){
-    const configured=chartSettings.capacityAh*1000,full=chartSettings.capacityAuto?Math.max(configured,...known):configured;
+    const configured=chartSettings.capacityAh*1000,full=chartSettings.capacityAuto?Math.max(configured,previous?.full??0,...known):configured;
     return{base:0,full,min:0,label:`${(full/1000).toFixed(2)} Ah`};
   }
   if(s.key==='voltage'){
-    const base=Math.floor(Math.min(chartSettings.voltageMin*1000,...known)/10)*10,full=Math.ceil(Math.max(chartSettings.voltageMax*1000,...known)/10)*10;
+    const base=Math.floor(Math.min(chartSettings.voltageMin*1000,previous?.base??Infinity,...known)/10)*10;
+    let full=Math.max(chartSettings.voltageMax*1000,previous?.full??0);
+    const peak=Math.max(...known);if(reachesHeadroom(peak,base,full))full=Math.ceil(peak/10)*10;
     return{base,full,min:base,label:`${(base/1000).toFixed(2)}–${(full/1000).toFixed(2)} V`};
   }
   if(kind==='discharge'&&s.key==='power'){
-    const peak=Math.max(0,...known.filter(v=>v>=0&&(fast||v<=15)));
-    return{base:0,full:peak||1,min:0,label:peak?`${peak.toFixed(2)} W`:'暂无峰值'};
+    let peak=0;for(const value of known)if(value>=0&&(fast||value<=15))peak=Math.max(peak,value);
+    const observed=peak>0||!!previous?.observed;
+    const full=Math.max(previous?.observed?previous.full:0,peak)||1;
+    return{base:0,full,min:0,observed,label:observed?`${full.toFixed(2)} W`:'暂无峰值'};
+  }
+  if(s.key==='current'||s.key==='power'){
+    const step=s.key==='current'?2000:10;
+    let peak=0,min=previous?.min??0;
+    for(const value of known){
+      peak=Math.max(peak,Math.abs(value));min=Math.min(min,value);
+    }
+    const observed=peak>0||!!previous?.observed;
+    // The first render must honor the same 110% headroom as a live update.
+    let rounded=Math.max(step,Math.floor(peak/(step*1.1))*step);
+    while(reachesHeadroom(peak,0,rounded))rounded+=step;
+    let full=previous?.full>0?previous.full:rounded;
+    if(reachesHeadroom(peak,0,full))full=rounded;
+    const label=s.key==='current'?`${sampleText(full/1000)} A`:`${sampleText(full)} W`;
+    return{base:0,full,min,observed,label};
   }
   if(s.key==='temp'){
-    const base=Math.floor(Math.min(chartSettings.tempMin,...known)),full=Math.ceil(Math.max(chartSettings.tempMax,...known));
+    const base=Math.floor(Math.min(chartSettings.tempMin,previous?.base??Infinity,...known));
+    let full=Math.max(chartSettings.tempMax,previous?.full??-Infinity);
+    const peak=Math.max(...known);if(reachesHeadroom(peak,base,full))full=Math.ceil(peak);
     return{base,full,min:base,label:`${base}–${full} ℃`};
   }
-  const [lo,hi]=niceBounds(values,s.key),full=Math.max(Math.abs(lo),hi);
+  const [lo,hi]=niceBounds(values,s.key);let full=Math.max(Math.abs(lo),hi);
+  // Percent stays tied to the system's 0–100 scale. Other unconfigured
+  // signals keep their initial nice bounds until the 110% boundary is reached.
+  if(s.key!=='pct'&&previous&&full>0){
+    const peak=Math.max(0,...known.map(Math.abs));
+    if(!reachesHeadroom(peak,0,previous.full))full=previous.full;
+  }
   const compact=full>=1000&&['mAh','mA','mV'].includes(s.unit),factor=compact?1000:1;
   const unit=compact?{mAh:'Ah',mA:'A',mV:'V'}[s.unit]:s.unit;
-  let min=0;for(const value of values)if(valid(value))min=Math.min(min,value);
+  let min=previous?.min??0;for(const value of values)if(valid(value))min=Math.min(min,value);
   return{base:0,full,min,label:`${sampleText(full/factor)} ${unit}`};
 }
 export const scalePercent=(value,scale)=>(value-scale.base)/(scale.full-scale.base)*100;
@@ -99,6 +129,7 @@ export class Chart{
   constructor(canvas,tooltip,onWindow){
     this.canvas=canvas;this.ctx=canvas.getContext('2d');this.tooltip=tooltip;this.onWindow=onWindow;
     this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;
+    this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;
     new ResizeObserver(()=>this.draw()).observe(canvas.parentElement);
     canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=this.local(e);this.pointers.set(e.pointerId,p);this.gesture=this.capture();this.moved=false;this.dragMarker=this.pointers.size===1&&this.marker!==null&&Math.abs(p[0]-this.markerX())<=14?e.pointerId:null;});
     canvas.addEventListener('pointermove',e=>this.move(e));
@@ -110,9 +141,15 @@ export class Chart{
   }
   local(e){const r=this.canvas.getBoundingClientRect();if(this.canvas.closest('.rotate'))return[e.clientY-r.top,r.right-e.clientX];return[e.clientX-r.left,e.clientY-r.top];}
   signals(){return seriesFor(this.kind,this.cellCount,this.fast);}
-  axisMaximum(){return 100;}
+  axisMaximum(){return 110;}
   preparePoints(points){return plotPoints(points,this.kind,this.cellCount,this.fast);}
-  scaleFor(s){const range=this.ranges[s.key],values=range?(s.key==='current'?range.map(v=>valid(v)?v*(this.cellCount===2?2:1):v):range):this.points.map(p=>p[s.index]).filter(valid);return signalScale(s,values,this.kind,this.fast);}
+  scaleFor(s){
+    const settings=scaleSettingsKey();if(settings!==this.scaleSettings){this.scaleCache.clear();this.scaleSettings=settings;}
+    const range=this.ranges[s.key],values=range?(s.key==='current'?range.map(v=>valid(v)?v*(this.cellCount===2?2:1):v):range):this.points.map(p=>p[s.index]).filter(valid);
+    const scale=signalScale(s,values,this.kind,this.fast,this.scaleCache.get(s.key));
+    if(values.some(valid))this.scaleCache.set(s.key,scale);
+    return scale;
+  }
   markerX(){return this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right);}
   clearInspect(){if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.draw();}
   positionTooltip(){
@@ -122,7 +159,13 @@ export class Chart{
     this.tooltip.style.top=`${Math.max(6,Math.min(h-th-6,(this.inspectY??22)-th/3))}px`;
   }
   capture(){return{points:[...this.pointers.values()],window:[...this.window]};}
-  set(points,total,window,options={}){this.kind=options.kind??this.kind;this.fast=!!options.fast;this.cellCount=options.cellCount??2;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;}this.draw();}
+  set(points,total,window,options={}){
+    const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2;
+    if(kind!==this.kind||fast!==this.fast||cells!==this.cellCount||options.recordId!==undefined&&options.recordId!==this.recordId)this.scaleCache.clear();
+    if(options.recordId!==undefined)this.recordId=options.recordId;
+    this.kind=kind;this.fast=fast;this.cellCount=cells;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
+    if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;}this.draw();
+  }
   setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.marker=null;this.tooltip.hidden=true;this.draw();}
   zoom(factor,anchor=.5){anchor=Math.max(0,Math.min(1,anchor));const[a,b]=this.window,span=(b-a)*factor;this.setWindow(a+(b-a)*anchor-span*anchor,a+(b-a)*anchor+span*(1-anchor));}
   move(e){
@@ -161,7 +204,7 @@ export class Chart{
     const x=this.window[0]+(pixel-this.left)/(this.width-this.left-this.right)*(this.window[1]-this.window[0]);
     let row=visible[0];for(const p of visible)if(Math.abs(p[0]-x)<Math.abs(row[0]-x))row=p;
     this.marker=row[0];this.inspectY=y;
-    this.tooltip.textContent=`时间  ${timeLabel(row[0])}${row[6]?' · 数据异常':''}\n`+
+    this.tooltip.textContent=`时间  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]?' · 数据异常':''}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
@@ -175,14 +218,14 @@ export class Chart{
     const ctx=this.ctx;ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);this.width=w;
     const selected=this.signals().filter(s=>this.enabled.has(s.key));
     const scales=new Map(this.signals().map(s=>[s.key,this.scaleFor(s)]));
-    const lo=this.kind==='charge'&&this.reverseCharge?-100:axisMinimum(this.kind,[...scales.values()]),hi=this.axisMaximum();
+    const hi=this.axisMaximum(),lo=this.kind==='charge'&&this.reverseCharge?-hi:axisMinimum(this.kind,[...scales.values()]);
     const axisSeries=this.signals().find(s=>s.key===this.axisKey);
     const axis=axisSeries?actualAxis(axisSeries,scales.get(axisSeries.key)):null;
     this.canvas.dataset.axis=axisSeries?.key??'percent';
     const tickValues=[];for(let v=lo;v<=hi;v+=10)tickValues.push(v);
     const tickLabel=v=>axis?axis.label(v):String(v);
     // Reserve the same gutter before/after expanding the charge plot.
-    const gutterTicks=this.kind==='charge'?Array.from({length:21},(_,i)=>i*10-100):tickValues;
+    const gutterTicks=this.kind==='charge'?Array.from({length:23},(_,i)=>i*10-110):tickValues;
     ctx.font='10px system-ui';this.left=Math.max(34,Math.ceil(Math.max(...gutterTicks.map(v=>ctx.measureText(tickLabel(v)).width)))+9);this.right=8;
     const top=22,bottom=h-25,pw=w-this.left-this.right,ph=bottom-top;if(pw<=0||ph<=0)return;
     this.top=top;this.bottom=bottom;this.axisLo=lo;this.axisHi=hi;
@@ -191,7 +234,7 @@ export class Chart{
     ctx.font='10px system-ui';ctx.lineWidth=.65;ctx.fillStyle='#ffffff';ctx.fillRect(this.left,top,pw,ph);
     ctx.fillStyle=axisSeries?.color??'#607185';ctx.textAlign='left';ctx.fillText(axis?.title??'量程 %',3,12);
     for(const value of tickValues){
-      const y=mapY(value),major=value===0||this.kind==='performance'&&value===100,middle=Math.abs(value-50)<1e-6;
+      const y=mapY(value),major=value===0||Math.abs(value)===100,middle=Math.abs(Math.abs(value)-50)<1e-6;
       ctx.strokeStyle=major?'#8493a6':middle?'#a9b8c9':'#e5eaf0';ctx.lineWidth=major?.9:middle?.8:.55;ctx.beginPath();ctx.moveTo(this.left,y);ctx.lineTo(w-this.right,y);ctx.stroke();
       ctx.fillStyle=major?'#243b57':middle?'#40566e':'#607185';ctx.font=major?'700 10px system-ui':middle?'600 10px system-ui':'10px system-ui';ctx.textAlign='right';ctx.fillText(tickLabel(value),this.left-6,y+3);
       ctx.strokeStyle='#95a2b1';ctx.beginPath();ctx.moveTo(this.left-3,y);ctx.lineTo(this.left,y);ctx.stroke();
@@ -204,7 +247,8 @@ export class Chart{
       ctx.fillStyle='#526172';ctx.textAlign=i===0?'left':i===timeTicks?'right':'center';ctx.fillText(timeLabel(this.window[0]+(this.window[1]-this.window[0])*i/timeTicks),x,bottom+16);
     }
     ctx.strokeStyle='#9aa7b6';ctx.lineWidth=.85;
-    ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(this.left,bottom);ctx.lineTo(w-this.right,bottom);ctx.lineTo(w-this.right,top);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(this.left,bottom);ctx.moveTo(w-this.right,bottom);ctx.lineTo(w-this.right,top);ctx.stroke();
+    if(lo!==-110){ctx.beginPath();ctx.moveTo(this.left,bottom);ctx.lineTo(w-this.right,bottom);ctx.stroke();}
     // The 110% grid line retains the same weight as other minor grid lines.
     if(hi!==110){ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(w-this.right,top);ctx.stroke();}
     selected.forEach(s=>{
