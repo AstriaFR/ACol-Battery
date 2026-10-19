@@ -24,6 +24,7 @@ import android.window.OnBackInvokedDispatcher;
 import android.webkit.*;
 import android.widget.*;
 import cn.astriafr.acobattery.common.FriendlyError;
+import cn.astriafr.acobattery.common.RuntimePayload;
 import org.json.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -96,7 +97,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3.1 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);
@@ -118,10 +119,10 @@ public final class MainActivity extends Activity {
                 phase("识别系统","已识别 Android "+Build.VERSION.RELEASE+"（API "+Build.VERSION.SDK_INT+"），自动选择兼容接口。");
                 if(Build.VERSION.SDK_INT<35)throw new IOException("需要 Android 15 或更新系统。");
                 if(!java.util.Arrays.asList(Build.SUPPORTED_64_BIT_ABIS).contains("arm64-v8a"))throw new IOException("当前构建仅支持 arm64 设备。");
-                phase("等待 root 授权","已识别 Android "+Build.VERSION.RELEASE+"。请在 KernelSU 提示中允许 ACol电池获取 root 权限。");
+                phase("等待 root 授权","已识别 Android "+Build.VERSION.RELEASE+"。请在 root 管理器中允许 ACol电池获取 root 权限。");
                 root=new RootSession();String uid=root.command("id -u",90);if(!uid.equals("0"))throw new IOException("未获得 root 权限。");
                 if(destroyed)return;
-                root.command("[ -x /data/adb/ksud ] && [ -x /data/adb/ksu/bin/busybox ] || { echo '当前版本需要 KernelSU。'; false; }",10);
+                root.command("[ -x /system/bin/app_process ] && [ -x /system/bin/cp ] && [ -x /system/bin/chmod ] && [ -x /system/bin/mv ] || { echo '系统缺少部署独立后台所需的运行工具。'; false; }",10);
                 phase("准备独立运行环境","程序与记录保存在独立的 root 目录。");
                 File archive=payload();String version=assetText("payload.sha256");
                 String cert=digest(getPackageManager().getPackageInfo(getPackageName(),PackageManager.GET_SIGNING_CERTIFICATES).signingInfo.getApkContentsSigners()[0].toByteArray());
@@ -131,10 +132,15 @@ public final class MainActivity extends Activity {
                 if(!version.equals(current)){
                     // Run the new updater so even old recorders are suspended without
                     // executing their old finish-and-auto-delete shutdown behavior.
-                    String stage=RUNTIME+"/update-stage";
-                    root.command("mkdir -p "+stage+"; /data/adb/ksu/bin/busybox unzip -oq "+RootSession.quote(archive.getAbsolutePath())+" -d "+stage+"; touch "+BASE+"/update.pending; CLASSPATH="+stage+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin stop-update",20);
-                    root.command("mkdir -p "+RUNTIME+"; /data/adb/ksu/bin/busybox unzip -oq "+RootSession.quote(archive.getAbsolutePath())+" -d "+RUNTIME+"; chmod 700 "+RUNTIME+"/bin/aco-launcher; chmod 600 "+RUNTIME+"/bin/daemon.dex.jar; chmod 700 "+RUNTIME+"/*.sh; printf '%s' "+RootSession.quote(version)+" > "+BASE+"/runtime.version; rm -f "+BASE+"/update.pending "+BASE+"/cleanup.request",20);
-                    root.command("rm -f "+stage+"/bin/daemon.dex.jar "+stage+"/bin/libcurvewait.so "+stage+"/bin/aco-launcher "+stage+"/boot.sh "+stage+"/service.sh "+stage+"/cutoff.sh; rmdir "+stage+"/bin "+stage+" 2>/dev/null || true",10);
+                    File extracted=java.nio.file.Files.createTempDirectory(getCacheDir().toPath(),"aco-runtime-").toFile();
+                    try{
+                        RuntimePayload.extract(archive,extracted,version);
+                        root.command(RuntimeSetup.stage(extracted),20);
+                        String stage=RuntimeSetup.STAGE;
+                        root.command("touch "+BASE+"/update.pending; CLASSPATH="+stage+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin stop-update",20);
+                        root.command(RuntimeSetup.install(version),20);
+                        root.command(RuntimeSetup.cleanStage(),10);
+                    }finally{RuntimePayload.discard(extracted);}
                 }
                 if(destroyed)return;
                 phase("检查电池接口","检查底层读数、单双电芯与采样能力。");
@@ -147,7 +153,7 @@ public final class MainActivity extends Activity {
                 int cells=reading.optInt("cellCount",0);
                 phase("电池接口已就绪",(cells==2?"已识别双电芯。":cells==1?"已识别单电芯。":"电芯数量待确认，将继续自动识别。")+(report.optBoolean("cutoffAvailable")?" 截止电压调整可用。":" 截止电压调整不可用，其余功能继续。"));
                 phase("启动独立后台","关闭 App 不停止记录；记录开关可在设置中控制。");
-                root.command("rm -f "+BASE+"/update.pending "+BASE+"/cleanup.request; mkdir -p /data/adb/service.d; cp "+RUNTIME+"/boot.sh /data/adb/service.d/aco_battery_app.sh; chmod 700 /data/adb/service.d/aco_battery_app.sh; "+admin("ensure")+" && touch "+BASE+"/initialized",20);
+                root.command("rm -f "+BASE+"/update.pending "+BASE+"/cleanup.request; "+RuntimeSetup.installBoot()+"; "+admin("ensure")+" && touch "+BASE+"/initialized",20);
                 root.broker(this::deliver);rootReady=true;
                 getSharedPreferences("startup",MODE_PRIVATE).edit().putBoolean("initialized",true).putInt("androidSdk",Build.VERSION.SDK_INT).commit();
                 archive.delete();

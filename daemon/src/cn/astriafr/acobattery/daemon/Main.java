@@ -91,7 +91,8 @@ public final class Main {
     long rangeId=-1,rangeEnd=-1,rangeCount;
     JSONObject rangeValues;
     final PerformanceCollector performance;
-    long performanceSession=-1,performanceNext,performanceMetaSession=-1;
+    long performanceSession=-1,performanceMetaSession=-1;
+    final Core.Cadence performanceCadence=new Core.Cadence(3000);
 
     public static void main(String[] args) throws Exception {
         if(android.os.Process.myUid()!=0) { System.err.println("root required");System.exit(1); }
@@ -126,7 +127,7 @@ public final class Main {
         app.framework=new FrameworkWatch(Main::interruptWait);app.framework.start();
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 1.3 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 1.3.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect();System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -183,17 +184,20 @@ public final class Main {
     }
 
     static JSONObject decodeSettings(JSONArray p)throws Exception {
-        if(p.length()!=8&&p.length()!=12&&p.length()!=13)throw new IOException("设置项数量无效");
-        long[] v={5,30,560,1,300,450,50,60,2,15,10,1,2};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
+        if(p.length()!=8&&p.length()!=12&&p.length()!=13&&p.length()!=14)throw new IOException("设置项数量无效");
+        long[] v={5,30,560,1,300,450,50,60,2,20,10,1,3,3};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
+        // The old game interval controlled both charts. Keep it for both on upgrade.
+        if(p.length()>=12&&p.length()<14)v[13]=v[10];
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
         if(v[2]<1||v[2]>2000||v[3]<0||v[3]>1)throw new IOException("容量范围 0.01–20.00 Ah");
         if(v[4]<220||v[5]>480||v[4]>=v[5])throw new IOException("电压范围 2.20–4.80 V，下限须小于上限");
         if(v[6]<0||v[7]>80||v[6]>=v[7])throw new IOException("温度范围 −20–60℃，下限须小于上限");
         if(v[8]<1||v[8]>10||v[9]<1||v[9]>60||v[10]<1||v[10]>60||v[11]<0||v[11]>1)throw new IOException("亮屏间隔 1–10 分钟，息屏间隔 1–60 分钟，游戏采样间隔 1–60 秒，仅限整数");
-        if(v[12]<1||v[12]>10||p.length()==13&&!p.get(12).toString().matches("[0-9]+"))throw new IOException("充电间隔 1–10 秒，仅限整数");
+        if(v[12]<1||v[12]>10||p.length()>=13&&!p.get(12).toString().matches("[0-9]+"))throw new IOException("充电间隔 1–10 秒，仅限整数");
+        if(v[13]<1||v[13]>60||p.length()==14&&!p.get(13).toString().matches("[0-9]+"))throw new IOException("性能采样间隔 1–60 秒，仅限整数");
         return new JSONObject().put("deletePct",v[0]).put("hidePct",v[1]).put("capacityAh",v[2]/100.0)
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
-            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]);
+            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",v[13]);
     }
     void loadSettings()throws Exception {
         settings=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
@@ -206,19 +210,20 @@ public final class Main {
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key=?",new String[]{key})){return c.moveToFirst()?c.getString(0):"";}
     }
     void configureSampling(boolean reschedule){
+        long oldInterval=interval();
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
-        sampling.screenOffMs=settings.optLong("screenOffMinutes",15)*60000;
-        sampling.chargeMs=settings.optLong("chargeSeconds",2)*1000;
+        sampling.screenOffMs=settings.optLong("screenOffMinutes",20)*60000;
+        sampling.chargeMs=settings.optLong("chargeSeconds",3)*1000;
         sampling.fastMs=fastEnabled?settings.optLong("fastSeconds",10)*1000:0;
+        performanceCadence.configure(settings.optLong("performanceSeconds",3)*1000,reschedule?SystemClock.elapsedRealtime():0);
         if(reschedule&&recordingEnabled){
             long now=SystemClock.elapsedRealtime(),nextInterval=interval();
-            sampling.next=Math.max(now,(previous==null?now:previous.elapsed)+nextInterval);
+            if(nextInterval!=oldInterval)sampling.next=Math.max(now,(previous==null?now:previous.elapsed)+nextInterval);
             // A longer interval is intentional, not missing samples. Preserve an
             // already elapsed old plan when shortening without splitting a record.
             sampling.expected=Math.max(sampling.expected,nextInterval);
             if(fastEnabled&&state==0&&session>=0){
-                db.execSQL("UPDATE sessions SET fast_seconds=? WHERE id=?",new Object[]{settings.optInt("fastSeconds",10),session});
-                performanceNext=sampling.next;
+                db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{settings.optInt("fastSeconds",10),settings.optInt("performanceSeconds",3),session});
             }
         }
     }
@@ -264,9 +269,10 @@ public final class Main {
     }
     JSONObject saveSettings(JSONArray p)throws Exception {
         int count=p.length()-1;
-        if((count!=12&&count!=13)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
+        if((count!=12&&count!=13&&count!=14)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
         JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
-        if(count==12)values.put(settings.optLong("chargeSeconds",2));
+        if(count==12)values.put(settings.optLong("chargeSeconds",3));
+        if(values.length()==13)values.put(settings.optLong("performanceSeconds",3));
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
         try {
@@ -301,6 +307,10 @@ public final class Main {
             if(!sessionColumns.contains("cell_count"))db.execSQL("ALTER TABLE sessions ADD COLUMN cell_count INTEGER NOT NULL DEFAULT 2");
             if(!sessionColumns.contains("tail_cycles"))db.execSQL("ALTER TABLE sessions ADD COLUMN tail_cycles INTEGER");
             if(!sessionColumns.contains("fast_seconds"))db.execSQL("ALTER TABLE sessions ADD COLUMN fast_seconds INTEGER NOT NULL DEFAULT 0");
+            if(!sessionColumns.contains("performance_seconds")){
+                db.execSQL("ALTER TABLE sessions ADD COLUMN performance_seconds INTEGER NOT NULL DEFAULT 0");
+                db.execSQL("UPDATE sessions SET performance_seconds=fast_seconds WHERE fast_seconds>0");
+            }
             if(!sessionColumns.contains("stats_basis"))db.execSQL("ALTER TABLE sessions ADD COLUMN stats_basis TEXT NOT NULL DEFAULT 'rm'");
             Set<String> appColumns=new HashSet<>();
             try(Cursor c=db.rawQuery("PRAGMA table_info(apps)",null)){while(c.moveToNext())appColumns.add(c.getString(1));}
@@ -308,7 +318,7 @@ public final class Main {
                 db.execSQL("ALTER TABLE apps ADD COLUMN mah_ms INTEGER NOT NULL DEFAULT 0");
                 db.execSQL("UPDATE apps SET mah_ms=ms");
             }
-            db.setVersion(10);db.setTransactionSuccessful();
+            db.setVersion(11);db.setTransactionSuccessful();
         } finally {db.endTransaction();}
     }
     static String read(String path) {
@@ -464,6 +474,7 @@ public final class Main {
                 due=Math.min(due,ownerNext);
                 due=Math.min(due,fastAutoDeadline());
                 if(recordingEnabled&&fastEnabled&&state==0&&session>=0)due=Math.min(due,fastStatsNext);
+                if(recordingEnabled&&fastEnabled&&state==0&&session>=0&&candidateAt<0)due=Math.min(due,performanceSession==session?performanceCadence.next:0);
                 if(!moduleWatch)due=Math.min(due,SystemClock.elapsedRealtime()+60000);
             }
             int event=waitEvent(Math.max(1,due-SystemClock.elapsedRealtime()));
@@ -513,6 +524,7 @@ public final class Main {
                             Core.Reading r=hardwareReading(header);latest=r;sampleFastStats(r,false);
                         }
                     }
+                    if(candidateAt<0)samplePerformance(now);
                 }
             } finally {releaseWait();}
         }
@@ -655,8 +667,8 @@ public final class Main {
         fastStatsNext=fastStatsPrevious!=null?r.elapsed+60000:Long.MAX_VALUE;
         db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;
-        try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&fastEnabled?settings.optInt("fastSeconds",10):0,state==0&&fastEnabled?"rm_minute":"rm"};
+        try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&fastEnabled?settings.optInt("fastSeconds",10):0,state==0&&fastEnabled?settings.optInt("performanceSeconds",3):0,state==0&&fastEnabled?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -719,10 +731,14 @@ public final class Main {
         } finally {db.endTransaction();}
         updateRanges(r,recordedPower,resumed);
         previous=r;recoveryBoundary=false;sampling.expected=interval();
-        if(fast&&(performanceSession!=session||r.elapsed>=performanceNext)){
-            performanceSession=session;performanceNext=r.elapsed+settings.optLong("fastSeconds",10)*1000;
-            performance.sample(session,startElapsed,sampling.interactive,settings.optLong("fastSeconds",10)*1000);
-        }
+        if(fast)samplePerformance(r.elapsed);
+    }
+    void samplePerformance(long now){
+        if(!recordingEnabled||!fastEnabled||state!=0||session<0||stopping)return;
+        if(performanceSession!=session){performanceSession=session;performanceCadence.reset();}
+        if(!performanceCadence.due(now))return;
+        performanceCadence.sampled(now);
+        performance.sample(session,startElapsed,sampling.interactive,performanceCadence.interval);
     }
     void sampleFastStats(Core.Reading r,boolean flush)throws Exception{
         sampleFastStats(r,flush,false);
@@ -960,8 +976,8 @@ public final class Main {
     }
     JSONObject performancePoints(long id,long cursor)throws Exception{
         JSONObject out=new JSONObject().put("ok",true);long end;
-        try(Cursor c=db.rawQuery("SELECT end_elapsed-start_elapsed,active FROM sessions WHERE id=?",new String[]{""+id})){
-            if(!c.moveToFirst())throw new IOException("记录不存在或已删除");end=c.getLong(0);out.put("active",c.getInt(1)!=0);
+        try(Cursor c=db.rawQuery("SELECT end_elapsed-start_elapsed,active,performance_seconds FROM sessions WHERE id=?",new String[]{""+id})){
+            if(!c.moveToFirst())throw new IOException("记录不存在或已删除");end=c.getLong(0);out.put("active",c.getInt(1)!=0).put("intervalMs",c.getLong(2)*1000);
         }
         try(Cursor c=db.rawQuery("SELECT meta FROM performance_profiles WHERE session=?",new String[]{""+id})){
             out.put("meta",c.moveToFirst()?new JSONObject(c.getString(0)):JSONObject.NULL);
@@ -982,7 +998,7 @@ public final class Main {
         return true;
     }
     JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("version","1.3").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("version","1.3.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
         o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",session).put("capabilities",capabilities).put("cellCount",cellCount);

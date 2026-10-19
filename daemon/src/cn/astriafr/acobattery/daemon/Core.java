@@ -94,7 +94,7 @@ public final class Core {
     public static final class Sampling {
         public boolean interactive=true,screenSample;
         public long next,expected=120000;
-        public long screenOnMs=120000,screenOffMs=900000,chargeMs=2000,fastMs;
+        public long screenOnMs=120000,screenOffMs=1200000,chargeMs=3000,fastMs;
         public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
         public boolean screen(boolean on,long now) {
@@ -104,6 +104,20 @@ public final class Core {
         public boolean takeScreenSample() { boolean pending=screenSample;screenSample=false;return pending; }
         // Follow the previous sample's plan, even if the screen has just turned on.
         public long maxGap() { return fastMs>0?Math.max(5000,expected*3):expected+expected/2; }
+    }
+
+    /** Independent periodic work; changing it does not move the power sampler. */
+    public static final class Cadence {
+        public long interval,last=-1,next;
+        public Cadence(long interval){this.interval=interval;}
+        public void configure(long interval,long now){
+            if(interval<=0)throw new IllegalArgumentException("interval");
+            if(this.interval==interval)return;
+            this.interval=interval;next=last<0?now:Math.max(now,last+interval);
+        }
+        public boolean due(long now){return last<0||now>=next;}
+        public void sampled(long now){last=now;next=now+interval;}
+        public void reset(){last=-1;next=0;}
     }
 
     public static final class FullGate {

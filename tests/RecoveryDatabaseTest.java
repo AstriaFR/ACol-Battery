@@ -86,9 +86,9 @@ public final class RecoveryDatabaseTest {
     static void samplingSettings()throws Exception {
         File dir=Files.createTempDirectory("acol-settings-interval-").toFile();Main m=open(dir,"boot-a");
         check(m.settings.getInt("deletePct")==5);check(m.settings.getInt("hidePct")==30);
-        check(m.settings.getInt("screenOnMinutes")==2);check(m.settings.getInt("screenOffMinutes")==15);check(m.settings.getInt("chargeSeconds")==2);
+        check(m.settings.getInt("screenOnMinutes")==2);check(m.settings.getInt("screenOffMinutes")==20);check(m.settings.getInt("chargeSeconds")==3);
         org.json.JSONArray old=new org.json.JSONArray("[3,30,560,1,300,450,50,60,2,10,10,1]");
-        check(Main.decodeSettings(old).getInt("chargeSeconds")==2);check(Main.decodeSettings(old).getInt("screenOffMinutes")==10);
+        check(Main.decodeSettings(old).getInt("chargeSeconds")==3);check(Main.decodeSettings(old).getInt("screenOffMinutes")==10);
         org.json.JSONArray values=new org.json.JSONArray("[5,30,560,1,300,450,50,60,2,15,10,1,10]");
         for(Object invalid:new Object[]{0,11,1.5}){
             values.put(12,invalid);try{Main.decodeSettings(values);throw new AssertionError("accepted invalid charging interval");}catch(java.io.IOException expected){}
@@ -98,7 +98,7 @@ public final class RecoveryDatabaseTest {
         try{m.saveSettings(request);}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.session==id);check(m.sampling.interval(1)==10000);check(value(m,"SELECT active FROM sessions")==1);
         check(value(m,"SELECT COUNT(*) FROM samples")==1);check(value(m,"SELECT COUNT(*) FROM sessions")==1);
-        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==13);
+        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==14);
         try{m.saveSettings(new org.json.JSONArray(old.toString()).put(0));}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.settings.getInt("chargeSeconds")==10); // Old frontend saves cannot erase the new setting.
         String command=AppBridge.ROOT+"bin/curve-client set_settings 5 30 560 1 300 450 50 60 2 15 10 1 2 0";

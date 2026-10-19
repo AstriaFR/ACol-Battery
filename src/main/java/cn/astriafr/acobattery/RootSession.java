@@ -19,10 +19,18 @@ final class RootSession implements Closeable {
     private volatile boolean closed;
     private static final String EOF="__ACO_ROOT_EOF__";
     static String quote(String text){return "'"+text.replace("'","'\"'\"'")+"'";}
+    static Process openRootShell()throws IOException{
+        IOException failure=null;
+        // Let the root manager's PATH select its own su first. Fall back only if
+        // the executable cannot be started, never after a denied authorization.
+        for(String executable:new String[]{"su","/system/bin/su","/system/xbin/su","/sbin/su"}){
+            try{return new ProcessBuilder(executable).redirectErrorStream(true).start();}
+            catch(IOException unavailable){failure=unavailable;}
+        }
+        throw new IOException("无法启动 root 授权入口，请在 root 管理器中允许本应用使用 su。",failure);
+    }
     RootSession()throws IOException{
-        String executable="su";
-        for(String path:new String[]{"/system/bin/su","/system/xbin/su","/sbin/su"})if(new File(path).canExecute()){executable=path;break;}
-        process=new ProcessBuilder(executable).redirectErrorStream(true).start();
+        process=openRootShell();
         input=new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8));
         Thread reader=new Thread(()->{
             try(BufferedReader in=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=in.readLine())!=null&&!closed)output.put(line);}

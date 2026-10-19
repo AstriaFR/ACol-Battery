@@ -1,5 +1,5 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3';
-import{batteryColors}from'./curve-colors.js?v=acol-1.3';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.1';
+import{batteryColors}from'./curve-colors.js?v=acol-1.3.1';
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
 const scaleSettingsKey=()=>JSON.stringify([chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);

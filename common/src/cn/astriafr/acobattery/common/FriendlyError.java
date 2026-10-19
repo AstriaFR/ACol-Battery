@@ -13,6 +13,7 @@ public final class FriendlyError {
     public static String fromOutput(String output,String fallback){
         if(output==null||output.trim().isEmpty())return fallback;
         String lower=output.toLowerCase(Locale.ROOT);
+        if(lower.contains("无法启动 root 授权入口"))return "无法启动 root 授权入口，请在 root 管理器中允许本应用使用 su。";
         if(lower.contains("sqlitecorrupt")||lower.contains("database disk image is malformed"))return "记录数据库已损坏，请先备份记录，再重新初始化数据库。";
         if(lower.contains("no such column")||lower.contains("no such table"))return "记录数据库结构与当前版本不匹配，需要重新初始化数据库。";
         if(lower.contains("sqlitecantopen")||lower.contains("unable to open database"))return "无法打开记录数据库，请确认 root 目录可以访问。";

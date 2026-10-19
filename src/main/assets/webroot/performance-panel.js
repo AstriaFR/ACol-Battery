@@ -1,7 +1,7 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.1';
 import{fullScreen}from'./root-bridge.js';
-import{curveColor}from'./curve-colors.js?v=acol-1.3';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3';
+import{curveColor}from'./curve-colors.js?v=acol-1.3.1';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.1';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
@@ -42,7 +42,7 @@ export class PerformancePanel{
   }
   open(record){
     if(record.kind!=='discharge'||!(record.fast_seconds>0)){this.close();return;}
-    this.active=!!record.active;this.interval=Math.max(1000,record.fast_seconds*1000);
+    this.active=!!record.active;this.interval=Math.max(1000,(record.performance_seconds||record.fast_seconds)*1000);
     if(this.id===record.id)return;
     this.close();this.id=record.id;this.points=[];this.cursor=0;this.follow=true;this.end=1;this.metaText='';
     this.chart.metrics=[];this.chart.maximum.clear();this.chart.frequencyRanges.clear();this.chart.cpuMax=0;this.chart.cpuObservedMax=0;this.chart.axisKey=null;this.chart.enabled.clear();
@@ -65,7 +65,7 @@ export class PerformancePanel{
       do{
         data=await this.api('performance',this.id,this.cursor);
         if(token!==this.token)return;
-        this.active=!!data.active;this.end=Math.max(this.end,data.end??1);
+        this.active=!!data.active;this.end=Math.max(this.end,data.end??1);if(data.intervalMs>0)this.interval=Math.max(1000,data.intervalMs);
         if(data.meta&&JSON.stringify(data.meta)!==this.metaText){this.configure(data.meta);changed=true;}
         const fresh=(data.points??[]).filter(p=>!this.points.length||p[0]>this.points.at(-1)[0]);
         if(fresh.length){this.points.push(...fresh);this.chart.ingest(fresh);changed=true;}

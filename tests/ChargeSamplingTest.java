@@ -7,8 +7,8 @@ public final class ChargeSamplingTest {
         r.online=r.full=r.enabled=true;r.current=-20;r.fv=4450;r.vmin=r.vmax=4400;r.temp=30;return r;
     }
     public static void main(String[] args){
-        Core.Sampling sampling=new Core.Sampling();check(sampling.interval(1)==2000);
-        check(sampling.interval(0)==120000);sampling.interactive=false;check(sampling.interval(0)==900000);
+        Core.Sampling sampling=new Core.Sampling();check(sampling.interval(1)==3000);
+        check(sampling.interval(0)==120000);sampling.interactive=false;check(sampling.interval(0)==1200000);
         for(int seconds=1;seconds<=10;seconds++){
             sampling.chargeMs=seconds*1000L;check(sampling.interval(1)==seconds*1000L);
             sampling.sampled(1,500);check(sampling.next==500+seconds*1000L);

@@ -1,5 +1,5 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3';
-import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3.1';
+import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3.1';
 export class SettingsPanel{
   constructor(api,onSaved,onHomePriority){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
@@ -92,8 +92,8 @@ export class SettingsPanel{
   async toggleFast(){
     if(!this.ready||this.fastBusy)return;const enabled=!this.fastValue;this.fastBusy=true;this.updateFast();this.setStatus('');
     try{
-      const seconds=this.form.elements.namedItem('fastSeconds').value;
-      if(!await this.askChange(enabled?'开启游戏模式？':'关闭游戏模式？',enabled?`结束当前记录，每 ${seconds} 秒记录功耗与性能，耗电统计固定每分钟按 RM 计算。游戏记录不自动删除，接入充电后退出。`:'结束游戏记录并补结算，立即建立普通记录。',!enabled))return;
+      const seconds=this.form.elements.namedItem('fastSeconds').value,performanceSeconds=this.form.elements.namedItem('performanceSeconds').value;
+      if(!await this.askChange(enabled?'开启游戏模式？':'关闭游戏模式？',enabled?`结束当前记录，功耗每 ${seconds} 秒、性能每 ${performanceSeconds} 秒采样，耗电统计固定每分钟按 RM 计算。游戏记录不自动删除，接入充电后退出。`:'结束游戏记录并补结算，立即建立普通记录。',!enabled))return;
       if(!await this.flush())throw Error('设置未能保存，请重试。');
       const result=await this.api('set_fast',enabled?1:0);this.fastValue=result.fastEnabled;this.onSaved(result.settings);
     }catch(e){this.setStatus(e.message,true);}
@@ -124,11 +124,11 @@ export class SettingsPanel{
   closeRecordingConfirmation(){if(this.recordingConfirm.open)this.recordingConfirm.close();const resolve=this.recordingResolve;this.recordingResolve=null;resolve?.(false);}
   edit(key,push=true){
     if(!this.ready||this.keypad.open)return;
-    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'游戏采样间隔',chargeSeconds:'充电记录间隔'};
+    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
     const field=this.form.elements.namedItem(key),decimal=['capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
     this.editor={key,field,draft:field.value,fresh:true,decimal,signed};
     document.getElementById('keypadTitle').textContent=names[key];
-    const unit=key.endsWith('Pct')?'%':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','chargeSeconds'].includes(key)?'秒':'℃';
+    const unit=key.endsWith('Pct')?'%':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
     document.getElementById('keypadUnit').textContent=unit;
     const minimum=decimal?Number(field.min).toFixed(2):field.min,maximum=decimal?Number(field.max).toFixed(2):field.max;
     document.getElementById('keypadRange').textContent=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
@@ -160,10 +160,10 @@ export class SettingsPanel{
     try{value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);}
     catch(error){this.editorError(error.message);return;}
     if(e.key==='deletePct'){this.openDeleteConfirmation(value.deletePct);return;}
-    if(['screenOnMinutes','screenOffMinutes','fastSeconds','chargeSeconds'].includes(e.key)){
+    if(['screenOnMinutes','screenOffMinutes','fastSeconds','performanceSeconds','chargeSeconds'].includes(e.key)){
       this.editorBusy=true;document.getElementById('keypadApply').disabled=true;
       try{
-        const name=document.getElementById('keypadTitle').textContent,unit=['fastSeconds','chargeSeconds'].includes(e.key)?'秒':'分钟';
+        const name=document.getElementById('keypadTitle').textContent,unit=['fastSeconds','performanceSeconds','chargeSeconds'].includes(e.key)?'秒':'分钟';
         if(!await this.askChange(`修改${name}？`,`改为 ${value[e.key]} ${unit}，继续当前记录。`))return;
         if(!await this.flush())throw Error('设置未能保存，请重试。');
         value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);

@@ -1,12 +1,12 @@
 import{exec,fullScreen,cancelTopDialog}from'./root-bridge.js';
-import{LiveChannel}from'./live-channel.js?v=acol-1.3';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3';
-import{SettingsPanel}from'./settings-panel.js?v=acol-1.3';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3';
-import{PerformancePanel}from'./performance-panel.js?v=acol-1.3';
-import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3';
-import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3';
+import{LiveChannel}from'./live-channel.js?v=acol-1.3.1';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.1';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.1';
+import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.1';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.1';
+import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.1';
+import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.1';
+import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.1';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
@@ -207,7 +207,7 @@ function applyChart(data,view,live=false){
 }
 function renderChartInfo(){
   if(!detail)return;const r=detail.record,raw=r.kind==='charge';
-  const plan=raw?(r.active?`每 ${uiSettings.chargeSeconds} 秒记录`:'充电原始采样'):recordFast(r)?`游戏模式${r.active?' · 每 '+uiSettings.fastSeconds+' 秒':''} · 实时功耗`:r.active?`亮屏 ${uiSettings.screenOnMinutes} 分钟 / 息屏 ${uiSettings.screenOffMinutes} 分钟`:'按屏幕状态记录';
+  const plan=raw?(r.active?`每 ${uiSettings.chargeSeconds} 秒记录`:'充电原始采样'):recordFast(r)?`游戏模式${r.active?' · 功耗每 '+uiSettings.fastSeconds+' 秒':''} · 实时功耗`:r.active?`亮屏 ${uiSettings.screenOnMinutes} 分钟 / 息屏 ${uiSettings.screenOffMinutes} 分钟`:'按屏幕状态记录';
   $('chartInfo').textContent=`${r.active?(followLive?'实时跟随':'已暂停跟随'):'已结束'} · ${plan}`;
   for(const s of seriesFor(r.kind,recordCells(r),recordFast(r))){
     const label=$('legend').querySelector(`[data-series="${s.key}"]`);if(!label)continue;
