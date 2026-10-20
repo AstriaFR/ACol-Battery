@@ -1,4 +1,6 @@
 import { exec, cancelTopDialog } from '../root-bridge.js';
+import { ThemeController } from '../theme.js';
+ThemeController.applyStored();
 const command = '/system/bin/sh /data/adb/aco_battery_app/runtime/cutoff.sh';
 const $ = id => document.getElementById(id);
 const homeUrl=new URL('../index.html',location.href).href,cutoffUrl=location.href;
@@ -6,7 +8,15 @@ const fromSettings=new URLSearchParams(location.search).get('from')==='settings'
 let fromHome=false;try{const ref=new URL(document.referrer);fromHome=ref.origin===location.origin&&!ref.pathname.includes('/cutoff/');}catch{}
 if(!fromHome){history.replaceState({page:fromSettings?'settings':'home'},'',parentUrl);history.pushState({page:'cutoff'},'',cutoffUrl);}
 else history.replaceState({page:'cutoff'},'',cutoffUrl);
-window.addEventListener('popstate',e=>{if(e.state?.page!=='cutoff')location.replace(parentUrl);});
+window.addEventListener('popstate',e=>{
+  if(e.state?.page==='cutoff'){
+    if(e.state.keypad){if(!keypadDialog.open)openKeypad(e.state.key,false);}
+    else if(keypadDialog.open)closeKeypadDialog();
+    return;
+  }
+  if(keypadDialog.open)closeKeypadDialog();
+  location.replace(parentUrl);
+});
 document.querySelector('.back').href=parentUrl;
 document.querySelector('.back').addEventListener('click',e=>{e.preventDefault();history.back();});
 window.__acoBack=()=>{
@@ -17,10 +27,12 @@ document.addEventListener('pointerdown', e => { if (e.pointerType === 'touch' &&
 document.addEventListener('contextmenu', e => { if (!e.target.closest('input,textarea')) e.preventDefault(); });
 const dialog = $('confirmation');
 const lowVoltageDialog = $('lowVoltageConfirmation');
+const keypadDialog = $('cutoffKeypad');
 let lastState = null;
 let pending = null;
 let busy = false;
 let edited = false;
+let keypadEditor = null;
 function message(text, error = false) {
   $('message').textContent = text;
   $('message').classList.toggle('error', error);
@@ -53,7 +65,7 @@ function render(state, replaceInputs = false) {
   }
 }
 async function refresh() {
-  if (busy || dialog.open || lowVoltageDialog.open) return;
+  if (busy || dialog.open || lowVoltageDialog.open || keypadDialog.open) return;
   setBusy(true);
   try { render(await run('status')); message(''); }
   catch (e) { message(e.message, true); }
@@ -84,7 +96,56 @@ async function plan(action) {
 }
 $('voltageForm').addEventListener('submit', e => { e.preventDefault(); plan('set'); });
 $('restore').addEventListener('click', () => plan('stock'));
-for (const id of ['shutdownInput', 'termInput']) $(id).addEventListener('input', () => { edited = true; });
+for (const id of ['shutdownInput', 'termInput']) {
+  const input=$(id);
+  input.addEventListener('pointerdown',e=>e.preventDefault());
+  input.addEventListener('click',()=>openKeypad(id));
+  input.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openKeypad(id);}});
+  input.addEventListener('input',()=>{edited=true;});
+}
+function openKeypad(id,push=true){
+  const input=$(id);if(busy||keypadDialog.open||!lastState||input.disabled)return;
+  keypadEditor={id,input,draft:input.value,fresh:true};
+  $('cutoffKeypadTitle').textContent=id==='termInput'?'电量计截止电压':'软件关机电压';
+  $('cutoffKeypadRange').textContent=`${input.min}–${input.max} mV\n整数`;
+  $('cutoffKeypadValue').textContent=keypadEditor.draft||'—';$('cutoffKeypadError').hidden=true;
+  keypadDialog.querySelector('[data-key=sign]').disabled=true;
+  keypadDialog.querySelector('[data-key=dot]').disabled=true;
+  if(push)history.pushState({...history.state,page:'cutoff',keypad:true,key:id},'',`${cutoffUrl}#keypad-${id}`);
+  keypadDialog.showModal();$('cutoffKeypadCancel').focus({preventScroll:true});
+}
+function closeKeypadDialog(){if(keypadDialog.open)keypadDialog.close();keypadEditor=null;}
+function dismissKeypad(){if(history.state?.page==='cutoff'&&history.state?.keypad)history.back();else closeKeypadDialog();}
+function drawKeypad(){ $('cutoffKeypadValue').textContent=keypadEditor?.draft||'—'; }
+function pressKey(key){
+  const editor=keypadEditor;if(!editor)return;
+  $('cutoffKeypadError').hidden=true;
+  if(key==='clear'){editor.draft='';editor.fresh=false;}
+  else if(key==='backspace'){editor.draft=editor.draft.slice(0,-1);editor.fresh=false;}
+  else if(/^(?:[0-9]|00)$/.test(key)){
+    if(editor.fresh){editor.draft='';editor.fresh=false;}
+    for(const digit of key)if(editor.draft.length<4)editor.draft+=digit;
+  }
+  drawKeypad();
+}
+function commitKeypad(){
+  const editor=keypadEditor;if(!editor)return;
+  const value=Number(editor.draft);
+  if(!/^\d{4}$/.test(editor.draft)||value<Number(editor.input.min)||value>Number(editor.input.max)){
+    $('cutoffKeypadError').textContent=`请输入 ${editor.input.min}–${editor.input.max} mV 的整数。`;
+    $('cutoffKeypadError').hidden=false;return;
+  }
+  editor.input.value=String(value);editor.input.dispatchEvent(new Event('input',{bubbles:true}));dismissKeypad();
+}
+for(const button of keypadDialog.querySelectorAll('[data-key]'))button.onclick=()=>pressKey(button.dataset.key);
+$('cutoffKeypadCancel').onclick=dismissKeypad;
+$('cutoffKeypadApply').onclick=commitKeypad;
+keypadDialog.addEventListener('cancel',e=>{e.preventDefault();dismissKeypad();});
+keypadDialog.addEventListener('click',e=>{const r=keypadDialog.getBoundingClientRect();if(e.target===keypadDialog&&(e.clientY<r.top||e.clientY>r.bottom||e.clientX<r.left||e.clientX>r.right))dismissKeypad();});
+keypadDialog.addEventListener('keydown',e=>{
+  let key=/^[0-9]$/.test(e.key)?e.key:{Backspace:'backspace',Delete:'clear'}[e.key];
+  if(key){e.preventDefault();pressKey(key);}else if(e.key==='Enter'){e.preventDefault();commitKeypad();}
+});
 $('cancel').addEventListener('click', () => { pending = null; dialog.close(); });
 dialog.addEventListener('cancel', e => { if (busy) e.preventDefault(); else pending = null; });
 $('lowVoltageCancel').addEventListener('click', () => { pending = null; lowVoltageDialog.close(); });

@@ -1,7 +1,8 @@
 :root {
   -webkit-text-size-adjust:100%;text-size-adjust:100%;
-  color-scheme:light;
+  color-scheme:light dark;
   --bg:#f6f8fb;--card:#fff;--line:#e1e7ef;--text:#182638;--muted:#607185;--accent:#2762c4;--charge:#078267;--discharge:#c4443f;--theme-soft:#edf3fe;--theme-line:#d4e1f7;
+  --plot-bg:#fff;--plot-major:#8493a6;--plot-middle:#a9b8c9;--plot-minor:#e5eaf0;--plot-label-major:#243b57;--plot-label-middle:#40566e;--plot-label:#607185;--plot-border:#95a2b1;--plot-timegrid:#edf0f4;--plot-marker:#405267;
   font-family:system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;font-size:14px;
   font-variant-numeric:tabular-nums;font-feature-settings:"tnum";
 }
@@ -258,7 +259,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .keypad-heading-actions{display:flex;align-items:center;flex-shrink:0;gap:8px}
 .keypad-range{max-width:88px;color:var(--muted);font-size:10px;line-height:1.35;text-align:right;white-space:pre-line}
 .fast-record-marker{display:inline-flex;margin-left:4px;vertical-align:middle;color:#14181d}
-.fast-record-marker svg{width:9px;height:12px;fill:#14181d}
+.fast-record-marker svg{width:15px;height:12px}
 .fast-control .setting-group{margin-top:8px}
 .setting-title{display:flex;align-items:center;gap:6px;min-width:0;font-size:15px;font-weight:600}
 .setting-info{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;min-height:0;padding:0;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 12px Georgia,serif}
@@ -338,6 +339,76 @@ body:has(main:not([hidden])){overflow:hidden}
 @media(prefers-reduced-motion:reduce){.battery-explanation-pages [data-explanation-page]:not([hidden]){animation:none}}
 .battery-info-error{margin:10px 2px 0;font-size:11px;color:#b03d35;line-height:1.6}
 
+/* OLED theme: black page surfaces, green controls, and high-contrast chart lines. */
+:root[data-theme=dark]{
+  color-scheme:dark;--bg:#000;--card:#070a08;--line:#1b2920;--text:#e8f1ea;--muted:#9aac9f;
+  --accent:#67dfa0;--charge:#62d99a;--discharge:#ff817a;--theme-soft:#0c1b12;--theme-line:#245638;
+  --plot-bg:#000;--plot-major:#789284;--plot-middle:#3a5143;--plot-minor:#1d2a21;
+  --plot-label-major:#e0ede4;--plot-label-middle:#b7c9bc;--plot-label:#829488;--plot-border:#52675a;--plot-timegrid:#142018;--plot-marker:#d7e8dc;
+}
+:root[data-theme=dark] body,:root[data-theme=dark] main,:root[data-theme=dark] .detail,:root[data-theme=dark] .subpage-header{background:#000;color:var(--text)}
+:root[data-theme=dark] body[data-flow=discharge]{--accent:var(--charge);--theme-soft:#0c1b12;--theme-line:#245638}
+:root[data-theme=dark] .card{background:var(--card);border-color:var(--line);box-shadow:none}
+:root[data-theme=dark] .pagehead{background:linear-gradient(115deg,#0d1b12 0%,#080b09 85%);border-color:#245638}
+:root[data-theme=dark] .pagehead h1,:root[data-theme=dark] .pagehead h2,:root[data-theme=dark] .pagehead small{color:#79dfa5}
+:root[data-theme=dark] button,:root[data-theme=dark] .cutoff-button,:root[data-theme=dark] .back{background:#0b110d;color:var(--text);border-color:#23362a}
+:root[data-theme=dark] .record-open{background:transparent;border-color:transparent}
+:root[data-theme=dark] button.selected,:root[data-theme=dark] .setting-segmented button[aria-pressed=true]{background:#102319;color:#8aefb5;border-color:#28563a;box-shadow:none}
+:root[data-theme=dark] .home-overview{background:#000;border-color:#214a32;box-shadow:none}
+:root[data-theme=dark] .home-overview .brand-title{color:#75dfa4}
+:root[data-theme=dark] .live-value{color:#e7f2e9}
+:root[data-theme=dark] .livegrid>div+div{border-left-color:#203126}
+:root[data-theme=dark] .livegrid>div:nth-child(3n+1){border-left-color:transparent}
+:root[data-theme=dark] .livegrid small,:root[data-theme=dark] .small,:root[data-theme=dark] .footnote,:root[data-theme=dark] .record small{color:var(--muted)}
+:root[data-theme=dark] .live-direction[data-flow=charge]{color:#71daa5}
+:root[data-theme=dark] .live-direction[data-flow=discharge]{color:#ff8b84}
+:root[data-theme=dark] #warning{color:#edc77b}
+:root[data-theme=dark] .tabs{background:#08110b}
+:root[data-theme=dark] .tabs button{color:#a5b4aa}
+:root[data-theme=dark] .tabs button.selected{background:#102319;color:#83e7ac;border-color:#28563a;box-shadow:none}
+:root[data-theme=dark] .record{background:#000;border-color:var(--line)}
+:root[data-theme=dark] .fast-record-marker{color:#e7f2e9}
+:root[data-theme=dark] .record .icon{background:#0e2417;color:#72e2a5}
+:root[data-theme=dark] .record.discharge .icon{background:#281412;color:#ff8982}
+:root[data-theme=dark] .empty{background:#070a08;border-color:#34473a}
+:root[data-theme=dark] .record[data-active="1"].charge{border-color:#62d99a;box-shadow:inset 0 0 0 .5px #62d99a}
+:root[data-theme=dark] .record[data-active="1"].discharge{border-color:#ff817a;box-shadow:inset 0 0 0 .5px #ff817a}
+:root[data-theme=dark] .summary-metric,:root[data-theme=dark] .summary-meta,:root[data-theme=dark] .summary-remaining,:root[data-theme=dark] .summary-remaining>div+div,:root[data-theme=dark] .summary-frequencies,:root[data-theme=dark] .summary-frequency-cpu,:root[data-theme=dark] .summary-frequency-gpu{border-color:#1d2a21}
+:root[data-theme=dark] .summary-time,:root[data-theme=dark] .chartinfo{color:#9aac9f}
+:root[data-theme=dark] .chartpanel,:root[data-theme=dark] .expanded{background:#000}
+:root[data-theme=dark] .plotwrap{background:#000}
+:root[data-theme=dark] .legend label{background:#0a100c;border-color:#1e3024}
+:root[data-theme=dark] .legend label:has(input:checked){background:#101c14;border-color:#355443}
+:root[data-theme=dark] .legend label:has(input:not(:checked)){opacity:.72}
+:root[data-theme=dark] .tooltip{background:#0b110df5;border-color:#34483a;color:#e4eee6;box-shadow:0 5px 20px #000a}
+:root[data-theme=dark] .appRow,:root[data-theme=dark] .drain-row{border-color:#1d2a21}
+:root[data-theme=dark] .appTrack{background:#17231a}
+:root[data-theme=dark] .appTrack div{background:#68c995}
+:root[data-theme=dark] .danger,:root[data-theme=dark] .record-delete{color:#ff928b;border-color:#62332f;background:#24110f}
+:root[data-theme=dark] dialog,:root[data-theme=dark] .numeric-keypad,:root[data-theme=dark] .settings-delete-confirm,:root[data-theme=dark] .recording-confirm{background:#080b09;color:var(--text);border-color:#26372b;box-shadow:0 16px 64px #000b}
+:root[data-theme=dark] dialog::backdrop{background:#000b}
+:root[data-theme=dark] #toast{background:#101a13;color:#e8f1ea;border-color:#35503c;box-shadow:0 5px 25px #0009}
+:root[data-theme=dark] .settings-button,:root[data-theme=dark] .battery-info-button{background:#0b110d;color:#76dfa5;border-color:#28563a}
+:root[data-theme=dark] .settings-panel .setting-card{border-color:#1e3025}
+:root[data-theme=dark] .settings-panel,:root[data-theme=dark] .numeric-keypad,:root[data-theme=dark] .settings-delete-confirm,:root[data-theme=dark] .recording-confirm,:root[data-theme=dark] .battery-info-panel,:root[data-theme=dark] .battery-explanation,:root[data-theme=dark] .game-explanation,:root[data-theme=dark] .settings-change-confirm{--accent:#67dfa0;--theme-soft:#0c1b12;--theme-line:#245638}
+:root[data-theme=dark] .setting-input,:root[data-theme=dark] .setting-segmented{background:#0a100c;border-color:#294333}
+:root[data-theme=dark] .setting-input input{color:var(--text)}
+:root[data-theme=dark] .setting-input input[aria-invalid=true]{color:#ff928b}
+:root[data-theme=dark] .setting-input:has(input[aria-invalid=true]){background:#24110f;border-color:#62332f}
+:root[data-theme=dark] .setting-segmented button[aria-pressed=true]:active{background:#102319}
+:root[data-theme=dark] .settings-status{background:#0b110df5;border-color:#294333}
+:root[data-theme=dark] .keypad-grid button:nth-child(-n+3){background:#101813}
+:root[data-theme=dark] .fast-control.mode-active #toggleFast{color:#ff928b;border-color:#62332f;background:#24110f}
+:root[data-theme=dark] .setting-info,:root[data-theme=dark] .battery-estimate-info,:root[data-theme=dark] .remaining-info{background:#101813;border-color:#35503c;color:#adc2b3}
+:root[data-theme=dark] .subpage-header h1{color:var(--text)}
+:root[data-theme=dark] .battery-info-card strong{color:var(--text)}
+:root[data-theme=dark] .battery-info-card strong.battery-near-actual{color:#74e3a5}
+:root[data-theme=dark] .battery-coefficient-table th{background:#090d0a;border-color:#26372b}
+:root[data-theme=dark] .battery-coefficient-table td{border-color:#1c2a20}
+:root[data-theme=dark] .battery-coefficient-table .current-coefficient{background:#102319;color:#8aefb5}
+:root[data-theme=dark] .theme-toggle{background:transparent;color:#75dfa4}
+:root[data-theme=dark] .theme-toggle:active{background:#102319}
+
 @media(orientation:portrait){
   .chartpanel:not(.expanded){display:flex;flex-direction:column}
   .chartpanel:not(.expanded)>.chartbar{order:0}
@@ -352,6 +423,15 @@ body:has(main:not([hidden])){overflow:hidden}
 .subpage-header .page-heading{display:flex;align-items:center;gap:12px}
 .subpage-header h1{font-size:26px;font-weight:700;line-height:1.25;letter-spacing:normal;margin:8px 0;color:#1d2938}
 .subpage-header .back{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-height:0;font-size:15px;line-height:1.2;border:1px solid #e8ecf1;border-radius:10px;background:#fff;color:#197e67;padding:9px 12px}
+.settings-header-actions{display:flex;align-items:center;gap:5px;flex-shrink:0}
+.theme-toggle{position:relative;left:-4px;display:grid;place-items:center;width:38px;height:38px;min-height:0;padding:5px;border:0;background:transparent;color:#168255}
+.theme-toggle:active{background:var(--theme-soft)}
+.theme-toggle svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.theme-moon{display:none}
+:root[data-theme=dark] .theme-sun{display:none}
+:root[data-theme=dark] .theme-moon{display:block}
+.theme-auto-badge{position:absolute;right:0;bottom:0;display:none;place-items:center;width:13px;height:13px;border-radius:50%;background:#168255;color:#fff;font:700 8px/1 system-ui,sans-serif}
+.theme-toggle[data-mode=auto] .theme-auto-badge{display:grid}
 
 /* Native owns system-bar insets; only each page body scrolls. */
 @font-face{font-family:AColBrand;src:url('assets/acol-brand.ttf') format('truetype');font-style:normal;font-weight:700;font-display:block;unicode-range:U+0020,U+0041,U+0043,U+006C,U+006F}

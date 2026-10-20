@@ -127,7 +127,7 @@ public final class Main {
         app.framework=new FrameworkWatch(Main::interruptWait);app.framework.start();
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 1.3.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 1.3.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect();System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -185,7 +185,7 @@ public final class Main {
 
     static JSONObject decodeSettings(JSONArray p)throws Exception {
         if(p.length()!=8&&p.length()!=12&&p.length()!=13&&p.length()!=14)throw new IOException("设置项数量无效");
-        long[] v={5,30,560,1,300,450,50,60,2,20,10,1,3,3};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
+        long[] v={5,30,560,1,300,450,50,60,2,20,10,1,2,2};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
         // The old game interval controlled both charts. Keep it for both on upgrade.
         if(p.length()>=12&&p.length()<14)v[13]=v[10];
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
@@ -213,9 +213,9 @@ public final class Main {
         long oldInterval=interval();
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
         sampling.screenOffMs=settings.optLong("screenOffMinutes",20)*60000;
-        sampling.chargeMs=settings.optLong("chargeSeconds",3)*1000;
+        sampling.chargeMs=settings.optLong("chargeSeconds",2)*1000;
         sampling.fastMs=fastEnabled?settings.optLong("fastSeconds",10)*1000:0;
-        performanceCadence.configure(settings.optLong("performanceSeconds",3)*1000,reschedule?SystemClock.elapsedRealtime():0);
+        performanceCadence.configure(settings.optLong("performanceSeconds",2)*1000,reschedule?SystemClock.elapsedRealtime():0);
         if(reschedule&&recordingEnabled){
             long now=SystemClock.elapsedRealtime(),nextInterval=interval();
             if(nextInterval!=oldInterval)sampling.next=Math.max(now,(previous==null?now:previous.elapsed)+nextInterval);
@@ -223,7 +223,7 @@ public final class Main {
             // already elapsed old plan when shortening without splitting a record.
             sampling.expected=Math.max(sampling.expected,nextInterval);
             if(fastEnabled&&state==0&&session>=0){
-                db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{settings.optInt("fastSeconds",10),settings.optInt("performanceSeconds",3),session});
+                db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{settings.optInt("fastSeconds",10),settings.optInt("performanceSeconds",2),session});
             }
         }
     }
@@ -271,8 +271,8 @@ public final class Main {
         int count=p.length()-1;
         if((count!=12&&count!=13&&count!=14)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
         JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
-        if(count==12)values.put(settings.optLong("chargeSeconds",3));
-        if(values.length()==13)values.put(settings.optLong("performanceSeconds",3));
+        if(count==12)values.put(settings.optLong("chargeSeconds",2));
+        if(values.length()==13)values.put(settings.optLong("performanceSeconds",2));
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
         try {
@@ -668,7 +668,7 @@ public final class Main {
         db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;
         try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&fastEnabled?settings.optInt("fastSeconds",10):0,state==0&&fastEnabled?settings.optInt("performanceSeconds",3):0,state==0&&fastEnabled?"rm_minute":"rm"};
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&fastEnabled?settings.optInt("fastSeconds",10):0,state==0&&fastEnabled?settings.optInt("performanceSeconds",2):0,state==0&&fastEnabled?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -998,7 +998,7 @@ public final class Main {
         return true;
     }
     JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("version","1.3.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("version","1.3.2").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
         o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",session).put("capabilities",capabilities).put("cellCount",cellCount);

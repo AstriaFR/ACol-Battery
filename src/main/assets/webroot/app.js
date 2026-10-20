@@ -1,12 +1,13 @@
 import{exec,fullScreen,cancelTopDialog}from'./root-bridge.js';
-import{LiveChannel}from'./live-channel.js?v=acol-1.3.1';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.1';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.1';
-import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.1';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.1';
-import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.1';
-import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.1';
-import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.1';
+import{LiveChannel}from'./live-channel.js?v=acol-1.3.2';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.2';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.2';
+import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.2';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.2';
+import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.2-gamepad-temp';
+import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.2';
+import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.2';
+import{ThemeController}from'./theme.js?v=acol-1.3.2';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
@@ -62,7 +63,6 @@ async function pollRemaining(generation){
 function syncTheme(){
   const flow=detail?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind);
   document.body.dataset.flow=flow;
-  document.querySelector('meta[name=theme-color]').content=!detail||flow==='charge'?'#eaf7f2':'#fff0ee';
 }
 const recordCells=r=>[0,1,2].includes(r?.cell_count)?r.cell_count:2;
 const recordFast=r=>Number(r?.fast_seconds)>0;
@@ -80,8 +80,14 @@ function percentFlow(r){return valid(r.pct_start)&&valid(r.pct_end)&&r.pct_start
 function appendGameMarker(node,r){
   if(recordFast(r)){
     const marker=el('span',undefined,'fast-record-marker');marker.setAttribute('aria-label','游戏模式记录');
-    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS('http://www.w3.org/2000/svg','path');
-    svg.setAttribute('viewBox','0 0 12 16');svg.setAttribute('aria-hidden','true');path.setAttribute('d','M7 0 1 9h4l-1 7 8-10H7z');svg.append(path);marker.append(svg);node.append(marker);
+    const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),body=document.createElementNS(ns,'path'),dpad=document.createElementNS(ns,'path'),center=document.createElementNS(ns,'path');
+    svg.setAttribute('viewBox','0 0 20 16');svg.setAttribute('aria-hidden','true');
+    body.setAttribute('d','M5.3 2.4h9.4c2 0 3.7 1.4 4.1 3.4l.8 4.3c.3 1.9-1.8 3-3.2 1.8l-2.5-2h-7l-2.5 2c-1.4 1.2-3.5.1-3.2-1.8L2 5.8c.4-2 2.1-3.4 3.3-3.4Z');
+    body.setAttribute('fill','none');body.setAttribute('stroke','currentColor');body.setAttribute('stroke-width','1.5');body.setAttribute('stroke-linejoin','round');
+    dpad.setAttribute('d','M5.4 4.7v4M3.4 6.7h4');dpad.setAttribute('fill','none');dpad.setAttribute('stroke','currentColor');dpad.setAttribute('stroke-width','1.35');dpad.setAttribute('stroke-linecap','round');
+    center.setAttribute('d','M9.1 4.1h1.8M9.1 5h1.8');center.setAttribute('fill','none');center.setAttribute('stroke','currentColor');center.setAttribute('stroke-width','.65');center.setAttribute('stroke-linecap','round');center.setAttribute('opacity','.75');
+    const dot=(cx,cy)=>{const circle=document.createElementNS(ns,'circle');circle.setAttribute('cx',cx);circle.setAttribute('cy',cy);circle.setAttribute('r','.72');circle.setAttribute('fill','currentColor');return circle;};
+    svg.append(body,dpad,center,dot(13.1,5.5),dot(15.2,7.1),dot(13.1,8.7),dot(11,7.1));marker.append(svg);node.append(marker);
   }
 }
 function updateRecordTitle(title,r){
@@ -135,6 +141,21 @@ chart.onInteract=()=>pauseFollowing();
 const settingsPanel=new SettingsPanel(api,value=>{applySettings(value);refresh();},value=>{homePriority=value;renderRecords();});
 const batteryPanel=new BatteryInfoPanel();
 const performancePanel=new PerformancePanel(api);
+function updateThemeControl({step,dark}){
+  const button=$('themeToggle');if(!button)return;
+  button.dataset.mode=step;button.setAttribute('aria-label',step==='auto'?'主题：跟随系统':'主题：手动'+(dark?'暗色':'亮色'));
+  button.title=button.getAttribute('aria-label');
+}
+let themeUiReady=false;
+const themeController=new ThemeController(state=>{
+  updateThemeControl(state);
+  if(!themeUiReady)return;
+  try{
+    if(activeId!==null&&detail)buildLegend(detail.record.kind);
+    chart.draw();performancePanel.refreshTheme();
+  }catch(error){console.error('Theme redraw failed',error);}
+});
+$('themeToggle').onclick=()=>themeController.cycle();
 window.__acoBack=()=>{
   if(cancelTopDialog())return'handled';
   if(performancePanel.expanded){performancePanel.fullscreen(false);return'handled';}
@@ -637,5 +658,6 @@ window.addEventListener('pageshow',e=>{if(e.persisted){refresh();startRemaining(
 document.addEventListener('pointerup',()=>{if(followLive&&detail?.record.active&&!chart.pointers.size)showDetail({...detail,points:streamPoints},true,true);});
 $('confirm').addEventListener('close',()=>{deleteTarget=null;schedulePoll(0);startRemaining();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&expanded)toggleFullscreen(false);});
+themeUiReady=true;
 if(startInSettings)openSettings();
 refresh();

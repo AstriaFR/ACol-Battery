@@ -1,21 +1,26 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.1';
-import{batteryColors}from'./curve-colors.js?v=acol-1.3.1';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.2';
+import{batteryColor}from'./curve-colors.js?v=acol-1.3.2';
+const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
 const scaleSettingsKey=()=>JSON.stringify([chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
 const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
   &&peak-base>=(full-base)*1.1-Math.max(1,Math.abs(full-base))*1e-12;
 export const series=[
-  {key:'rm',index:1,name:'剩余容量',axis:'容量',unit:'mAh',color:batteryColors.rm,digits:0},
-  {key:'pct',index:2,name:'系统电量',axis:'电量',unit:'%',color:batteryColors.pct,digits:0},
-  {key:'current',index:3,name:'充电电流',axis:'电流',unit:'mA',color:batteryColors.current,digits:0},
-  {key:'voltage',index:4,name:'电芯均压',axis:'电压',unit:'mV',color:batteryColors.voltage,digits:1},
-  {key:'power',index:5,name:'实时功率',axis:'功率',unit:'W',color:batteryColors.power,digits:6},
-  {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',color:batteryColors.temp,digits:1}
+  {key:'rm',index:1,name:'剩余容量',axis:'容量',unit:'mAh',digits:0},
+  {key:'pct',index:2,name:'系统电量',axis:'电量',unit:'%',digits:0},
+  {key:'current',index:3,name:'充电电流',axis:'电流',unit:'mA',digits:0},
+  {key:'voltage',index:4,name:'电芯均压',axis:'电压',unit:'mV',digits:1},
+  {key:'power',index:5,name:'实时功率',axis:'功率',unit:'W',digits:6},
+  {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',digits:1}
 ];
 export const valid=v=>typeof v==='number'&&Number.isFinite(v);
-export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'||!['current','temp'].includes(s.key)).map(s=>
-  kind==='discharge'&&s.key==='power'?{...s,name:fast?'实时功耗':'平均功耗',axis:'功耗',digits:2}:s.key==='voltage'&&cellCount!==2?{...s,name:'电池电压'}:s);}
+export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'||!['current','temp'].includes(s.key)).map(s=>{
+  let item={...s,color:batteryColor(s.key)};
+  if(kind==='discharge'&&s.key==='power')item={...item,name:fast?'实时功耗':'平均功耗',axis:'功耗',digits:2};
+  if(s.key==='voltage'&&cellCount!==2)item={...item,name:'电池电压'};
+  return item;
+});}
 export function plotPoints(points,kind,cellCount=2,fast=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3]))return p;const row=[...p];row[3]*=cellCount===2?2:1;return row;});
   if(fast)return points.map(p=>{if(valid(p[5])&&p[5]<0){const row=[...p];row[5]=null;return row;}return p;});
@@ -231,22 +236,22 @@ export class Chart{
     this.top=top;this.bottom=bottom;this.axisLo=lo;this.axisHi=hi;
     const mapY=value=>bottom-(value-lo)/(hi-lo)*ph;
     const visible=windowPoints(this.points,...this.window);
-    ctx.font='10px system-ui';ctx.lineWidth=.65;ctx.fillStyle='#ffffff';ctx.fillRect(this.left,top,pw,ph);
-    ctx.fillStyle=axisSeries?.color??'#607185';ctx.textAlign='left';ctx.fillText(axis?.title??'量程 %',3,12);
+    ctx.font='10px system-ui';ctx.lineWidth=.65;ctx.fillStyle=cssColor('--plot-bg','#ffffff');ctx.fillRect(this.left,top,pw,ph);
+    ctx.fillStyle=axisSeries?.color??cssColor('--plot-muted','#607185');ctx.textAlign='left';ctx.fillText(axis?.title??'量程 %',3,12);
     for(const value of tickValues){
       const y=mapY(value),major=value===0||Math.abs(value)===100,middle=Math.abs(Math.abs(value)-50)<1e-6;
-      ctx.strokeStyle=major?'#8493a6':middle?'#a9b8c9':'#e5eaf0';ctx.lineWidth=major?.9:middle?.8:.55;ctx.beginPath();ctx.moveTo(this.left,y);ctx.lineTo(w-this.right,y);ctx.stroke();
-      ctx.fillStyle=major?'#243b57':middle?'#40566e':'#607185';ctx.font=major?'700 10px system-ui':middle?'600 10px system-ui':'10px system-ui';ctx.textAlign='right';ctx.fillText(tickLabel(value),this.left-6,y+3);
-      ctx.strokeStyle='#95a2b1';ctx.beginPath();ctx.moveTo(this.left-3,y);ctx.lineTo(this.left,y);ctx.stroke();
+      ctx.strokeStyle=major?cssColor('--plot-major','#8493a6'):middle?cssColor('--plot-middle','#a9b8c9'):cssColor('--plot-minor','#e5eaf0');ctx.lineWidth=major?.9:middle?.8:.55;ctx.beginPath();ctx.moveTo(this.left,y);ctx.lineTo(w-this.right,y);ctx.stroke();
+      ctx.fillStyle=major?cssColor('--plot-label-major','#243b57'):middle?cssColor('--plot-label-middle','#40566e'):cssColor('--plot-label','#607185');ctx.font=major?'700 10px system-ui':middle?'600 10px system-ui':'10px system-ui';ctx.textAlign='right';ctx.fillText(tickLabel(value),this.left-6,y+3);
+      ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(this.left-3,y);ctx.lineTo(this.left,y);ctx.stroke();
     }
     ctx.font='10px system-ui';ctx.lineWidth=.65;
     const timeTicks=Math.max(1,Math.min(pw<160?1:pw<320?2:4,Math.floor((this.window[1]-this.window[0])/1000)||1));
     for(let i=0;i<=timeTicks;i++){
-      const x=this.left+pw*i/timeTicks;ctx.strokeStyle='#edf0f4';ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
-      ctx.strokeStyle='#95a2b1';ctx.beginPath();ctx.moveTo(x,bottom);ctx.lineTo(x,bottom+4);ctx.stroke();
-      ctx.fillStyle='#526172';ctx.textAlign=i===0?'left':i===timeTicks?'right':'center';ctx.fillText(timeLabel(this.window[0]+(this.window[1]-this.window[0])*i/timeTicks),x,bottom+16);
+      const x=this.left+pw*i/timeTicks;ctx.strokeStyle=cssColor('--plot-timegrid','#edf0f4');ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
+      ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(x,bottom);ctx.lineTo(x,bottom+4);ctx.stroke();
+      ctx.fillStyle=cssColor('--plot-label','#526172');ctx.textAlign=i===0?'left':i===timeTicks?'right':'center';ctx.fillText(timeLabel(this.window[0]+(this.window[1]-this.window[0])*i/timeTicks),x,bottom+16);
     }
-    ctx.strokeStyle='#9aa7b6';ctx.lineWidth=.85;
+    ctx.strokeStyle=cssColor('--plot-border','#9aa7b6');ctx.lineWidth=.85;
     ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(this.left,bottom);ctx.moveTo(w-this.right,bottom);ctx.lineTo(w-this.right,top);ctx.stroke();
     if(lo!==-110){ctx.beginPath();ctx.moveTo(this.left,bottom);ctx.lineTo(w-this.right,bottom);ctx.stroke();}
     // The 110% grid line retains the same weight as other minor grid lines.
@@ -264,8 +269,8 @@ export class Chart{
       };
       for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(p[6]&3)flush();segment.push(map(p));}flush();ctx.restore();
     });
-    if(this.marker!==null){const x=this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*pw;ctx.strokeStyle='#405267';ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();ctx.setLineDash([]);}
-    if(!visible.length||!selected.length){ctx.fillStyle='#64748b';ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
+    if(this.marker!==null){const x=this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*pw;ctx.strokeStyle=cssColor('--plot-marker','#405267');ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();ctx.setLineDash([]);}
+    if(!visible.length||!selected.length){ctx.fillStyle=cssColor('--plot-label','#64748b');ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
     this.positionTooltip();
   }
 }

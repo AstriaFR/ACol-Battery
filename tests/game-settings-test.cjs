@@ -5,7 +5,7 @@ const {pathToFileURL}=require('node:url');
  const {DEFAULT_SETTINGS,encodeSettings,settingsKeys}=await import(pathToFileURL(path.join(root,'config.js')).href);
  const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
  assert.equal(encodeSettings(DEFAULT_SETTINGS).length,14);
- assert.equal(DEFAULT_SETTINGS.fastSeconds,10);assert.equal(DEFAULT_SETTINGS.performanceSeconds,3);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,20);assert.equal(DEFAULT_SETTINGS.chargeSeconds,3);
+ assert.equal(DEFAULT_SETTINGS.fastSeconds,10);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,20);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
  for(const key of ['fastSeconds','performanceSeconds']){
   for(const value of [1,7,60])assert.equal(encodeSettings({...DEFAULT_SETTINGS,[key]:value})[key==='fastSeconds'?10:13],value);
   for(const value of [0,61,1.5,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,[key]:value}));

@@ -26,6 +26,7 @@ final class PerformanceCollector implements AutoCloseable {
     private volatile boolean closed;
     private List<Cluster> clusters;
     private Gpu gpu;
+    private List<ThermalSensor> thermalSensors;
     private long previousSession=-1,previousAt;
     private Map<Integer,long[]> previousCpu=Collections.emptyMap();
     private boolean previousScreen;
@@ -48,6 +49,7 @@ final class PerformanceCollector implements AutoCloseable {
                 long elapsed=SystemClock.elapsedRealtime();
                 JSONObject frequency=frequencies();
                 Map<Integer,long[]> cpu=cpuTimes();Set<Integer> online=cpuList(read("/sys/devices/system/cpu/online"));
+                double maxTemperature=maximumCpuGpuTemperature();
                 boolean same=previousSession==session;
                 JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(JSONObject.NULL)
                     .put(frequency.opt("gpuMHz")).put(number(gpu.utilization())).put(JSONObject.NULL).put(JSONObject.NULL)
@@ -58,6 +60,7 @@ final class PerformanceCollector implements AutoCloseable {
                     row.put(cpuFrequencies.getJSONObject(i).opt("mhz"));
                     row.put(number(same?cpuUsage(c.cpus,online,previousCpu,cpu):Double.NaN));
                 }
+                row.put(number(maxTemperature));
                 // CPU/GPU are captured before Binder calls, so slow rendering services cannot delay them.
                 double fps=screen?fps():Double.NaN;
                 if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
@@ -86,10 +89,12 @@ final class PerformanceCollector implements AutoCloseable {
         if(meta!=null)return meta;
         JSONArray list=new JSONArray();for(Cluster c:clusters)list.put(new JSONObject().put("label",c.label)
             .put("cpus",new JSONArray(c.cpus)).put("maxMHz",number(c.maxMHz)).put("frequencySource",c.source));
+        JSONArray thermal=new JSONArray();for(ThermalSensor sensor:thermalSensors)thermal.put(new JSONObject().put("label",sensor.label).put("path",sensor.path));
         meta=new JSONObject().put("clusters",list).put("gpuMaxMHz",number(gpu.maxMHz))
             .put("gpuFrequencySource",gpu.freq).put("gpuUsageSource",gpu.load.isEmpty()?gpu.busy:gpu.load)
             .put("fpsSource","SurfaceFlinger / actualPresentTime").put("cpuUsageSource","/proc/stat")
-            .put("method","频率为采样时读数；CPU 使用率为相邻采样的忙闲计数差，GPU 使用率为驱动当前负载；帧率按前台画面最近的实际呈现帧计算。缺失数据留空。");
+            .put("temperatureIndex",8+clusters.size()*2).put("temperatureSources",thermal)
+            .put("method","频率为采样时读数；CPU 使用率为相邻采样的忙闲计数差，GPU 使用率为驱动当前负载；CPU/GPU 温度取识别到的温度节点最大值；帧率按前台画面最近的实际呈现帧计算。缺失数据留空。");
         return meta;
     }
     static Object number(double n){return Double.isFinite(n)?Math.round(n*100.0)/100.0:JSONObject.NULL;}
@@ -109,6 +114,48 @@ final class PerformanceCollector implements AutoCloseable {
                 if(a<0||b>1023||b<a)continue;for(int n=a;n<=b;n++)out.add(n);
             }catch(NumberFormatException ignored){}
         }return out;
+    }
+    private static final class ThermalSensor {
+        final String label,path;
+        ThermalSensor(String label,String path){this.label=label;this.path=path;}
+    }
+    private double maximumCpuGpuTemperature(){
+        if(thermalSensors==null)thermalSensors=discoverThermalSensors();
+        double maximum=Double.NaN;
+        for(ThermalSensor sensor:thermalSensors){
+            double value=first(read(sensor.path));
+            if(!Double.isFinite(value))continue;
+            if(Math.abs(value)>=1000)value/=1000.0;
+            if(value< -50||value>200)continue;
+            if(!Double.isFinite(maximum)||value>maximum)maximum=value;
+        }
+        return maximum;
+    }
+    private static boolean cpuOrGpu(String value){
+        String name=value==null?"":value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]","");
+        return name.contains("cpu")||name.contains("gpu");
+    }
+    private static List<ThermalSensor> discoverThermalSensors(){
+        LinkedHashMap<String,ThermalSensor> found=new LinkedHashMap<>();
+        File[] zones=new File("/sys/class/thermal").listFiles();
+        if(zones!=null)for(File zone:zones){
+            if(!zone.getName().matches("thermal_zone[0-9]+"))continue;
+            String type=read(zone+"/type");if(!cpuOrGpu(type))continue;
+            String path=existing(zone+"/temp");if(!path.isEmpty())found.put(path,new ThermalSensor(type,path));
+        }
+        File[] hwmons=new File("/sys/class/hwmon").listFiles();
+        if(hwmons!=null)for(File hwmon:hwmons){
+            String device=read(hwmon+"/name");File[] inputs=hwmon.listFiles();if(inputs==null)continue;
+            for(File input:inputs){
+                String name=input.getName();if(!name.matches("temp[0-9]+_input"))continue;
+                String stem=name.substring(0,name.length()-6),label=read(hwmon+"/"+stem+"_label");
+                if(!cpuOrGpu(label)&&!cpuOrGpu(device))continue;
+                String path=existing(input.toString());if(!path.isEmpty())found.putIfAbsent(path,new ThermalSensor(label.isEmpty()?device+" "+stem:label,path));
+            }
+        }
+        String kgsl=existing("/sys/class/kgsl/kgsl-3d0/temp","/sys/class/kgsl/kgsl-3d0/gpu_temp");
+        if(!kgsl.isEmpty())found.putIfAbsent(kgsl,new ThermalSensor("KGSL GPU",kgsl));
+        return new ArrayList<>(found.values());
     }
     private static final class Cluster {
         final List<Integer> cpus;final String label,source,fallback;final double maxMHz;

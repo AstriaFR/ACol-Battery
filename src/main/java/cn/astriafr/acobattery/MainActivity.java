@@ -18,6 +18,7 @@ import android.os.Build;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.KeyEvent;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -97,7 +98,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3.1 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3.2 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);
@@ -203,7 +204,12 @@ public final class MainActivity extends Activity {
                 }catch(Exception e){return new WebResourceResponse("text/plain","UTF-8",404,"Not found",null,new ByteArrayInputStream(new byte[0]));}
             }
         });
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient(){
+            @Override public boolean onConsoleMessage(ConsoleMessage message){
+                if(message.messageLevel()==ConsoleMessage.MessageLevel.ERROR)android.util.Log.e("AColWebView",message.message()+" ("+message.sourceId()+":"+message.lineNumber()+")");
+                return true;
+            }
+        });
         web.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
         mount(web);web.loadUrl("https://aco.local/webroot/index.html");
     }
@@ -216,6 +222,16 @@ public final class MainActivity extends Activity {
             view.setPadding(bars.left,bars.top,bars.right,bars.bottom);return new WindowInsets.Builder(insets).setInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout(),android.graphics.Insets.NONE).build();
         });
         setContentView(contentFrame);contentFrame.requestApplyInsets();contentFrame.post(this::registerBack);
+    }
+    void applyThemeBars(boolean dark){
+        runOnUiThread(()->{
+            int surface=dark?Color.BLACK:Color.rgb(246,248,251);
+            getWindow().setStatusBarColor(surface);getWindow().setNavigationBarColor(surface);
+            WindowInsetsController controller=getWindow().getInsetsController();
+            if(controller!=null){int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(dark?0:appearance,appearance);}
+            if(contentFrame!=null)contentFrame.setBackgroundColor(surface);
+            if(web!=null)web.setBackgroundColor(surface);
+        });
     }
     static boolean trusted(Uri uri){String path=uri.getPath();return "https".equals(uri.getScheme())&&"aco.local".equals(uri.getHost())&&path!=null&&path.startsWith("/webroot/")&&!path.contains("..")&&!path.contains("\\");}
     void deliver(JSONObject message){
@@ -233,6 +249,7 @@ public final class MainActivity extends Activity {
             catch(Exception e){try{JSONObject request=new JSONObject(text);deliver(new JSONObject().put("id",request.optString("id")).put("event","error").put("message","root 连接已断开，请重新打开 App。"));}catch(Exception ignored){}}
         }
         @JavascriptInterface public void fullScreen(boolean enabled){runOnUiThread(()->{immersive=enabled;if(contentFrame!=null)contentFrame.requestApplyInsets();setRequestedOrientation(enabled?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);if(enabled)getWindow().getInsetsController().hide(WindowInsets.Type.systemBars());else getWindow().getInsetsController().show(WindowInsets.Type.systemBars());});}
+        @JavascriptInterface public void setDarkTheme(boolean enabled){applyThemeBars(enabled);}
         @JavascriptInterface public void repair(){runOnUiThread(()->{if(web!=null){web.destroy();web=null;}showInitialization();initialize();});}
     }
     void back(){

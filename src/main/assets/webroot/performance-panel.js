@@ -1,7 +1,7 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.1';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.2';
 import{fullScreen}from'./root-bridge.js';
-import{curveColor}from'./curve-colors.js?v=acol-1.3.1';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.1';
+import{curveColor}from'./curve-colors.js?v=acol-1.3.2';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.2';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
@@ -9,7 +9,7 @@ class PerformanceChart extends Chart{
   axisMaximum(){return 110;}
   preparePoints(points){return points;}
   scaleFor(s){
-    const full=s.unit==='%'?100:s.cpuFrequency?(this.cpuMax||Math.max(1,this.cpuObservedMax)):
+    const full=s.key==='temperature'?100:s.unit==='%'?100:s.cpuFrequency?(this.cpuMax||Math.max(1,this.cpuObservedMax)):
       s.key==='fps'?fpsLimit(this.maximum.get(s.key)??0):this.frequencyRanges.get(s.key)??s.limit??1;
     return{base:0,full,min:0,label:`${sampleText(full,1)} ${s.unit}`};
   }
@@ -73,7 +73,7 @@ export class PerformancePanel{
       }while(data.more);
       if(changed||!this.points.length)this.render();
       $('performanceHint').textContent=this.points.length?
-        `每 ${Math.round(this.interval/1000)} 秒采样 · CPU 使用率取相邻区间，GPU 取驱动当前值 · 长按图例显示实际刻度。`:
+        `每 ${Math.round(this.interval/1000)} 秒采样 · CPU 使用率取相邻区间，GPU 取驱动当前值，温度取 CPU/GPU 最高值 · 长按图例显示实际刻度。`:
         this.active?'等待下一次游戏模式采样；不可用指标留空。':'此记录没有性能采样数据。';
     }catch(e){if(token===this.token)$('performanceHint').textContent=e.message;}
     finally{
@@ -93,12 +93,14 @@ export class PerformancePanel{
       metrics.push({key:`cpu${i}Freq`,index:8+i*2,name:`${c.label} 频率`,axis:`${c.label} 频率`,unit:'MHz',color:curveColor(3+i*2),digits:1,cpuFrequency:true,limit:this.chart.cpuMax||1});
       metrics.push({key:`cpu${i}Usage`,index:9+i*2,name:`${c.label} 使用率`,axis:`${c.label} 使用率`,unit:'%',color:curveColor(4+i*2),digits:1,limit:100});
     });
+    if(Number.isInteger(meta.temperatureIndex))metrics.push({key:'temperature',index:meta.temperatureIndex,name:'最高温度',axis:'最高温度',unit:'℃',color:curveColor(3+(meta.clusters??[]).length*2),digits:1,limit:100});
     this.chart.metrics=metrics;this.chart.maximum.clear();this.chart.frequencyRanges.clear();this.chart.cpuObservedMax=0;this.chart.ingest(this.points);
     let saved;try{saved=JSON.parse(localStorage.getItem(selectionKey));}catch{}
     this.chart.enabled=new Set(Array.isArray(saved)?saved:metrics.filter(s=>s.key.endsWith('Freq')).map(s=>s.key));
     this.legend();
     const sources=[meta.method,'CPU 频率：'+(meta.clusters??[]).map(c=>c.frequencySource||'不可用').join('；'),
       'GPU 频率：'+(meta.gpuFrequencySource||'不可用'),'GPU 负载：'+(meta.gpuUsageSource||'不可用'),
+      'CPU/GPU 温度：'+((meta.temperatureSources??[]).map(s=>`${s.label}（${s.path}）`).join('；')||'未发现可读取的温度节点'),
       '帧率：SurfaceFlinger 前台图层实际呈现时间；静止画面可为 0，不代表屏幕刷新率。'];
     $('performanceMethod').textContent=sources.join('\n');
   }
