@@ -1,5 +1,5 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3.2';
-import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3.2';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3.3';
+import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3.3';
 export class SettingsPanel{
   constructor(api,onSaved,onHomePriority){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');

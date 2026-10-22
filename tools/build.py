@@ -2,7 +2,6 @@
 from pathlib import Path
 import hashlib
 import os
-import secrets
 import shutil
 import subprocess
 import zipfile
@@ -20,7 +19,7 @@ android=sdk/'platforms/android-37.0/android.jar'
 tools=sdk/'build-tools/37.0.0'
 ndk=sdk/'ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64'
 build=app/'build'
-for name in ['tmp','daemon-classes','daemon-dex','classes','dex','generated','res/drawable','payload/bin','signing']:(build/name).mkdir(parents=True,exist_ok=True)
+for name in ['tmp','daemon-classes','daemon-dex','classes','dex','generated','res/drawable','payload/bin']:(build/name).mkdir(parents=True,exist_ok=True)
 (app/'dist').mkdir(exist_ok=True)
 env=os.environ.copy();env.update(TEMP=str(build/'tmp'),TMP=str(build/'tmp'),TMPDIR=str(build/'tmp'))
 def run(*args):subprocess.run([str(arg) for arg in args],check=True,env=env)
@@ -57,12 +56,15 @@ with zipfile.ZipFile(build/'unsigned.apk','a',zipfile.ZIP_DEFLATED) as archive:
     for path in sorted((app/'src/main/assets').rglob('*')):
         if path.is_file():archive.write(path,'assets/'+path.relative_to(app/'src/main/assets').as_posix())
 run(tools/'zipalign.exe','-f','-p','4',build/'unsigned.apk',build/'aligned.apk')
-key=build/'signing/aco.p12';password=build/'signing/password.txt'
-if not password.exists():password.write_text(secrets.token_urlsafe(32),encoding='ascii')
+key=Path(os.environ.get('ACO_KEYSTORE',app/'signing/aco.p12')).expanduser()
+password=Path(os.environ.get('ACO_KEYSTORE_PASSWORD_FILE',app/'signing/password.txt')).expanduser()
+key_alias=os.environ.get('ACO_KEY_ALIAS','aco')
+if not key.is_file():raise SystemExit(f'Signing keystore not found: {key}')
+if not password.is_file():raise SystemExit(f'Signing password file not found: {password}')
 env['ACO_SIGNING_PASSWORD']=password.read_text(encoding='ascii').strip()
-if not key.exists():run(jdk/'keytool.exe','-genkeypair','-keystore',key,'-storetype','PKCS12','-storepass:env','ACO_SIGNING_PASSWORD','-keypass:env','ACO_SIGNING_PASSWORD','-alias','aco','-keyalg','RSA','-keysize','2048','-validity','10000','-dname','CN=ACol Battery, O=AstriaFR, C=CN')
+if not env['ACO_SIGNING_PASSWORD']:raise SystemExit(f'Signing password file is empty: {password}')
 output=app/f'dist/ACol-Battery-v{version}.apk'
-run(jdk/'java.exe','-jar',tools/'lib/apksigner.jar','sign','--v4-signing-enabled','false','--ks',key,'--ks-key-alias','aco','--ks-pass','env:ACO_SIGNING_PASSWORD','--out',output,build/'aligned.apk')
+run(jdk/'java.exe','-jar',tools/'lib/apksigner.jar','sign','--v4-signing-enabled','false','--ks',key,'--ks-key-alias',key_alias,'--ks-pass','env:ACO_SIGNING_PASSWORD','--out',output,build/'aligned.apk')
 output.with_suffix('.apk.sha256').write_text(hashlib.sha256(output.read_bytes()).hexdigest()+'  '+output.name+'\n',encoding='ascii')
 complete_test_version(version_state_path,version_state)
 print(f'APK: {output}\nSize: {output.stat().st_size} bytes')

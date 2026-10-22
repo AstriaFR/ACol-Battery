@@ -1,7 +1,7 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.2';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.3';
 import{fullScreen}from'./root-bridge.js';
-import{curveColor}from'./curve-colors.js?v=acol-1.3.2';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.2';
+import{curveColor}from'./curve-colors.js?v=acol-1.3.3';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.3';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}

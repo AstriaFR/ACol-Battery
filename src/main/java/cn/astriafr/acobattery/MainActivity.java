@@ -98,7 +98,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3.2 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("1.3.3 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);

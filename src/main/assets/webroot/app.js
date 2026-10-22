@@ -1,13 +1,14 @@
 import{exec,fullScreen,cancelTopDialog}from'./root-bridge.js';
-import{LiveChannel}from'./live-channel.js?v=acol-1.3.2';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.2';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.2';
-import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.2';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.2';
-import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.2-gamepad-temp';
-import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.2';
-import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.2';
-import{ThemeController}from'./theme.js?v=acol-1.3.2';
+import{LiveChannel}from'./live-channel.js?v=acol-1.3.3';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.3';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.3';
+import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.3';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.3';
+import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.3-gamepad-temp';
+import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.3';
+import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.3';
+import{capacityChange,recordChanges}from'./record-display.js?v=acol-1.3.3';
+import{ThemeController}from'./theme.js?v=acol-1.3.3';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
@@ -67,16 +68,6 @@ function syncTheme(){
 const recordCells=r=>[0,1,2].includes(r?.cell_count)?r.cell_count:2;
 const recordFast=r=>Number(r?.fast_seconds)>0;
 const fmt=(v,d=0)=>valid(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:d}):'—';
-function capacityChange(r){
-  if(!valid(r.rm_start)||!valid(r.rm_end))return'—';
-  const change=r.rm_end-r.rm_start;
-  return`${change>0?'+':change<0?'−':r.kind==='charge'?'+':'−'}${fmt(Math.abs(change))}`;
-}
-function percentChange(r){
-  const change=valid(r.pct_start)&&valid(r.pct_end)?r.pct_end-r.pct_start:null;
-  return change===null?'—':`${change>0?'+':change<0?'−':r.kind==='charge'?'+':'−'}${fmt(Math.abs(change))}%`;
-}
-function percentFlow(r){return valid(r.pct_start)&&valid(r.pct_end)&&r.pct_start!==r.pct_end?(r.pct_end>r.pct_start?'charge':'discharge'):r.kind;}
 function appendGameMarker(node,r){
   if(recordFast(r)){
     const marker=el('span',undefined,'fast-record-marker');marker.setAttribute('aria-label','游戏模式记录');
@@ -91,18 +82,15 @@ function appendGameMarker(node,r){
   }
 }
 function updateRecordTitle(title,r){
-  const preferPercent=homePriority==='percentage';
-  const delta=el('span',preferPercent?capacityChange(r):percentChange(r),'record-pct-change');
-  delta.dataset.flow=preferPercent?r.kind:percentFlow(r);
-  if(!preferPercent)appendGameMarker(delta,r);
+  const change=recordChanges(homePriority,r).secondary,delta=el('span',change.text,'record-pct-change');
+  delta.dataset.flow=change.flow;
+  appendGameMarker(delta,r);
   title.replaceChildren(el('span',`${r.kind==='charge'?'充电':'放电'} · ${fmt(r.pct_start)}% → ${fmt(r.pct_end)}%`),delta);
 }
 function updateRecordDelta(delta,r){
-  const preferPercent=homePriority==='percentage',value=delta.querySelector('.delta-value');
-  value.textContent=preferPercent?percentChange(r):capacityChange(r);
-  value.dataset.flow=preferPercent?percentFlow(r):r.kind;
-  if(preferPercent)appendGameMarker(value,r);
-  delta.querySelector('small').textContent=preferPercent?'百分比变化':'容量变化';
+  const change=recordChanges(homePriority,r).primary,value=delta.querySelector('.delta-value');
+  value.textContent=change.text;value.dataset.flow=change.flow;
+  delta.querySelector('small').textContent=change.label;
 }
 const stamp=t=>new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
 const reasons={recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'系统服务重启',module_stopped:'模块停止',recording_stopped:'记录已停止',app_uninstalled:'卸载前结束',service_updated:'后台更新',fast_started:'切换游戏模式',fast_stopped:'游戏记录结束',fast_idle_timeout:'息屏自动结束'};

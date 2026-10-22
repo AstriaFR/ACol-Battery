@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <script>try{const p=JSON.parse(localStorage.getItem('acol.theme.preference'));document.documentElement.dataset.theme=(p?.step==='auto'||!p?.step)?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):(p.dark?'dark':'light')}catch{document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}</script>
   <title>截止电压调整</title>
-  <link rel="stylesheet" href="style.css?v=acol-1.3.2">
+  <link rel="stylesheet" href="style.css?v=acol-1.3.3">
 </head>
 <body>
   <main>
@@ -46,6 +46,6 @@
     <p id="cutoffKeypadError" class="keypad-error" role="status" hidden></p>
     <div class="keypad-grid"><button type="button" data-key="sign" aria-label="切换正负号">−</button><button type="button" data-key="clear">清空</button><button type="button" data-key="backspace" aria-label="退格">⌫</button><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="00">00</button><button type="button" data-key="0">0</button><button type="button" data-key="dot">.</button></div>
   </dialog>
-  <script type="module" src="app.js?v=acol-1.3.2"></script>
+  <script type="module" src="app.js?v=acol-1.3.3"></script>
 </body>
 </html>

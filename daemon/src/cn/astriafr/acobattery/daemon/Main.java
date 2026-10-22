@@ -127,7 +127,7 @@ public final class Main {
         app.framework=new FrameworkWatch(Main::interruptWait);app.framework.start();
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 1.3.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 1.3.3 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect();System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -719,7 +719,7 @@ public final class Main {
         db.beginTransaction();
         try {
             db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),state==1?nullable(r.temp):null});
+                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),state==1||fast?nullable(r.temp):null});
             if(fast)sampleFastStats(r,resumed,resumed);
             else if(state==0&&previous!=null)attribute(previous,r,loss,(quality&3)!=0,energy);
             db.execSQL("UPDATE sessions SET end_elapsed=?,pct_end=?,rm_end=?,missed=missed+?,anomalies=anomalies+? WHERE id=?",
@@ -764,7 +764,7 @@ public final class Main {
         long x=r.elapsed-startElapsed;if(rangeId!=session||x<=rangeEnd||rangeValues==null)return;
         JSONObject next=new JSONObject(rangeValues.toString());
         String[] keys={"rm","pct","current","voltage","power","temp"};
-        double[] values={r.rm,r.pct,state==1?r.chargingCurrent():Double.NaN,r.voltage(),recordedPower,state==1?r.temp:Double.NaN};
+        double[] values={r.rm,r.pct,state==1?r.chargingCurrent():Double.NaN,r.voltage(),recordedPower,state==1||fastEnabled&&state==0?r.temp:Double.NaN};
         if(state==0&&!fastEnabled) {
             if(!boundary&&previous!=null&&r.elapsed-previous.elapsed<10000)Arrays.fill(values,Double.NaN);
             else if(recordedPower>15||recordedPower<0)values[4]=Double.NaN;
@@ -998,7 +998,7 @@ public final class Main {
         return true;
     }
     JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("version","1.3.2").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("version","1.3.3").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
         o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",session).put("capabilities",capabilities).put("cellCount",cellCount);

@@ -318,12 +318,15 @@ body:has(main:not([hidden])){overflow:hidden}
 .remaining-explanation h3{font-size:16px;margin:0 0 12px}
 .remaining-explanation p{font-size:13px;line-height:1.75;margin:10px 0}
 .remaining-explanation-actions{display:flex;justify-content:flex-end;margin-top:18px}
-.battery-explanation{--accent:var(--charge);max-height:80dvh;overflow:hidden;padding:22px}
+.battery-explanation{--accent:var(--charge);width:min(calc(100vw - 28px),440px);max-height:calc(100dvh - 28px);overflow:hidden;padding:20px;touch-action:manipulation}
+.battery-explanation:focus,.battery-explanation:focus-visible,.battery-explanation-pages:focus,.battery-explanation-pages:focus-visible{outline:none}
 .battery-explanation h3{font-size:16px;margin:0 0 12px}
-.battery-explanation p{font-size:13px;line-height:1.75;margin:10px 0}
+.battery-explanation p{font-size:13px;line-height:1.75;margin:0}
 .battery-explanation-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:18px}
 .battery-explanation-actions button{background:var(--accent);border-color:var(--accent);color:#fff}
-.battery-explanation-pages{max-height:min(54dvh,430px);overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+.battery-explanation-pages{display:grid;overflow:hidden;overscroll-behavior:contain;touch-action:manipulation}
+.battery-explanation-pages>[data-explanation-page]{grid-area:1/1;min-width:0;align-self:stretch}
+.battery-explanation-pages>[data-explanation-page][hidden]{display:block!important;visibility:hidden;pointer-events:none;animation:none}
 .battery-explanation-pages[data-page="1"]{--explanation-enter-x:8px}
 .battery-explanation-pages [data-explanation-page]:not([hidden]){animation:battery-explanation-enter .16s ease-out}
 .battery-explanation-nav{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}

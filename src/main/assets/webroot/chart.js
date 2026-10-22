@@ -1,5 +1,5 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.2';
-import{batteryColor}from'./curve-colors.js?v=acol-1.3.2';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.3';
+import{batteryColor}from'./curve-colors.js?v=acol-1.3.3';
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
@@ -15,7 +15,7 @@ export const series=[
   {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',digits:1}
 ];
 export const valid=v=>typeof v==='number'&&Number.isFinite(v);
-export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'||!['current','temp'].includes(s.key)).map(s=>{
+export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'||s.key!=='current'&&(s.key!=='temp'||fast)).map(s=>{
   let item={...s,color:batteryColor(s.key)};
   if(kind==='discharge'&&s.key==='power')item={...item,name:fast?'实时功耗':'平均功耗',axis:'功耗',digits:2};
   if(s.key==='voltage'&&cellCount!==2)item={...item,name:'电池电压'};
