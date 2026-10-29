@@ -28,6 +28,12 @@ public final class TimelineTest {
         timeline.apply(event(60000,15,null));
         Map<String,Long> mixed=timeline.split(60000,120000,Arrays.asList(event(60000,15,null),event(90000,1,"next")));
         duration(mixed,"game",30000);duration(mixed,"next",30000);
+        // Normal discharge uses the same authoritative callback when the
+        // UsageStats event is timestamped before the next query's lower bound.
+        timeline=new Core.Timeline();timeline.seed(true,false);timeline.apply(event(0,1,"normal"));
+        timeline.split(0,20000,Collections.emptyList());timeline.apply(event(20000,16,null));
+        duration(timeline.split(20000,80000,Collections.emptyList()),Core.OFF,60000);
+        timeline.seed(false,false);duration(timeline.split(0,60000,Collections.emptyList()),Core.OFF,60000);
         System.out.println("Timeline boundary and partial settlement checks passed");
     }
 }

@@ -1,5 +1,5 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-1.3.3';
-import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-1.3.3';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.0';
+import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-2.0';
 export class SettingsPanel{
   constructor(api,onSaved,onHomePriority){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
@@ -27,6 +27,8 @@ export class SettingsPanel{
     this.changeConfirm.addEventListener('click',e=>{const r=this.changeConfirm.getBoundingClientRect();if(e.target===this.changeConfirm&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))this.dismissChange(false);});
     this.recording=document.getElementById('recordingEnabled');this.recordingBusy=false;
     this.recording.onchange=()=>this.toggleRecording(this.recording.checked);
+    this.powerDisplay=document.getElementById('powerDisplayEnabled');this.powerDisplayBusy=false;
+    this.powerDisplay.onchange=()=>this.togglePowerDisplay(this.powerDisplay.checked);
     this.recordingConfirm=document.getElementById('recordingConfirm');this.recordingResolve=null;
     document.getElementById('cancelRecording').onclick=()=>this.dismissRecording(false);
     document.getElementById('confirmRecording').onclick=()=>this.dismissRecording(true);
@@ -63,10 +65,11 @@ export class SettingsPanel{
     });
   }
   setStatus(text,error=false){this.status.textContent=error?text:'';this.status.hidden=!error;this.status.classList.toggle('error',error);}
-  updateRecording(enabled){
+  updateRecording(enabled,problem){
     if(this.recordingBusy||typeof enabled!=='boolean')return;
+    if(typeof problem==='string')this.recordingProblem=problem;
     this.recordingValue=enabled;this.recording.checked=enabled;this.recording.disabled=false;
-    document.getElementById('recordingHint').textContent=enabled?'后台持续记录，退出 App 不停止。':'已停止记录，重新开启后建立新记录。';
+    document.getElementById('recordingHint').textContent=enabled?'后台持续记录，退出 App 不停止。':this.recordingProblem?`${this.recordingProblem}，记录已关闭。开启时重新检查。`:'已停止记录，重新开启后建立新记录。';
     this.updateFast();
   }
   updateFast(enabled){
@@ -74,6 +77,21 @@ export class SettingsPanel{
     this.fastButton.textContent=this.fastValue?'关闭':'开启';
     this.fastButton.disabled=!this.ready||this.fastBusy||this.recordingValue===false;
     this.panel.querySelector('.fast-control').classList.toggle('mode-active',this.fastValue);
+  }
+  updatePowerDisplay(enabled,error=''){
+    if(this.powerDisplayBusy||typeof enabled!=='boolean')return;
+    this.powerDisplayValue=enabled;this.powerDisplay.checked=enabled;this.powerDisplay.disabled=false;
+    if(error)this.setStatus(error,true);
+  }
+  async togglePowerDisplay(enabled){
+    if(this.powerDisplayBusy)return;
+    const previous=this.powerDisplayValue??false;this.powerDisplayBusy=true;this.powerDisplay.disabled=true;this.powerDisplay.checked=previous;this.setStatus('');
+    let result;
+    try{
+      if(!await this.flush())throw Error('设置未能保存，请重试。');
+      result=await this.api('set_power_display',enabled?1:0);this.onSaved(result.settings);
+    }catch(error){this.setStatus(error.message,true);}
+    finally{this.powerDisplayBusy=false;this.updatePowerDisplay(result?.powerDisplayEnabled??previous,result?.powerDisplayError??'');}
   }
   askChange(title,hint,stop=false){
     document.getElementById('settingsChangeTitle').textContent=title;document.getElementById('settingsChangeHint').textContent=hint;
@@ -105,6 +123,7 @@ export class SettingsPanel{
     try{
       if(!await this.askRecording(enabled))return;
       const data=await this.api('set_recording',enabled?1:0);
+      this.recordingProblem=data.recordingProblem??'';
       success=true;this.onSaved(data.settings);
     }catch(e){this.setStatus(e.message,true);}
     finally{this.recordingBusy=false;this.updateRecording(success?enabled:previous);}
@@ -112,7 +131,7 @@ export class SettingsPanel{
   askRecording(enabled){
     this.recordingConfirm.dataset.action=enabled?'start':'stop';
     document.getElementById('recordingConfirmTitle').textContent=enabled?'开启记录？':'停止记录？';
-    document.getElementById('recordingConfirmHint').textContent=enabled?'立即建立新记录，退出 App 后后台仍会继续记录。':'补读并结束当前记录，然后暂停记录。短记录仍按自动删除设置处理。';
+    document.getElementById('recordingConfirmHint').textContent=enabled?'重新读取剩余容量和系统电量，可用后开始记录。退出 App 后后台仍会继续记录。':'补读并结束当前记录，然后暂停记录。短记录仍按自动删除设置处理。';
     document.getElementById('confirmRecording').textContent=enabled?'确认开启':'确认停止';
     history.pushState({page:'settings',recordingConfirm:true},'',`${location.pathname}${location.search}#settings-recording`);
     return new Promise(resolve=>{this.recordingResolve=resolve;this.recordingConfirm.showModal();document.getElementById('cancelRecording').focus({preventScroll:true});});
@@ -250,7 +269,7 @@ export class SettingsPanel{
     for(const field of this.form.elements)field.disabled=true;
     this.setStatus('');
     try{
-      const data=await this.api('settings'),value={...DEFAULT_SETTINGS,...data.settings};this.fill(value);this.updateRecording(data.recordingEnabled);this.updateFast(data.fastEnabled);
+      const data=await this.api('settings'),value={...DEFAULT_SETTINGS,...data.settings};this.fill(value);this.updateRecording(data.recordingEnabled,data.recordingProblem);this.updateFast(data.fastEnabled);this.updatePowerDisplay(data.powerDisplayEnabled,data.powerDisplayError);
       this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.setStatus('');
     }catch(e){this.setStatus(e.message,true);}
     finally{for(const field of this.form.elements)field.disabled=!this.ready;this.updateFast();}

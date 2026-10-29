@@ -38,7 +38,7 @@ lock() {
  attempts=0
  while ! mkdir "$STATE/lock" 2>/dev/null; do
   attempts=$((attempts + 1))
-  [ "$attempts" -le 15 ] || fail "另一项操作正在进行，请稍后刷新。"
+  [ "$attempts" -le 10 ] || fail "另一项操作正在进行，请稍后刷新。"
   if [ -f "$STATE/lock/pid" ]; then
    owner=$(cat "$STATE/lock/pid")
    case "$owner" in ''|*[!0-9]*) fail "锁状态异常，请稍后重试。";; esac

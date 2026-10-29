@@ -10,7 +10,7 @@ public final class Core {
         public double vmax = Double.NaN, vmin = Double.NaN, fv = Double.NaN, temp = Double.NaN;
         public double cell1 = Double.NaN, cell2 = Double.NaN;
         public int cellCount=2;
-        public String voltageSource="",currentSource="";
+        public String voltageSource="",currentSource="",rmSource="";
         public boolean online, full, enabled;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
@@ -21,6 +21,10 @@ public final class Core {
         public boolean valid() { return finite(rm) && finite(pct) && rm >= 0 && pct >= 0 && pct <= 100; }
     }
     public static boolean finite(double v) { return !Double.isNaN(v) && !Double.isInfinite(v); }
+    /** Android CHARGE_COUNTER already represents remaining capacity in microamp-hours. */
+    public static double remainingMah(long microampHours) {
+        return microampHours>=0&&microampHours<=Integer.MAX_VALUE?microampHours/1000.0:Double.NaN;
+    }
     /** elapsedRealtime survives a framework restart, but never a kernel reboot. */
     public static boolean resumeSession(String savedBoot,String boot,String kind,boolean wasFast,
             boolean online,boolean fast,long start,long end,long now) {
@@ -94,7 +98,7 @@ public final class Core {
     public static final class Sampling {
         public boolean interactive=true,screenSample;
         public long next,expected=120000;
-        public long screenOnMs=120000,screenOffMs=1200000,chargeMs=3000,fastMs;
+        public long screenOnMs=120000,screenOffMs=1800000,chargeMs=3000,fastMs;
         public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
         public boolean screen(boolean on,long now) {
@@ -176,38 +180,54 @@ public final class Core {
         String activityKey() { return pkg+"\u0000"+(instance!=0?"#"+instance:Objects.toString(activity,"")); }
     }
     public static final String OTHER = "__other__", OFF = "__screenoff__";
+    public interface ScreenSpan {
+        void accept(long start,long end,boolean on);
+        default void accept(long start,long end,boolean on,String pkg){accept(start,end,on);}
+    }
     public static final class Timeline {
         // Lifecycle events belong to an activity instance, not the whole package.
         // A previous page may stop after the next page has already resumed.
         private final LinkedHashMap<String,String> resumed = new LinkedHashMap<>();
-        private boolean screen = false, locked = true;
+        private boolean screen = false, locked = true, screenKnown = false;
+        static final class State {
+            boolean screen,locked,known;
+            final LinkedHashMap<String,String> resumed=new LinkedHashMap<>();
+        }
+        State snapshot(){State s=new State();s.screen=screen;s.locked=locked;s.known=screenKnown;s.resumed.putAll(resumed);return s;}
+        void restore(State s){screen=s.screen;locked=s.locked;screenKnown=s.known;resumed.clear();resumed.putAll(s.resumed);}
+        boolean screenKnown(){return screenKnown;}
+        boolean screenOn(){return screen;}
+        String currentOwner(){return owner();}
         public void apply(Event e) {
             switch(e.type) {
                 case 1:
                     if(e.pkg!=null) {resumed.remove(e.activityKey());resumed.put(e.activityKey(),e.pkg);}
                     break; // ACTIVITY_RESUMED
                 case 2: case 23: resumed.remove(e.activityKey()); break;
-                case 15: screen=true; break;
-                case 16: screen=false; break;
+                case 15: screen=true;screenKnown=true;break;
+                case 16: screen=false;screenKnown=true;break;
                 case 17: locked=true; break;
                 case 18: locked=false; break;
-                case 26: case 27: resumed.clear();screen=false;locked=true;break;
+                case 26: case 27: resumed.clear();screen=false;locked=true;screenKnown=true;break;
             }
         }
-        public void seed(boolean interactive, boolean keyguard) { resumed.clear();screen=interactive;locked=keyguard; }
+        public void seed(boolean interactive, boolean keyguard) { resumed.clear();screen=interactive;locked=keyguard;screenKnown=true; }
         private String owner() {
             if(!screen)return OFF;if(locked)return OTHER;
             String top=OTHER;for(String pkg:resumed.values())top=pkg;return top;
         }
         public Map<String,Long> split(long start, long end, List<Event> events) {
+            return split(start,end,events,null);
+        }
+        public Map<String,Long> split(long start,long end,List<Event> events,ScreenSpan spans) {
             Map<String,Long> result = new LinkedHashMap<>();
             long cursor=start;
             for(Event e:events) {
                 if(e.time <= start) {apply(e);continue;}
                 if(e.time > end) break;
-                add(result,owner(),e.time-cursor); apply(e); cursor=e.time;
+                add(result,owner(),e.time-cursor);if(spans!=null&&e.time>cursor)spans.accept(cursor,e.time,screen,owner());apply(e);cursor=e.time;
             }
-            add(result,owner(),end-cursor); return result;
+            add(result,owner(),end-cursor);if(spans!=null&&end>cursor)spans.accept(cursor,end,screen,owner());return result;
         }
         private static void add(Map<String,Long> m,String key,long dt) {
             if(dt>0) m.put(key,m.getOrDefault(key,0L)+dt);

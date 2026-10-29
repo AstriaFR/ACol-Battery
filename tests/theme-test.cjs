@@ -1,0 +1,61 @@
+const path=require('node:path'),assert=require('node:assert/strict');
+const{pathToFileURL}=require('node:url');
+const root=path.join(__dirname,'../src/main/assets/webroot/');
+const storage=new Map(),listeners=new Map();let nativeDark=true;
+globalThis.localStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)};
+globalThis.matchMedia=()=>({matches:false,addEventListener(){}});
+globalThis.window={AcoNative:{isSystemDark:()=>nativeDark,setDarkTheme(){}},addEventListener:(key,cb)=>listeners.set(key,cb)};
+globalThis.document={documentElement:{dataset:{},style:{}},querySelector:()=>null};
+(async()=>{
+ const{ThemeController}=await import(pathToFileURL(path.join(root,'theme.js')).href);
+ const controller=new ThemeController();
+ assert.equal(controller.dark,true,'native system night mode overrides the light WebView media query');
+ nativeDark=false;listeners.get('aco-system-theme')();assert.equal(document.documentElement.dataset.theme,'light');
+ controller.cycle();assert.equal(controller.preference.step,'reverse');assert.equal(controller.dark,true);
+ nativeDark=true;listeners.get('aco-system-theme')();assert.equal(controller.dark,true,'manual choice remains fixed');
+ controller.cycle();assert.equal(controller.preference.step,'same');assert.equal(controller.dark,true);
+ controller.cycle();assert.equal(controller.preference.step,'auto');nativeDark=false;listeners.get('aco-system-theme')();assert.equal(controller.dark,false);
+ delete window.AcoNative.isSystemDark;controller.media.matches=true;controller.apply();assert.equal(controller.dark,true,'browser fallback');
+ // Preloaded cutoff content follows the live parent, including its native color scheme.
+ let nativeWrites=0;window.AcoNative.setDarkTheme=()=>nativeWrites++;
+ const parentListeners=new Map();
+ window.parent={document:{documentElement:{dataset:{theme:'light'}}},__acoThemeState:{step:'same',dark:false},addEventListener:(key,cb)=>parentListeners.set(key,cb)};
+ localStorage.setItem('acol.theme.preference',JSON.stringify({step:'reverse',dark:true}));
+ const child=ThemeController.applyStored({followParent:true});
+ assert.equal(document.documentElement.dataset.theme,'light');assert.equal(document.documentElement.style.colorScheme,'light');
+ window.parent.__acoThemeState={step:'auto',dark:true};parentListeners.get('aco-theme-change')();
+ assert.equal(document.documentElement.dataset.theme,'dark');assert.equal(document.documentElement.style.colorScheme,'dark');
+ window.parent.__acoThemeState={step:'reverse',dark:false};child.apply();
+ assert.equal(document.documentElement.dataset.theme,'light');assert.equal(nativeWrites,0,'hidden cutoff frame never overwrites native bars');
+ // Snapshot updates are deduplicated and rapid toggles cannot apply a stale frame.
+ localStorage.setItem('acol.theme.preference',JSON.stringify({step:'auto'}));nativeDark=false;window.AcoNative.isSystemDark=()=>nativeDark;
+ const snapshots=[],presentations=[],barColors=[];window.AcoNative.setDarkTheme=dark=>barColors.push(dark);
+ document.startViewTransition=commit=>{
+  snapshots.push(commit);let ready;
+  const promise=new Promise(resolve=>{ready=resolve;});presentations.push(ready);
+  return{skipTransition(){ready();},ready:promise,finished:Promise.resolve()};
+ };
+ const fast=new ThemeController();assert.equal(snapshots.length,0,'startup remains synchronous');
+ fast.cycle();assert.equal(snapshots.length,1);fast.apply();assert.equal(snapshots.length,1,'duplicate notifications do not queue redraws');
+ fast.cycle();assert.equal(document.documentElement.dataset.theme,'light');snapshots[0]();assert.equal(document.documentElement.dataset.theme,'light','obsolete queued snapshot cannot restore dark mode');
+ await Promise.resolve();assert.ok(barColors.every(dark=>!dark),'skipped stale presentation never changes system bars');
+ fast.cycle();nativeDark=true;fast.apply();assert.equal(snapshots.length,2);snapshots[1]();assert.equal(document.documentElement.dataset.theme,'dark');
+ assert.equal(barColors.at(-1),false,'DOM update alone must not change system bars');
+ presentations[1]();await Promise.resolve();assert.equal(barColors.at(-1),true,'system bars follow the prepared new presentation');
+ // Mode-only changes still synchronize bars if they supersede a pending dark frame.
+ nativeDark=false;fast.apply();snapshots[2]();
+ fast.cycle();assert.equal(snapshots.length,4);snapshots[3]();
+ const before=barColors.length;nativeDark=true;fast.cycle();await Promise.resolve();
+ assert.equal(barColors.length,before+1);assert.equal(barColors.at(-1),true);
+ presentations[2]();presentations[3]();await Promise.resolve();assert.equal(barColors.at(-1),true,'late ready callbacks never restore an old bar color');
+ delete document.startViewTransition;
+ const{PerformancePanel}=await import(pathToFileURL(path.join(root,'performance-panel.js')).href);
+ const panel=Object.create(PerformancePanel.prototype),enabled=new Set(['gpuFreq']);
+ const maximum=new Map([['fps',120]]),frequencyRanges=new Map([['gpuFreq',1000]]),view=[20,40];
+ panel.id=1;panel.chart={metrics:[{key:'fps'},{key:'gpuFreq'}],enabled,maximum,frequencyRanges,window:view,axisKey:'gpuFreq'};
+ let legends=0,renders=0;panel.legend=()=>legends++;panel.render=()=>renders++;
+ document.documentElement.dataset.theme='dark';panel.refreshTheme();
+ assert.equal(legends,1);assert.equal(renders,1);
+ assert.equal(panel.chart.enabled,enabled);assert.equal(panel.chart.maximum,maximum);assert.equal(panel.chart.frequencyRanges,frequencyRanges);assert.equal(panel.chart.window,view);assert.equal(panel.chart.axisKey,'gpuFreq');
+ console.log('Theme: system/manual changes, embedded cutoff sync, native bar ownership, duplicate/rapid updates and chart state preservation passed');
+})().catch(error=>{console.error(error);process.exitCode=1});

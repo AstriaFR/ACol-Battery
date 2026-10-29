@@ -38,6 +38,12 @@ public final class FrameworkWatchTest {
         stale.start(name->staleService.binder);staleService.alive=false;check(!stale.healthy());stale.close();
         RuntimeException cause=new RuntimeException("actual cause");
         check(FrameworkWatch.cause(new InvocationTargetException(cause))==cause);
+        FrameworkWatch noDisplay=new FrameworkWatch(wakes::incrementAndGet);
+        noDisplay.start(name->name.equals("display")||name.equals("power")?null:new Service().binder);
+        check(noDisplay.healthy());noDisplay.close();
+        FrameworkWatch deniedDisplay=new FrameworkWatch(wakes::incrementAndGet);
+        deniedDisplay.start(name->{if(name.equals("display")||name.equals("power"))throw new SecurityException("optional service denied");return new Service().binder;});
+        check(deniedDisplay.healthy());deniedDisplay.close();
         System.out.println("Framework death/recovery tests passed");
     }
 }

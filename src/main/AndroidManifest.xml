@@ -1,8 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="13029" android:versionName="1.3.3">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="14090" android:versionName="2.0">
   <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="37"/>
+  <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
   <application android:name=".BatteryApplication" android:label="ACol电池" android:icon="@drawable/acol_icon" android:roundIcon="@drawable/acol_icon" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:enableOnBackInvokedCallback="true">
     <meta-data android:name="android.webkit.WebView.MetricsOptOut" android:value="true"/>
-    <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden|fontScale" android:windowSoftInputMode="adjustResize">
+    <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden|fontScale|uiMode" android:windowSoftInputMode="adjustResize">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
   </application>

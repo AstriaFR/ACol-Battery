@@ -86,9 +86,9 @@ public final class RecoveryDatabaseTest {
     static void samplingSettings()throws Exception {
         File dir=Files.createTempDirectory("acol-settings-interval-").toFile();Main m=open(dir,"boot-a");
         check(m.settings.getInt("deletePct")==5);check(m.settings.getInt("hidePct")==30);
-        check(m.settings.getInt("screenOnMinutes")==2);check(m.settings.getInt("screenOffMinutes")==20);check(m.settings.getInt("chargeSeconds")==3);
+        check(m.settings.getInt("screenOnMinutes")==2);check(m.settings.getInt("screenOffMinutes")==30);check(m.settings.getInt("chargeSeconds")==2);
         org.json.JSONArray old=new org.json.JSONArray("[3,30,560,1,300,450,50,60,2,10,10,1]");
-        check(Main.decodeSettings(old).getInt("chargeSeconds")==3);check(Main.decodeSettings(old).getInt("screenOffMinutes")==10);
+        check(Main.decodeSettings(old).getInt("chargeSeconds")==2);check(Main.decodeSettings(old).getInt("screenOffMinutes")==10);
         org.json.JSONArray values=new org.json.JSONArray("[5,30,560,1,300,450,50,60,2,15,10,1,10]");
         for(Object invalid:new Object[]{0,11,1.5}){
             values.put(12,invalid);try{Main.decodeSettings(values);throw new AssertionError("accepted invalid charging interval");}catch(java.io.IOException expected){}

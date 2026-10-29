@@ -3,6 +3,7 @@
 .page-heading{display:flex;align-items:center;gap:14px}.page-heading h1{font-size:24px}.back{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none;font-size:13px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--accent);padding:10px 14px}.back:focus-visible{outline:none}
 
 html,body{height:100%;overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html[data-theme-changing] *,html[data-theme-changing] *::before,html[data-theme-changing] *::after{transition:none!important;animation:none!important}
 body{position:fixed;inset:0}
 main{height:100vh;height:100dvh;overflow:hidden}
 
@@ -93,3 +94,10 @@ main{padding-top:0}
 :root[data-theme=dark] .keypad-grid button:nth-child(-n+3){background:#101813}
 :root[data-theme=dark] .keypad-heading-actions #cutoffKeypadCancel{background:#102319;color:#b8e4c7;border-color:#397651}
 :root[data-theme=dark] .keypad-heading-actions #cutoffKeypadApply,:root[data-theme=dark] .keypad-heading-actions #cutoffKeypadApply:active{background:#67dfa0;color:#06140b;border-color:#67dfa0}
+
+main>header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+main>header .page-heading{min-width:0}
+button.page-home{display:inline-flex;align-items:center;justify-content:center;flex:0 0 36px;width:36px;height:36px;min-height:36px;padding:7px;border:0;background:transparent;color:var(--accent)}
+.page-home svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.page-home[hidden]{display:none!important}

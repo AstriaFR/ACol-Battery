@@ -9,7 +9,7 @@ import java.util.zip.*;
 /** Extract our signed APK's payload without a root manager's BusyBox. */
 public final class RuntimePayload {
     public static final List<String> FILES=Collections.unmodifiableList(Arrays.asList(
-        "bin/daemon.dex.jar","bin/libcurvewait.so","bin/aco-launcher","boot.sh","service.sh","cutoff.sh"));
+        "bin/daemon.dex.jar","bin/libcurvewait.so","bin/aco-launcher","boot.sh","service.sh","cutoff.sh","transfer.sh"));
     private RuntimePayload(){}
     public static void extract(File archive,File directory,String expectedHash)throws Exception{
         MessageDigest hash=MessageDigest.getInstance("SHA-256");byte[] buffer=new byte[8192];

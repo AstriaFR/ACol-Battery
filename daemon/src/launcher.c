@@ -13,7 +13,7 @@ static void move_group(const char *path) {
     if(write(fd,text,(size_t)n)<0){}close(fd);
 }
 int main(int argc,char **argv) {
-    if(getuid()!=0||argc!=2||strcmp(argv[1],"/data/adb/aco_battery_app/runtime/service.sh"))return 1;
+    if(getuid()!=0||argc!=2||(strcmp(argv[1],"/data/adb/aco_battery_app/runtime/service.sh")&&strcmp(argv[1],"/data/adb/aco_battery_app/runtime/transfer.sh")))return 1;
     pid_t pid=fork();if(pid<0)return 1;if(pid>0)return 0;
     if(setsid()<0)_exit(1);
     pid=fork();if(pid<0)_exit(1);if(pid>0)_exit(0);

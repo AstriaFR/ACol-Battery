@@ -1,37 +1,29 @@
 package cn.astriafr.acobattery.daemon;
 
+/** Current display/accounting rules; minute RM accounting is covered separately. */
 public final class CoreTest {
-    static void close(double actual,double expected){if(Math.abs(actual-expected)>1e-9)throw new AssertionError(actual+" != "+expected);}
+    static void close(double actual,double expected){if(!Core.finite(actual)||Math.abs(actual-expected)>1e-9)throw new AssertionError(actual+" != "+expected);}
     static void missing(double actual){if(Core.finite(actual))throw new AssertionError("Expected missing data: "+actual);}
-    static Core.Reading reading(int cells,long time){
-        Core.Reading r=new Core.Reading();r.cellCount=cells;r.elapsed=time;r.current=1000;r.vmin=r.vmax=4000;return r;
+    static Core.Reading reading(int cells){
+        Core.Reading r=new Core.Reading();r.cellCount=cells;r.current=1000;r.vmin=r.vmax=4000;return r;
     }
     public static void main(String[] args){
-        Core.Reading a=reading(1,0),b=reading(1,1000);
-        Core.Integral one=Core.integrateFast(a,b,5000);
-        close(one.mah,1000.0/3600);close(one.energyMwh,4000.0/3600);
-        a.cellCount=b.cellCount=2;
-        Core.Integral two=Core.integrateFast(a,b,5000);
-        close(two.mah,2000.0/3600);close(two.energyMwh,8000.0/3600);
-        // Invalid, quantized or correcting RM must not reject independent current/power.
-        a.rm=Double.NaN;b.rm=5000;b.pct=Double.NaN;
-        close(Core.integrateFast(a,b,5000).energyMwh,two.energyMwh);
-        a.rm=5000;b.rm=5100;
-        close(Core.integrateFast(a,b,5000).mah,two.mah);
-        b.elapsed=1800;
-        close(Core.integrateFast(a,b,5000).mah,1);close(Core.integrateFast(a,b,5000).energyMwh,4);
-        b.vmin=b.vmax=Double.NaN;
-        close(Core.integrateFast(a,b,5000).mah,1);missing(Core.integrateFast(a,b,5000).energyMwh);
-        b.current=Double.NaN;missing(Core.integrateFast(a,b,5000).mah);
-        b=reading(1,1000);missing(Core.integrateFast(a,b,5000).mah); // cell profile changed
-        b=reading(2,6000);missing(Core.integrateFast(a,b,5000).energyMwh); // do not extrapolate a gap
-        b=reading(2,1000);b.current=-100;missing(Core.integrateFast(a,b,5000).mah);
+        close(Core.remainingMah(5040123),5040.123);close(Core.remainingMah(0),0);
+        for(long value:new long[]{Long.MIN_VALUE,Integer.MIN_VALUE,-1,Long.MAX_VALUE})missing(Core.remainingMah(value));
+        Core.Reading one=reading(1),two=reading(2);
+        close(one.compensatedCurrent(),-1000);close(one.power(),-4);
+        close(two.compensatedCurrent(),-2000);close(two.power(),-8);
+        two.rm=Double.NaN;two.pct=Double.NaN;close(two.power(),-8);
+        two.current=-1000;close(two.power(),8);
+        two.vmin=Double.NaN;missing(two.power());
+        one.current=Double.NaN;missing(one.power());missing(reading(0).power());
+        close(Core.dischargeEnergyMwh(3900,4100,100),400);
+        close(Core.averagePower(400,3600000),.4);close(Core.averagePower(400,60000),24);
+        close(Core.dischargeEnergyMwh(3900,4100,0),0);
+        missing(Core.dischargeEnergyMwh(Double.NaN,4100,100));
+        missing(Core.dischargeEnergyMwh(3900,4100,-1));missing(Core.averagePower(400,0));
         Core.Sampling sampling=new Core.Sampling();sampling.expected=sampling.fastMs=1000;
         close(sampling.maxGap(),5000);sampling.fastMs=0;close(sampling.maxGap(),1500);
-        // Different endpoint loads use trapezoids, not only the last reading.
-        a=reading(1,0);b=reading(1,1000);b.current=2000;b.vmin=b.vmax=4200;
-        Core.Integral varying=Core.integrateFast(a,b,5000);
-        close(varying.mah,1500.0/3600);close(varying.energyMwh,6200.0/3600);
-        System.out.println("Core integration tests passed");
+        System.out.println("Core: remaining capacity, cell compensation, instantaneous power and RM energy units passed");
     }
 }

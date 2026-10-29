@@ -53,6 +53,7 @@ export class BatteryInfoPanel{
   error(text){const box=document.getElementById('batteryInfoError');box.textContent=text;box.hidden=!text;}
   update(packet){
     if(!this.active)return;this.error('');const reading=packet.status?.reading??{},info=packet.batteryInfo;
+    this.panel.querySelector('[data-info-label=rm]').textContent=reading.rmSource==='android'?'当前剩余电量（CHARGE_COUNTER）':'当前剩余电量（battery_rm）';
     this.panel.querySelector('[data-info-label=voltage]').textContent=reading.voltageSource==='android'?'电池电压（系统电压）':'电池电压（bcc_parms）';
     const dual=reading.cellCount===2&&finite(reading.cell1)&&finite(reading.cell2);
     this.field('voltage',dual?`${(reading.cell1/1000).toFixed(3)} / ${(reading.cell2/1000).toFixed(3)} V`:finite(reading.voltage)?`${(reading.voltage/1000).toFixed(3)} V`:'—');

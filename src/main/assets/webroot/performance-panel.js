@@ -1,7 +1,7 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-1.3.3';
-import{fullScreen}from'./root-bridge.js';
-import{curveColor}from'./curve-colors.js?v=acol-1.3.3';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-1.3.3';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-2.0';
+import{fullScreen}from'./root-bridge.js?v=acol-2.0';
+import{curveColor}from'./curve-colors.js?v=acol-2.0';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.0';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
@@ -103,6 +103,11 @@ export class PerformancePanel{
       'CPU/GPU 温度：'+((meta.temperatureSources??[]).map(s=>`${s.label}（${s.path}）`).join('；')||'未发现可读取的温度节点'),
       '帧率：SurfaceFlinger 前台图层实际呈现时间；静止画面可为 0，不代表屏幕刷新率。'];
     $('performanceMethod').textContent=sources.join('\n');
+  }
+  refreshTheme(){
+    if(!this.id)return;
+    this.chart.metrics=this.chart.metrics.map((s,i)=>({...s,color:curveColor(i)}));
+    this.legend();this.render();
   }
   remember(){try{localStorage.setItem(selectionKey,JSON.stringify([...this.chart.enabled]));}catch{}}
   legend(){

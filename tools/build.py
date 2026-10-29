@@ -19,6 +19,11 @@ android=sdk/'platforms/android-37.0/android.jar'
 tools=sdk/'build-tools/37.0.0'
 ndk=sdk/'ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64'
 build=app/'build'
+for name in ['daemon-classes','daemon-dex','classes','dex','generated','res','payload']:
+    target=build/name
+    target.resolve().relative_to(build.resolve())
+    if target.is_symlink():raise SystemExit(f'Build output must not be a symbolic link: {target}')
+    if target.exists():shutil.rmtree(target)
 for name in ['tmp','daemon-classes','daemon-dex','classes','dex','generated','res/drawable','payload/bin']:(build/name).mkdir(parents=True,exist_ok=True)
 (app/'dist').mkdir(exist_ok=True)
 env=os.environ.copy();env.update(TEMP=str(build/'tmp'),TMP=str(build/'tmp'),TMPDIR=str(build/'tmp'))

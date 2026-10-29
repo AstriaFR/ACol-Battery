@@ -21,7 +21,7 @@ public final class GameSamplingTest {
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.wall=1000000+elapsed;r.rm=5000;r.pct=80;
         r.current=300;r.cellCount=2;r.cell1=3900;r.cell2=4000;return r;
     }
-    static JSONArray settings(int power,int performance){return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
+    static JSONArray settings(int power,int performance)throws JSONException{return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
     static void save(Main m,JSONArray values)throws Exception{
         try{m.saveSettings(new JSONArray(values.toString()).put(0));}
         catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
@@ -74,7 +74,7 @@ public final class GameSamplingTest {
     }
     public static void main(String[] args)throws Exception{
         JSONObject defaults=Main.decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
-        check(defaults.getInt("performanceSeconds")==3);check(defaults.getInt("screenOffMinutes")==20);check(defaults.getInt("chargeSeconds")==3);
+        check(defaults.getInt("performanceSeconds")==2);check(defaults.getInt("screenOffMinutes")==30);check(defaults.getInt("chargeSeconds")==2);
         JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,7,1,2]");
         check(Main.decodeSettings(legacy).getInt("performanceSeconds")==7);
         for(Object bad:new Object[]{0,61,1.5}){

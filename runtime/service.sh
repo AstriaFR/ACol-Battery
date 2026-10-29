@@ -7,7 +7,7 @@ umask 077
 mkdir -p "$BASE"
 echo $$ > "$BASE/supervisor.pid"
 while [ -f "$RUNTIME/bin/daemon.dex.jar" ]; do
-  [ -f "$BASE/update.pending" ] && exit 0
+  if [ -f "$BASE/update.pending" ] && [ ! -f "$BASE/update.installed" ]; then exit 0; fi
   if [ -f "$BASE/cleanup.request" ]; then
     /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin cleanup
     exit 0
@@ -20,7 +20,7 @@ while [ -f "$RUNTIME/bin/daemon.dex.jar" ]; do
   code=$?
   set -e
   [ "$code" = 73 ] && exit 0
-  [ -f "$BASE/update.pending" ] && exit 0
+  if [ -f "$BASE/update.pending" ] && [ ! -f "$BASE/update.installed" ]; then exit 0; fi
   if [ -f "$BASE/cleanup.request" ]; then
     /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin cleanup
     exit 0

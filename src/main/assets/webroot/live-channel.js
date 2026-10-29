@@ -1,4 +1,4 @@
-import{spawn,exec}from'./root-bridge.js';
+import{spawn,exec}from'./root-bridge.js?v=acol-2.0';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 
 export class LiveChannel{
@@ -75,7 +75,7 @@ export class LiveChannel{
     if(this.latest&&this.sequence>after)return Promise.resolve(this.latest);
     return new Promise((resolve,reject)=>{
       const waiter={resolve,reject,timer:null};
-      waiter.timer=setTimeout(()=>{this.waiters=this.waiters.filter(w=>w!==waiter);this.close();reject(Error('实时连接超时'));},12000);
+      waiter.timer=setTimeout(()=>{this.waiters=this.waiters.filter(w=>w!==waiter);this.close();reject(Error('实时连接超时'));},10000);
       this.waiters.push(waiter);
     });
   }

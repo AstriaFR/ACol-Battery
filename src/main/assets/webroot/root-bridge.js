@@ -19,7 +19,7 @@ function send(command,stream=false){
     queueMicrotask(()=>{try{AcoNative.post(JSON.stringify({id,command,stream:true}));}catch{pending.delete(id);child.emit('error',Error('root 连接不可用，请重新打开 App。'));}});return child;
   }
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{pending.delete(id);reject(Error('操作超时，请重试。'));},35000);pending.set(id,{resolve,reject,timer});
+    const timer=setTimeout(()=>{pending.delete(id);reject(Error('操作超时，请重试。'));},10000);pending.set(id,{resolve,reject,timer});
     try{AcoNative.post(JSON.stringify({id,command,stream:false}));}catch{clearTimeout(timer);pending.delete(id);reject(Error('root 连接不可用，请重新打开 App。'));}
   });
 }
@@ -40,3 +40,6 @@ window.__acoDeliver=message=>{
 export function exec(command){return send(command);}
 export function spawn(command,args=[]){return send([command,...args].join(' '),true);}
 export function fullScreen(enabled){AcoNative.fullScreen(!!enabled);}
+export function readAppIcons(packages){
+  try{return JSON.parse(AcoNative.appIcons(JSON.stringify(packages)))||{};}catch{return{};}
+}

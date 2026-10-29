@@ -52,9 +52,11 @@ final class Owner {
         if(file.exists()&&!file.delete())throw new IOException("cleanup failed");
     }
     static void cleanup()throws IOException{
+        try{new cn.astriafr.acobattery.common.RuntimeTransaction(BASE,BOOT).discard();}
+        catch(Exception e){throw new IOException("无法清理后台更新恢复文件。",e);}
         if(BOOT.exists()&&!BOOT.delete())throw new IOException("boot cleanup failed");
         removeTree(RUNTIME);
-        for(String name:new String[]{"cleanup.request","daemon.pid","supervisor.pid","initialized","runtime.version"})Files.deleteIfExists(new File(BASE,name).toPath());
+        for(String name:new String[]{"cleanup.request","daemon.pid","supervisor.pid","initialized","runtime.version","screen.event","screen.event.next","startup.attempt","startup.failure"})Files.deleteIfExists(new File(BASE,name).toPath());
         // records.db, WAL/SHM, settings, cell identification and owner identity stay.
     }
 }

@@ -22,9 +22,11 @@ final class FrameworkWatch implements AutoCloseable {
     void start(Lookup lookup)throws Exception {
         try {
             for(String name:new String[]{"activity","usagestats","display","power","package"}) {
-                IBinder binder=lookup.get(name);
-                if(binder==null||!binder.isBinderAlive())throw new IOException("系统服务尚未就绪："+name);
-                binder.linkToDeath(death,0);services.add(binder);
+                boolean optional=name.equals("display")||name.equals("power");
+                IBinder binder;
+                try{binder=lookup.get(name);}catch(Exception unavailable){if(optional)continue;throw unavailable;}
+                if(binder==null||!binder.isBinderAlive()){if(optional)continue;throw new IOException("系统服务尚未就绪："+name);}
+                try{binder.linkToDeath(death,0);services.add(binder);}catch(Exception unavailable){if(!optional)throw unavailable;}
             }
             if(!healthy())throw new IOException("系统服务正在重启，稍后自动重试。");
         }catch(Exception e){close();throw e;}

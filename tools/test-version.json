@@ -1,4 +1,7 @@
 {
-  "base": "1.3",
-  "lastSuccessfulRevision": 25
+  "revisions": {
+    "1.4.r": 26,
+    "1.4.b": 22,
+    "1.4.c": 41
+  }
 }

@@ -15,7 +15,7 @@ if 'fvar' in font:font=instantiateVariableFont(font,{'wght':700},inplace=True)
 options=subset.Options();options.recalc_timestamp=False
 options.name_IDs=['*'];options.name_languages=['*'];options.name_legacy=True
 options.layout_features=['kern']
-subsetter=subset.Subsetter(options=options);subsetter.populate(text='ACol ');subsetter.subset(font)
+subsetter=subset.Subsetter(options=options);subsetter.populate(text='ACol 0123456789.W—');subsetter.subset(font)
 family='ACol Brand Rounded';full=family+' Bold';postscript='AColBrandRounded-Bold'
 identity_ids={1,2,3,4,5,6,16,17,18,20,21,22,25}
 font['name'].names=[entry for entry in font['name'].names if entry.nameID not in identity_ids]
@@ -29,3 +29,4 @@ for name_id,value in values.items():
 font['head'].fontRevision=1.0
 font.save(assets/'acol-brand.ttf')
 print('已生成主页字标字体。')
+

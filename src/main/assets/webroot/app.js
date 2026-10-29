@@ -1,15 +1,31 @@
-import{exec,fullScreen,cancelTopDialog}from'./root-bridge.js';
-import{LiveChannel}from'./live-channel.js?v=acol-1.3.3';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-1.3.3';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-1.3.3';
-import{SettingsPanel}from'./settings-panel.js?v=acol-1.3.3';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-1.3.3';
-import{PerformancePanel}from'./performance-panel.js?v=acol-1.3.3-gamepad-temp';
-import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-1.3.3';
-import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-1.3.3';
-import{capacityChange,recordChanges}from'./record-display.js?v=acol-1.3.3';
-import{ThemeController}from'./theme.js?v=acol-1.3.3';
+import{roundedDuration}from'./daily-usage-chart.js?v=acol-2.0';
+import{installPageDepth}from'./page-navigation.js?v=acol-2.0';
+import{exec,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.0';
+import{LiveChannel}from'./live-channel.js?v=acol-2.0';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-2.0';
+import{ScreenOffOverlay}from'./screen-off-overlay.js?v=acol-2.0';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.0';
+import{SettingsPanel}from'./settings-panel.js?v=acol-2.0';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.0';
+import{PerformancePanel}from'./performance-panel.js?v=acol-2.0-gamepad-temp';
+import{remainingEstimate,remainingTime}from'./estimate.js?v=acol-2.0';
+import{loadSelection,saveSelection,loadHomePriority}from'./preferences.js?v=acol-2.0';
+import{capacityChange,recordChanges}from'./record-display.js?v=acol-2.0';
+import{ThemeController}from'./theme.js?v=acol-2.0';
+import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.0';
+import{RecordUsagePanel}from'./record-usage.js?v=acol-2.0';
+import{HomeUsagePanel}from'./home-usage.js?v=acol-2.0';
+import{UsageDetailsPanel}from'./usage-details.js?v=acol-2.0';
+import{usagePages,usageState}from'./usage-navigation.js?v=acol-2.0';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
+const edgeScrollbar=new EdgeScrollbar();
+const baseUrl=()=>`${location.pathname}${location.search}`;
+const pageUrl=tab=>baseUrl()+(tab==='home'?'':'#'+tab);
+installPageDepth();
+const startTab=location.hash==='#settings'?'settings':location.hash==='#records'?'records':'home';
+history.replaceState({page:'home'},'',baseUrl());
+const tabButtons=[...document.querySelectorAll('[data-tab]')];
+let activeTab='home';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
 document.addEventListener('pointerdown',e=>{
@@ -18,21 +34,24 @@ document.addEventListener('pointerdown',e=>{
 function longPressFeedback(){try{navigator.vibrate?.(10);}catch{}}
 document.addEventListener('selectionchange',()=>{const selection=getSelection();if(selection?.rangeCount)selection.removeAllRanges();});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
-const startInSettings=location.hash==='#settings';
-history.replaceState({page:'home'},'',location.pathname+location.search);
 const liveChannel=new LiveChannel();
 let records=[],kind='all',detail=null,activeId=null,total=0,loading=false,request=0,expanded=false,zoomTimer;
 let lastStatus=null,pollTimer,liveBusy=false,detailBusy=0,listDue=true,lastListAt=0,queuedPoll=false;
-let listSelection=0;
+function connectionMessage(fallback){try{return window.AcoNative?.connectionStatus?.()||fallback;}catch{return fallback;}}
+window.addEventListener('aco-connection',event=>{if(!$('warning').dataset.startupError)$('warning').textContent=event.detail||'';});
+$('warning').textContent=connectionMessage('正在连接…');
+let listSelection=0,recordsReady=false,monthFilter=null,filterYear=0,filterMonth=0,filterBusy=false,filterRequest=0;
+const filteredLists=new Map();
 let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[];
 let fullscreenAnchor=null;
-let revealedRecordId=null,deleteTarget=null;
+let revealedRecordId=null,deleteTarget=null,homeActiveRow=null,homeActiveId=null,usageNavigation=0;
 let reverseCharge=false;
 const portrait=matchMedia('(orientation: portrait)');
 let remainingTimer,remainingGeneration=0,remainingRecordId=null;
 let uiSettings={...DEFAULT_SETTINGS};
 let homePriority=loadHomePriority();
 let gameFrequencies=null;
+const appIcons=new Map(),iconAttempts=new Set();
 function remainingEligible(){return !document.hidden&&!$('confirm').open&&detail?.record.kind==='discharge'&&activeId!==null;}
 function clearRemaining(){
   if($('remainingWh'))$('remainingWh').textContent='—';if($('remainingTime'))$('remainingTime').textContent='—';
@@ -62,7 +81,7 @@ async function pollRemaining(generation){
   }
 }
 function syncTheme(){
-  const flow=detail?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind);
+  const flow=detail?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind==='game'?'discharge':kind);
   document.body.dataset.flow=flow;
 }
 const recordCells=r=>[0,1,2].includes(r?.cell_count)?r.cell_count:2;
@@ -92,8 +111,10 @@ function updateRecordDelta(delta,r){
   value.textContent=change.text;value.dataset.flow=change.flow;
   delta.querySelector('small').textContent=change.label;
 }
-const stamp=t=>new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
-const reasons={recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'系统服务重启',module_stopped:'模块停止',recording_stopped:'记录已停止',app_uninstalled:'卸载前结束',service_updated:'后台更新',fast_started:'切换游戏模式',fast_stopped:'游戏记录结束',fast_idle_timeout:'息屏自动结束'};
+const pad2=n=>String(n).padStart(2,'0');
+const stamp=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${d.getFullYear()}/${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
+const stampList=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
+const reasons={backup_restored:'恢复备份',recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'系统服务重启',module_stopped:'模块停止',recording_stopped:'记录已停止',app_uninstalled:'卸载前结束',service_updated:'后台更新',fast_started:'切换游戏模式',fast_stopped:'游戏记录结束',fast_idle_timeout:'息屏自动结束'};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function remainingInfoButton(){
   const button=el('button','i','remaining-info');button.type='button';
@@ -117,7 +138,9 @@ $('closeRemainingExplanation').onclick=dismissRemainingExplanation;
 $('remainingExplanation').addEventListener('cancel',e=>{e.preventDefault();dismissRemainingExplanation();});
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4500);}
 async function api(action,...args){
-  if(args.some(a=>!/^\d+$/.test(String(a))))throw Error('参数无效');
+  if(action==='daily_usage'){
+    if(args.length!==3||args.slice(0,2).some(a=>!/^\d+$/.test(String(a)))||!/^[A-Za-z0-9_-]{1,4096}$/.test(String(args[2])))throw Error('使用情况参数无效');
+  }else if(args.some(a=>!/^\d+$/.test(String(a))))throw Error('参数无效');
   if(action==='status')return liveChannel.status();
   if(action==='live'){const packet=await liveChannel.live(args);if(!args[0]||'record'in packet)return packet;}
   const result=await exec(`${command} ${action} ${args.join(' ')}`);
@@ -125,10 +148,15 @@ async function api(action,...args){
   const data=JSON.parse(result.stdout.trim());if(!data.ok){const error=Error(data.error||'未能取得电池数据，请重新初始化。');throw error;}return data;
 }
 const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
+const screenOffOverlay=new ScreenOffOverlay(chart,api,()=>!document.hidden&&!$('detail').hidden,message=>toast(message));
 chart.onInteract=()=>pauseFollowing();
 const settingsPanel=new SettingsPanel(api,value=>{applySettings(value);refresh();},value=>{homePriority=value;renderRecords();});
 const batteryPanel=new BatteryInfoPanel();
 const performancePanel=new PerformancePanel(api);
+const screenTimePanel=new RecordUsagePanel(api,{formatDuration:roundedDuration,formatDate:wall=>{const date=new Date(wall);return`${pad2(date.getMonth()+1)}/${pad2(date.getDate())}`;},minuteUnit:'分'});
+const homeUsage=new HomeUsagePanel(api);
+const usageDetails=new UsageDetailsPanel(api,()=>homeUsage.cache,(state,push)=>openUsage(state,push));
+homeUsage.onDataChange=day=>usageDetails.refresh(day);
 function updateThemeControl({step,dark}){
   const button=$('themeToggle');if(!button)return;
   button.dataset.mode=step;button.setAttribute('aria-label',step==='auto'?'主题：跟随系统':'主题：手动'+(dark?'暗色':'亮色'));
@@ -137,52 +165,106 @@ function updateThemeControl({step,dark}){
 let themeUiReady=false;
 const themeController=new ThemeController(state=>{
   updateThemeControl(state);
-  if(!themeUiReady)return;
+  if(!themeUiReady||!state.darkChanged)return;
   try{
     if(activeId!==null&&detail)buildLegend(detail.record.kind);
     chart.draw();performancePanel.refreshTheme();
   }catch(error){console.error('Theme redraw failed',error);}
 });
 $('themeToggle').onclick=()=>themeController.cycle();
+function showTab(tab){
+  activeTab=tab;document.body.dataset.tab=tab;
+  $('homePage').hidden=tab!=='home';
+  $('recordsPage').hidden=tab!=='records';
+  $('settingsPanel').hidden=tab!=='settings';
+  for(const button of tabButtons){
+    const selected=button.dataset.tab===tab;
+    button.classList.toggle('selected',selected);
+    if(selected)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  }
+  document.title=tab==='home'?'ACol 电池':tab==='records'?'记录 · ACol 电池':'设置 · ACol 电池';
+}
+async function leaveDetail(){
+  screenOffOverlay.close();
+  screenTimePanel.close();
+  performancePanel.close();
+  stopRemaining();
+  hideAppEnergyTip();
+  if(expanded)await toggleFullscreen(false);
+  ++request;clearTimeout(zoomTimer);
+  activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;followLive=false;
+  $('detail').hidden=true;
+}
+async function activateTab(tab){
+  usageNavigation++;usageDetails.close();
+  batteryPanel.close();
+  settingsPanel.closeEditor();
+  liveChannel.setMode(0);
+  await leaveDetail();
+  $('appShell').hidden=false;
+  showTab(tab);
+  syncTheme();
+  if(tab==='records')renderRecords();
+  if(tab==='settings'){prepareCutoff();await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);}
+  else refresh();
+}
+async function requestTab(tab){
+  if(tab===activeTab&&!$('appShell').hidden){
+    const scroller=tab==='records'?$('recordsPage').querySelector('.record-scroll'):tab==='settings'?$('settingsPanel').querySelector('.page-scroll'):null;
+    scroller?.scrollTo({top:0,behavior:'smooth'});
+    return;
+  }
+  if(activeTab==='settings'&&tab!=='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  if(history.state?.page!==tab)history.pushState({page:tab},'',pageUrl(tab));
+  await activateTab(tab);
+}
+for(const button of tabButtons)button.onclick=()=>requestTab(button.dataset.tab);
+const cutoffFrame=$('cutoffFrame');let cutoffReady=false;
+window.__acoCutoffExec=exec;
+window.__acoCutoffBack=()=>history.back();
+window.__acoCutoffKeypad=key=>history.pushState({...history.state,page:'cutoff',keypad:true,key},'',`${pageUrl('cutoff')}-keypad`);
+window.__acoCutoffHome=()=>returnHome();
+window.__acoCutoffReady=()=>{cutoffReady=true;if(!cutoffFrame.hidden){cutoffFrame.contentWindow.__acoCutoffOpen();cutoffFrame.contentWindow.__acoCutoffSync(history.state);}};
+function hideCutoff(){if(cutoffFrame.hidden)return;cutoffFrame.contentWindow?.__acoCutoffClose?.();cutoffFrame.hidden=true;}
+function prepareCutoff(){if(!cutoffFrame.getAttribute('src'))cutoffFrame.src='cutoff/index.html?from=settings&embedded=1';}
+function showCutoff(state){
+  cutoffFrame.hidden=false;$('appShell').hidden=true;
+  if(!cutoffFrame.getAttribute('src'))prepareCutoff();
+  else if(cutoffReady){cutoffFrame.contentWindow.__acoCutoffOpen();cutoffFrame.contentWindow.__acoCutoffSync(state);}
+}
 window.__acoBack=()=>{
+  if(!cutoffFrame.hidden){if(cutoffReady)return cutoffFrame.contentWindow.__acoBack();history.back();return'handled';}
+  if(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip){usageDetails.hideTips();return'handled';}
+  if(homeUsage.tip){homeUsage.hideTip();return'handled';}
   if(cancelTopDialog())return'handled';
   if(performancePanel.expanded){performancePanel.fullscreen(false);return'handled';}
   if(expanded){toggleFullscreen(false);return'handled';}
   if(history.state?.page&&history.state.page!=='home'){history.back();return'handled';}
   // Recover a visible child page even if its browser history state was lost.
-  if(!$('settingsPanel').hidden||batteryPanel.active||!$('detail').hidden){showHome();return'handled';}
-  return document.querySelector('main').hidden?'wait':'home';
+  if(activeTab!=='home'||batteryPanel.active||!$('detail').hidden||usageDetails.state){showHome();return'handled';}
+  return $('appShell').hidden?'wait':'home';
 };
 function applySettings(value){
   const next={...DEFAULT_SETTINGS,...value};
   if(JSON.stringify(next)===JSON.stringify(uiSettings))return;
   uiSettings=next;setChartSettings(next);
   $('showSmallLabel').textContent=`显示 ≤${next.hidePct}%`;
-  $('homeNote').textContent=`普通记录 ≤${next.deletePct}% 自动删除；≤${next.hidePct}% 默认隐藏。`;
   if(detail){chart.draw();renderChartInfo();}
 }
-async function openSettings(){
-  performancePanel.close();
-  batteryPanel.close();liveChannel.setMode(0);
-  ++request;clearTimeout(zoomTimer);activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;followLive=false;
-  stopRemaining();$('detail').hidden=true;document.querySelector('main').hidden=true;$('settingsPanel').hidden=false;
-  if(history.state?.page!=='settings')history.pushState({page:'settings'},'',`${location.pathname}${location.search}#settings`);
-  await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);
-}
-$('openSettings').onclick=openSettings;
-$('settingsBack').onclick=()=>history.back();
-$('openCutoff').onclick=async e=>{e.preventDefault();const button=e.currentTarget;if(button.getAttribute('aria-disabled')==='true'){toast('当前设备缺少截止电压调整接口。');return;}const url=button.href;if(await settingsPanel.flush())location.assign(url);};
+$('openCutoff').onclick=async e=>{e.preventDefault();const button=e.currentTarget;if(button.getAttribute('aria-disabled')==='true'){toast('当前设备缺少截止电压调整接口。');return;}if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}history.pushState({page:'cutoff'},'',pageUrl('cutoff'));showCutoff(history.state);};
 async function openBatteryInfo(){
+  usageNavigation++;usageDetails.close();
+  screenTimePanel.close();
   performancePanel.close();
   stopRemaining();settingsPanel.closeEditor();if(expanded)await toggleFullscreen(false);
   ++request;clearTimeout(zoomTimer);activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;followLive=false;
-  $('detail').hidden=true;$('settingsPanel').hidden=true;document.querySelector('main').hidden=true;
+  $('detail').hidden=true;$('appShell').hidden=true;
   batteryPanel.open();liveChannel.setMode(1);
   if(history.state?.page!=='battery-info')history.pushState({page:'battery-info'},'',`${location.pathname}${location.search}#battery-info`);
   refresh();
 }
 $('openBatteryInfo').onclick=openBatteryInfo;
-$('batteryInfoBack').onclick=()=>history.back();
+$('batteryInfoBack').onclick=()=>window.__acoBack();
 function syncReverseCharge(){
   const available=detail?.record.kind==='charge'&&portrait.matches&&!expanded;
   const enabled=available&&reverseCharge;
@@ -212,7 +294,7 @@ async function readDetail(id,from,to,budget,cancelled=()=>false){
 }
 function scheduleZoom(){pauseFollowing();clearTimeout(zoomTimer);zoomTimer=setTimeout(()=>loadWindow(),180);}
 function applyChart(data,view,live=false){
-  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,ranges:data.ranges??{},live});renderChartInfo();renderFollow();
+  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,ranges:data.ranges??{},live});screenOffOverlay.update(data.record,data.statsVersion);renderChartInfo();renderFollow();
 }
 function renderChartInfo(){
   if(!detail)return;const r=detail.record,raw=r.kind==='charge';
@@ -237,10 +319,42 @@ function schedulePoll(delay=0){
   if(liveBusy){queuedPoll=true;return;}pollTimer=setTimeout(pollLive,delay);
 }
 function refresh(){listDue=true;schedulePoll(0);}
+function filteredList(){return !!monthFilter||kind!=='all';}
+function filterKey(){return[kind,monthFilter?.year??0,monthFilter?.month??0,Number($('showSmall').checked),uiSettings.hidePct].join(':');}
+async function loadFiltered(reset){
+  if(!filteredList()||filterBusy)return false;
+  filterBusy=true;
+  const id=++filterRequest,selection=listSelection,key=filterKey(),small=Number($('showSmall').checked),offset=reset?0:records.length;
+  const year=monthFilter?.year??0,month=monthFilter?.month??0,type={all:0,charge:1,discharge:2,game:3}[kind];
+  try{
+    const data=await api('list',small,offset,year,month,type);
+    if(id!==filterRequest||selection!==listSelection||key!==filterKey()||(data.listVersion??0)<liveChannel.minimumListVersion)return false;
+    const rows=data.records.filter(row=>!liveChannel.deleted.has(row.id)),cached=filteredLists.get(key);
+    records=reset?liveChannel.mergeHead(rows,data.total,cached?.records,cached?.total,data.listVersion===cached?.listVersion)
+      :[...new Map([...records,...rows].map(row=>[row.id,row])).values()].sort((a,b)=>b.id-a.id);
+    filteredLists.delete(key);filteredLists.set(key,{...data,records});
+    while(filteredLists.size>12)filteredLists.delete(filteredLists.keys().next().value);
+    total=data.total;recordsReady=true;renderRecords();
+    listDue=false;lastListAt=Date.now();return true;
+  }catch(e){if(id===filterRequest)toast(e.message);return false;}
+  finally{if(id===filterRequest)filterBusy=false;}
+}
+function selectRecords(){
+  ++listSelection;++filterRequest;filterBusy=false;revealRecordDelete(null);
+  const cached=filteredList()?filteredLists.get(filterKey()):liveChannel.cachedList($('showSmall').checked);
+  records=cached?.records??[];total=cached?.total??0;recordsReady=!!cached;renderRecords();
+  if(filteredList())loadFiltered(true);
+  refresh();
+}
+function cancelMonthFilter(){
+  monthFilter=null;
+  $('applyMonth').setAttribute('aria-pressed','false');
+  selectRecords();
+}
 async function pollLive(){
   if(document.hidden||$('confirm').open)return;
   if(liveBusy||detailBusy||loading){schedulePoll(200);return;}
-  liveBusy=true;queuedPoll=false;const started=performance.now(),token=request,infoMode=batteryPanel.active;
+  liveBusy=true;queuedPoll=false;const started=performance.now(),token=request,selection=listSelection,infoMode=batteryPanel.active;
   const id=detail?.record.active&&streamId===activeId?activeId:0,after=streamAfter,small=$('showSmall').checked?1:0;
   const wantList=listDue||Date.now()-lastListAt>=15000;let failed=false;
   try{
@@ -252,9 +366,17 @@ async function pollLive(){
       packet=await api('live',id,packet.nextAfter,0,small,packet.status.session+1);points.push(...(packet.points??[]));
     }
     packet={...initial,...packet,points,records:initial.records,total:initial.total};
-    lastStatus=packet.status;renderStatus(lastStatus);
-    if(Array.isArray(packet.records)&&small===Number($('showSmall').checked)){records=packet.records;total=packet.total;listDue=false;lastListAt=Date.now();renderRecords();}
-    if(packet.activeRecord)updateActiveRecord(packet.activeRecord);
+    lastStatus=packet.status;renderStatus(lastStatus);homeUsage.connected();screenTimePanel.prune();
+    if(selection===listSelection){
+      if(filteredList()){
+        if(activeTab==='records'&&!$('appShell').hidden&&(wantList||Array.isArray(packet.records)))await loadFiltered(true);
+        else if(activeTab!=='records'||$('appShell').hidden){listDue=false;lastListAt=Date.now();}
+      }else if(Array.isArray(packet.records)&&small===Number($('showSmall').checked)){
+        records=packet.records;total=packet.total;recordsReady=true;listDue=false;lastListAt=Date.now();renderRecords();
+      }
+    }
+    if(packet.activeRecord&&(!filteredList()||records.some(r=>r.id===packet.activeRecord.id)))updateActiveRecord(packet.activeRecord);
+    renderHomeActive(packet.activeRecord&&!liveChannel.deleted.has(packet.activeRecord.id)?packet.activeRecord:null);
     if(id&&id===activeId&&token===request){
       if(packet.record===null){toast('此记录已删除');$('back').click();return;}
       if(packet.record){
@@ -266,17 +388,18 @@ async function pollLive(){
           else{chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps)renderApps(detail);renderDetailNote(detail);renderFollow();renderChartInfo();}
         }
         renderSummary(detail.record);
+        screenOffOverlay.update(detail.record,detail.statsVersion);
       }
     }
     if(token===request&&recordFast(detail?.record))renderGameFrequencies(packet.frequencies??null);
-  }catch(e){if(infoMode!==batteryPanel.active)return;failed=true;gameFrequencies=null;renderGameFrequencies(null);if(infoMode)batteryPanel.error(e.message);else{$('warning').textContent=e.message;if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}}
+  }catch(e){if(infoMode!==batteryPanel.active)return;failed=true;gameFrequencies=null;renderGameFrequencies(null);if(infoMode)batteryPanel.error(e.message);else{$('warning').textContent=connectionMessage(e.message);if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}}
   finally{
     liveBusy=false;const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:1000;
     schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
   }
 }
 function renderStatus(s){
-  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled);settingsPanel.updateFast(s.fastEnabled);$('openCutoff').setAttribute('aria-disabled',String(s.cutoffAvailable===false));
+  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);$('openCutoff').setAttribute('aria-disabled',String(s.cutoffAvailable===false));
   const r=s.reading??{};
   syncTheme();
   document.querySelector('.live').dataset.flow=s.state===0?'discharge':'charge';
@@ -296,14 +419,16 @@ function renderStatus(s){
   $('livePower').parentElement.dataset.flow=valid(r.power)&&r.power!==0?flow:'';
   $('livePower').textContent=valid(r.power)?`${r.power>0?'+':r.power<0?'−':''}${Math.abs(r.power).toFixed(2)}`:'—';
   $('livePower').setAttribute('aria-label',`${flow==='charge'?'充电':'放电'}功率 ${valid(r.power)?fmt(Math.abs(r.power),2):'—'} W`);
-  const warnings=[];if(s.recordingEnabled===false)warnings.push('记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
+  const warnings=[];if(s.recordingEnabled===false)warnings.push(s.recordingProblem?`${s.recordingProblem}，记录已关闭，可在设置中重新开启。`:'记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限，不能保证深度休眠期间准时采样。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
   if(s.frameworkHealthy===false)warnings.push('系统服务已断开，后台正在自动恢复。');
   if(s.error)warnings.push('采样异常。');if(r.error)warnings.push('电池数据读取失败。');if(s.usageError&&s.state===0&&s.recordingEnabled!==false)warnings.push('应用统计暂不可用。');
-  if(s.screenError)warnings.push('屏幕检测受限，放电每 2 分钟记录。');
+  if(s.screenFallback)warnings.push('屏幕监听不可用，已启用状态回退检测，亮息屏切换可能延迟。');
+  else if(s.screenError)warnings.push('屏幕事件通知受限，亮息屏切换可能延迟。');
+  if(s.screenStateKnown===false)warnings.push('屏幕状态暂不可用，等待状态恢复。');
   $('warning').textContent=warnings.join('\n');
 }
 function renderRecords(){
-  const list=$('records'),shown=records.filter(r=>kind==='all'||r.kind===kind);
+  const list=$('records'),shown=records;
   const existing=new Map([...list.children].filter(row=>row.dataset.recordId).map(row=>[Number(row.dataset.recordId),row]));
   const rows=shown.map(r=>{const row=existing.get(r.id)??createRecordRow(r);updateRecordRow(row,r);return row;});
   if(!rows.length){
@@ -313,6 +438,7 @@ function renderRecords(){
   let cursor=list.firstChild;
   for(const row of rows){if(row===cursor)cursor=cursor.nextSibling;else list.insertBefore(row,cursor);}
   while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
+  $('recordCount').textContent=recordsReady?(records.length>=total?`共 ${total} 条`:`已显示 ${records.length} / ${total} 条`):'';
   $('more').hidden=records.length>=total;
 }
 function updateRecordRow(row,r){
@@ -320,24 +446,26 @@ function updateRecordRow(row,r){
   const content=[homePriority,r.kind,r.pct_start,r.pct_end,r.start_wall,r.start_elapsed,r.end_elapsed,r.reason,r.rm_start,r.rm_end,r.fast_seconds].join('|');
   if(row.dataset.content!==content){
     updateRecordTitle(row.querySelector('.info strong'),r);
-    row.querySelector('.info small').textContent=`${stamp(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`;
+    row.querySelector('.info small').textContent=`${stampList(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`;
     updateRecordDelta(row.querySelector('.delta'),r);row.dataset.content=content;
   }
-  const remove=row.querySelector('.record-delete');remove.hidden=revealedRecordId!==r.id;
-  remove.parentElement.classList.toggle('delete-revealed',!remove.hidden);
+  const remove=row.querySelector('.record-delete');
+  if(remove){remove.hidden=revealedRecordId!==r.id;remove.parentElement.classList.toggle('delete-revealed',!remove.hidden);}
 }
-function createRecordRow(r){
+function createRecordRow(r,editable=true){
     const row=el('div',undefined,'record-row record '+r.kind),b=el('button',undefined,'record-open');
-    row.dataset.recordId=r.id;b.type='button';b.append(el('span',r.kind==='charge'?'↗':'↘','icon'));
+    row.dataset.recordId=r.id;row.dataset.active=r.active?'1':'0';b.type='button';b.append(el('span',r.kind==='charge'?'↗':'↘','icon'));
     const info=el('span',undefined,'info');
     const title=el('strong');updateRecordTitle(title,r);info.append(title);
-    info.append(el('small',`${stamp(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`));b.append(info);
+    info.append(el('small',`${stampList(r.start_wall)} · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`));b.append(info);
     const action=el('span',undefined,'record-action'),delta=el('span',undefined,'delta');
     delta.append(el('span',undefined,'delta-value'),el('small'));updateRecordDelta(delta,r);
+    action.append(delta);row.append(b,action);
+    if(!editable){row.onclick=()=>openDetail(r.id);return row;}
     const remove=el('button','删除','record-delete');remove.type='button';remove.dataset.deleteId=r.id;
     remove.hidden=revealedRecordId!==r.id;action.classList.toggle('delete-revealed',!remove.hidden);
     remove.onclick=e=>{e.stopPropagation();confirmRecordDelete(records.find(item=>item.id===r.id)??r);};
-    action.append(delta,remove);row.append(b,action);
+    action.append(remove);
     let timer,start,held=false,moved=false;
     row.addEventListener('pointerdown',e=>{
       if(e.button!==0||!e.isPrimary||e.target.closest('.record-delete'))return;
@@ -376,25 +504,36 @@ function updateActiveRecord(row){
   records[index]=row;const b=$('records').querySelector(`[data-record-id="${row.id}"]`);if(!b)return;
   updateRecordRow(b,row);
 }
+function renderHomeActive(r){
+  const host=$('homeActive');
+  if(!r){host.hidden=true;host.replaceChildren();homeActiveRow=null;homeActiveId=null;return;}
+  if(!homeActiveRow||homeActiveId!==r.id){
+    homeActiveRow=createRecordRow(r,false);homeActiveId=r.id;host.replaceChildren(homeActiveRow);
+  }else updateRecordRow(homeActiveRow,r);
+  host.hidden=false;
+}
 async function openDetail(id){
+  screenOffOverlay.close();
+  usageNavigation++;usageDetails.close();
+  screenTimePanel.close();
   performancePanel.close();
   gameFrequencies=null;
   batteryPanel.close();liveChannel.setMode(0);
-  stopRemaining();
+  stopRemaining();hideAppEnergyTip();
   const token=++request;activeId=id;detail=null;streamId=null;followLive=false;reverseCharge=false;syncReverseCharge();detailBusy++;
   try{const data=await readDetail(id,0,9007199254740991,1600,()=>token!==request||id!==activeId);if(data)showDetail(data);}
   catch(e){if(token===request){activeId=null;toast(e.message);}}
   finally{detailBusy--;schedulePoll(0);}
 }
 function showDetail(data,preserve=false,live=false){
-  detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;document.querySelector('main').hidden=true;
+  detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
   liveChannel.setMode(recordFast(r)?2:0);
   performancePanel.open(r);
   syncTheme();
   $('detailType').textContent=r.kind==='charge'?'充电记录':recordFast(r)?'游戏模式记录':'放电记录';$('detailTitle').textContent=stamp(r.start_wall);$('chartTitle').textContent=r.kind==='charge'?'充电曲线':'放电曲线';
   renderSummary(r);
   syncRemainingExplanation();
-  if(!preserve){streamId=r.id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,seriesFor(r.kind,recordCells(r),recordFast(r)).map(s=>s.key));buildLegend(r.kind);}
+  if(!preserve){streamId=r.id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
   const end=Math.max(1,r.end_elapsed-r.start_elapsed),view=live&&followLive?followWindow(end):preserve?chart.window:[0,end];applyChart(data,view,live);
   syncReverseCharge();
   renderApps(data);renderDetailNote(data);
@@ -499,51 +638,147 @@ function renderSummary(r,failed=false){
 }
 function renderApps(data){
   const r=data.record;
+  screenTimePanel.update(r,data.statsVersion??(recordFast(r)?Math.floor(r.end_elapsed/60000):r.end_elapsed));
   renderDrainSummary(data);
   $('apps').hidden=r.kind==='charge';const appRows=$('appRows');appRows.replaceChildren();
   if(r.kind==='charge')return;
-  const integrated=r.stats_basis==='current_integral',metric=integrated?'energyMwh':'mah';
-  $('appStatsNote').textContent=integrated?'能量按电压、电流积分，按前台时长分摊；mAh 按电流积分。≤2 分钟归入其他。':r.stats_basis==='rm_minute'?'按 RM 容量变化和使用时段分摊，每分钟及亮灭屏时结算，结束时补结算。≤2 分钟归入其他。':'按使用时段分摊整机耗电，≤2 分钟归入其他。平均功耗仅统计有效数据。';
-  const apps=[...data.apps].sort((a,b)=>b[metric]-a[metric]),sum=apps.reduce((a,b)=>a+b[metric],0);
+  const basis=r.stats_basis;
+  $('appStatsNote').textContent=basis==='current_integral'?'能量按电压、电流积分，按前台时长分摊；占比按 Wh 计算。≤1 分钟归入其他。':basis==='rm_minute'?'按 RM 容量变化及电压积分得到 Wh，按使用时段分摊并每分钟结算；占比按 Wh 计算。≤1 分钟归入其他。':'按放电能量与使用时段分摊；占比按 Wh 计算。≤1 分钟归入其他。平均功耗仅统计有效数据。';
+  const apps=[...(data.apps??[])],sum=apps.reduce((total,a)=>total+appEnergy(a),0);
+  apps.sort((a,b)=>sum>0?appEnergy(b)-appEnergy(a):(b.mah??0)-(a.mah??0));
   if(!apps.length)appRows.append(el('p','暂无统计。','small'));
-  for(const a of apps){const row=el('div',undefined,'appRow'),line=el('div',undefined,'appLine');line.append(el('span',a.label),el('strong',statValue(a,integrated)));
-    row.append(line,el('span',statDescription(a,integrated,sum)+(a.pkg.startsWith('__')?'':' · '+a.pkg),'appMeta'));
-    const track=el('div',undefined,'appTrack'),bar=el('div');bar.style.width=`${sum?a[metric]/sum*100:0}%`;track.append(bar);row.append(track);appRows.append(row);}
+  for(const a of apps)appRows.append(appRow(a,sum));
+  loadAppIcons(apps);
 }
-function statValue(a,integrated){
-  if(!integrated)return fmt(a.mah,2);
-  if(!a.energyMs)return'—';
-  return a.energyMwh>=1000?`${fmt(a.energyMwh/1000,2)} Wh`:`${fmt(a.energyMwh,2)} mWh`;
+function appEnergy(a){return valid(a.energyMwh)&&a.energyMs>0?a.energyMwh:0;}
+function appWhText(a){
+  if(!valid(a.energyMwh)||!(a.energyMs>0))return'—';
+  return (a.energyMwh/1000).toFixed(2);
 }
-function statDescription(a,integrated,sum){
-  const metric=integrated?'energyMwh':'mah',watts=valid(a.avgPower)?a.avgPower.toFixed(2):'—';
-  return `${duration(a.ms)} · 平均 ${watts} W · ${sum?fmt(a[metric]/sum*100,1):0}%`+
-    (integrated?` · ${a.mahMs?fmt(a.mah,2):'—'} mAh`:'')+
-    (valid(a.energyMs)&&a.energyMs<a.ms?' · 功耗覆盖 '+duration(a.energyMs):'')+
-    (integrated&&valid(a.mahMs)&&a.mahMs<a.ms?' · 电流覆盖 '+duration(a.mahMs):'');
+function appRow(a,sum){
+  const row=el('div',undefined,'appRow');
+  row.append(appIconNode(a));
+  const info=el('div',undefined,'appInfo'),share=sum>0?`${fmt(appEnergy(a)/sum*100,1)}%`:'—';
+  const name=el('div',undefined,'appNameLine');
+  name.append(el('span',a.label,'appName'),el('span',share,'app-share'));
+  info.append(name);
+  const meta=[roundedDuration(a.ms)];
+  if(valid(a.avgPower))meta.push(`平均${a.avgPower.toFixed(2)}W`);
+  info.append(el('span',meta.join(' · '),'appMeta'));
+  const energy=el('div',undefined,'appEnergy'),value=el('strong');
+  value.append(el('span',appWhText(a),'app-energy-value'),el('span','Wh','app-energy-unit'));
+  energy.append(value);
+  energy.setAttribute('aria-label',`${appWhText(a)} Wh${sum>0?`，占 ${share}`:''}，长按查看 mAh 统计`);
+  bindAppEnergyTip(energy,a);
+  row.append(info,energy);
+  return row;
+}
+let energyTipTimer;
+function bindLongPressTip(node,text){
+  let timer,start;
+  const cancel=()=>{clearTimeout(timer);start=null;};
+  node.addEventListener('pointerdown',e=>{
+    if(e.button!==0||!e.isPrimary)return;
+    clearTimeout(timer);start=[e.clientX,e.clientY];
+    timer=setTimeout(()=>{
+      showEnergyTip(typeof text==='function'?text():text,start[0],start[1]);longPressFeedback();
+    },500);
+  });
+  node.addEventListener('pointermove',e=>{if(start&&Math.hypot(e.clientX-start[0],e.clientY-start[1])>8)cancel();});
+  for(const type of['pointerup','pointercancel','pointerleave'])node.addEventListener(type,cancel);
+}
+function bindAppEnergyTip(node,a){
+  bindLongPressTip(node,()=>{
+    if(!(valid(a.mah)&&a.mahMs>0))return'暂无 mAh 统计';
+    return`${fmt(Math.round(a.mah))} mAh\n平均 ${fmt(Math.round(a.mah*3600000/a.mahMs))} mA`;
+  });
+}
+function showEnergyTip(text,x,y){
+  const tip=$('appEnergyTip');
+  tip.textContent=text;tip.hidden=false;
+  const w=tip.offsetWidth,h=tip.offsetHeight;
+  tip.style.left=`${Math.max(8,Math.min(innerWidth-w-8,x-w-12))}px`;
+  tip.style.top=`${Math.max(8,Math.min(innerHeight-h-8,y-h-12))}px`;
+  clearTimeout(energyTipTimer);energyTipTimer=setTimeout(()=>tip.hidden=true,3500);
+}
+function hideAppEnergyTip(){clearTimeout(energyTipTimer);$('appEnergyTip').hidden=true;}
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('.appEnergy,.drain-item,.drain-chart'))hideAppEnergyTip();});
+function appIconNode(a){
+  const box=el('span',undefined,'app-icon');
+  if(a.pkg==='__screenoff__'){box.append(appGlyph('moon'));return box;}
+  if(a.pkg==='__other__'){box.append(appGlyph('grid'));return box;}
+  const icon=appIcons.get(a.pkg);
+  if(icon){const img=el('img');img.src=icon;img.alt='';img.decoding='async';img.draggable=false;box.append(img);}
+  else box.append(el('span',Array.from(a.label||'?')[0]||'?','app-icon-fallback'));
+  return box;
+}
+function appGlyph(kind){
+  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');svg.setAttribute('class','app-glyph');
+  const paths=kind==='moon'?['M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z']:['M5.5 5.5h4v4h-4zM14.5 5.5h4v4h-4zM5.5 14.5h4v4h-4zM14.5 14.5h4v4h-4z'];
+  for(const d of paths){const path=document.createElementNS(ns,'path');path.setAttribute('d',d);svg.append(path);}
+  return svg;
+}
+function loadAppIcons(apps){
+  const missing=[...new Set(apps.map(a=>a.pkg).filter(pkg=>pkg&&!pkg.startsWith('__')&&!appIcons.has(pkg)))].sort();
+  if(!missing.length)return;
+  const key=missing.join('|');
+  if(iconAttempts.has(key))return;
+  iconAttempts.add(key);
+  setTimeout(()=>{
+    const icons=readAppIcons(missing);
+    for(const [pkg,icon] of Object.entries(icons))if(typeof icon==='string'&&icon.startsWith('data:image/'))appIcons.set(pkg,icon);
+    if(detail)renderApps(detail);
+  },0);
 }
 function renderDrainSummary(data){
   $('drainSummary').hidden=data.record.kind==='charge';if(data.record.kind==='charge')return;
-  const rows=$('drainRows');rows.replaceChildren();
-  const integrated=data.record.stats_basis==='current_integral',metric=integrated?'energyMwh':'mah';
-  $('drainStatsNote').textContent=integrated?'能量与 mAh 分别由功率、电流积分，占比按能量计算。上方容量变化为 RM 差值，可能不同。':data.record.stats_basis==='rm_minute'?'按 RM 容量变化及电压计算，每分钟及亮灭屏时结算，结束时补结算。':'按已记录的应用时段汇总。';
-  const stats=data.drainSummary??[],sum=stats.reduce((total,a)=>total+a[metric],0);
+  const host=$('drainRows');host.replaceChildren();
+  const stats=data.drainSummary??[],energy=a=>valid(a?.energyMwh)&&a.energyMs>0?Math.max(0,a.energyMwh):0;
+  const total=stats.reduce((sum,a)=>sum+energy(a),0);
+  const layout=el('div',undefined,'drain-layout'),chart=el('div',undefined,'drain-chart');
+  const ns='http://www.w3.org/2000/svg',ring=document.createElementNS(ns,'svg');
+  ring.setAttribute('viewBox','0 0 100 100');ring.setAttribute('class','drain-ring');ring.setAttribute('aria-hidden','true');
+  const circumference=2*Math.PI*40,onLength=total?Math.min(circumference,energy(stats[0])/total*circumference):0,offLength=total?Math.max(0,circumference-onLength):0;
+  const segment=(cls,dash,offset)=>{
+    const circle=document.createElementNS(ns,'circle');
+    circle.setAttribute('cx','50');circle.setAttribute('cy','50');circle.setAttribute('r','40');
+    circle.setAttribute('class',`drain-ring-seg ${cls}`);circle.setAttribute('stroke-dasharray',`${dash} ${circumference}`);
+    if(offset)circle.setAttribute('stroke-dashoffset',`${-offset}`);
+    circle.setAttribute('transform','rotate(-90 50 50)');return circle;
+  };
+  ring.append(segment('drain-ring-track',circumference,0),segment('drain-ring-on',onLength,0),segment('drain-ring-off',offLength,onLength));
+  const center=el('div',undefined,'drain-center'),totalText=el('div');
+  totalText.append(el('strong',total?fmt(total/1000,2):'—'),el('span','Wh','drain-center-unit'));
+  center.append(totalText,el('small','合计'));chart.append(ring,center);
+  const totalMs=stats.reduce((sum,a)=>sum+(valid(a?.ms)?Math.max(0,a.ms):0),0);
+  const totalEnergyMs=stats.reduce((sum,a)=>sum+(valid(a?.energyMs)?Math.max(0,a.energyMs):0),0);
+  const totalPower=totalEnergyMs>0?total*3600/totalEnergyMs:null;
+  bindLongPressTip(chart,()=>totalMs>0||totalPower!==null?`总时长  ${roundedDuration(totalMs)}\n总平均功耗  ${totalPower!==null?totalPower.toFixed(2)+' W':'—'}`:'暂无统计');
+  const items=el('div',undefined,'drain-items');
   for(const [i,label]of['亮屏耗电','息屏耗电'].entries()){
-    const a=stats[i]??{mah:0,ms:0,energyMwh:0,energyMs:0,mahMs:0,avgPower:null};
-    const row=el('div',undefined,'drain-row'),head=el('div',undefined,'appLine');
-    head.append(el('span',label),el('strong',statValue(a,integrated)));
-    row.append(head,el('span',statDescription(a,integrated,sum),'appMeta'));
-    const track=el('div',undefined,'appTrack'),bar=el('div');bar.style.width=`${sum?a[metric]/sum*100:0}%`;track.append(bar);row.append(track);rows.append(row);
+    const a=stats[i]??{ms:0,energyMwh:0,energyMs:0,avgPower:null},value=energy(a),share=total?value/total*100:null;
+    const item=el('div',undefined,'drain-item '+(i?'off':'on')),head=el('div',undefined,'drain-item-head'),name=el('div',undefined,'drain-item-name');
+    name.append(el('span',undefined,'drain-dot'),el('span',label,'drain-item-label'));
+    head.append(name,el('strong',share===null?'—':`${fmt(share,1)}%`,'drain-item-share'));
+    const values=el('div',undefined,'drain-item-values'),wh=el('span'),avg=el('span');
+    wh.append(el('b',value?fmt(value/1000,2):'—'),document.createTextNode(' Wh'));
+    avg.append(el('b',valid(a.avgPower)?a.avgPower.toFixed(2):'—'),document.createTextNode(' W'));
+    values.append(wh,el('span',roundedDuration(a.ms),'drain-duration'),avg);
+    bindAppEnergyTip(item,a);
+    item.append(head,values);items.append(item);
   }
+  layout.append(items,chart);host.append(layout);
 }
 function renderDetailNote(data){
   const r=data.record;
   $('detailNote').textContent=`${fmt(data.rawCount??data.points.length)} 个采样点 · 缺样 ${r.missed??0} · 异常 ${r.anomalies??0}`;
 }
+function legendKeys(kind,cells,fast){return [...seriesFor(kind,cells,fast).map(s=>s.key),...(kind==='discharge'?['screenOff']:[])];}
 function buildLegend(kind){
   const cells=recordCells(detail?.record);
   const fast=recordFast(detail?.record);
-  const remember=()=>{if(!saveSelection(fast?'game':kind,chart.enabled,seriesFor(kind,cells,fast).map(s=>s.key)))toast('勾选设置未能保存。');};
+  const remember=()=>{if(!saveSelection(fast?'game':kind,chart.enabled,legendKeys(kind,cells,fast)))toast('勾选设置未能保存。');};
   $('legend').replaceChildren();$('legend').dataset.kind=kind;
   for(const s of seriesFor(kind,cells,fast)){
     const label=el('label');label.dataset.series=s.key;label.style.setProperty('--series',s.color);
@@ -570,6 +805,15 @@ function buildLegend(kind){
     for(const event of['pointerup','pointercancel','pointerleave'])label.addEventListener(event,end);
     label.addEventListener('click',e=>{if(held||dragged){e.preventDefault();e.stopImmediatePropagation();}},{capture:true});
     label.append(input,el('span',s.name,'legend-name'),el('span',s.axis,'legend-short'),el('span','','legend-scale'));$('legend').append(label);
+  }
+  if(kind==='discharge'){
+    const label=el('label');label.className='screen-off-option';label.style.setProperty('--series','#7c858d');label.title='按已保存的息屏时段显示淡灰投影';
+    const input=el('input');input.type='checkbox';input.checked=chart.enabled.has('screenOff');input.setAttribute('aria-label','息屏投影');
+    input.onchange=()=>{
+      input.checked?chart.enabled.add('screenOff'):chart.enabled.delete('screenOff');remember();
+      chart.draw();if(detail)screenOffOverlay.update(detail.record,detail.statsVersion);
+    };
+    label.append(input,el('span','息屏投影'));$('legend').append(label);
   }
 }
 function syncFullscreenLayout(){
@@ -612,9 +856,53 @@ $('resetZoom').onclick=()=>{
   if(detail?.record.active&&streamId===activeId){++request;clearTimeout(zoomTimer);followLive=true;followSpan=null;showDetail({...detail,points:streamPoints},true,true);schedulePoll(0);}
   else{chart.setWindow(0,chart.total);scheduleZoom();}
 };
-async function showHome(){performancePanel.close();batteryPanel.close();liveChannel.setMode(0);settingsPanel.closeEditor();if(!$('settingsPanel').hidden&&!await settingsPanel.flush()){history.pushState({page:'settings'},'',`${location.pathname}${location.search}#settings`);return;}$('settingsPanel').hidden=true;stopRemaining();if(expanded)await toggleFullscreen(false);activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;followLive=false;++request;clearTimeout(zoomTimer);$('detail').hidden=true;document.querySelector('main').hidden=false;syncTheme();refresh();}
-$('back').onclick=()=>{if(history.state?.page==='record')history.back();else showHome();};
-window.addEventListener('popstate',e=>{syncRemainingExplanation();syncDeleteConfirmation();if(e.state?.page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(e.state);return;}if(e.state?.page==='settings'){if($('settingsPanel').hidden)openSettings();else settingsPanel.handleHistory(e.state);}else{settingsPanel.closeEditor();if(e.state?.page==='record'){if(activeId!==e.state.id)openDetail(e.state.id);}else showHome();}});
+async function openUsage(state,push=null){
+  const navigation=++usageNavigation,day=Number(state.day),isApp=state.page==='usage-app'||state.page==='usage-app-week';
+  if(!Number.isFinite(day)||day<0||day> Date.now()||!usagePages.has(state.page)||isApp&&(typeof state.pkg!=='string'||!state.pkg||state.pkg.length>256))return;
+  if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  batteryPanel.close();settingsPanel.closeEditor();liveChannel.setMode(0);await leaveDetail();
+  if(navigation!==usageNavigation)return;
+  $('appShell').hidden=true;
+  const pageState=usageState({...state,day});
+  if(push===true)history.pushState(pageState,'',pageUrl(state.page));else if(push===false)history.replaceState(pageState,'',pageUrl(state.page));
+  document.title=state.page==='usage-app-week'?'应用周使用时间 · ACol 电池':isApp?'应用使用时间 · ACol 电池':state.page==='usage-month'?'月使用时间 · ACol 电池':state.page==='usage-week'?'周使用时间 · ACol 电池':'使用时间 · ACol 电池';
+  await usageDetails.open(pageState);if(navigation===usageNavigation)refresh();
+}
+$('openUsageDetails').onclick=()=>openUsage({page:'usage-day',day:homeUsage.day},true);
+for(const id of ['usageBack','usageAppBack','usageWeekBack','usageMonthBack','usageAppWeekBack'])$(id).onclick=()=>window.__acoBack();
+for(const button of document.querySelectorAll('.page-home'))button.onclick=()=>returnHome();
+window.__acoGoHome=returnHome;
+for(const [id,method]of [['openErrorLogs','openErrorLogs'],['clearAllData','clearAllData'],['backupAllData','backupAllData'],['restoreAllData','restoreAllData']])$(id).onclick=async()=>{
+  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  const bridge=window.AcoNative;if(typeof bridge?.[method]!=='function'){toast('当前应用入口不可用，请重新打开应用。');return;}
+  bridge[method]();
+};
+async function returnHome(){
+  if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  hideCutoff();
+  history.replaceState({page:'home'},'',baseUrl());
+  await showHome();
+}
+async function showHome(){
+  if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return false;}
+  await activateTab('home');return true;
+}
+async function applyHistory(state){
+  syncRemainingExplanation();syncDeleteConfirmation();
+  const page=state?.page??'home';
+  if(page==='cutoff'){if(cutoffFrame.hidden)showCutoff(state);else if(cutoffReady)cutoffFrame.contentWindow.__acoCutoffSync(state);return;}
+  if(!cutoffFrame.hidden){hideCutoff();$('appShell').hidden=false;}
+  if(usagePages.has(page)){await openUsage(state);return;}
+  if(page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(state);return;}
+  if(page==='record'){settingsPanel.closeEditor();if(activeId!==state.id)openDetail(state.id);return;}
+  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');settingsPanel.handleHistory(state);return;}
+  if(activeTab==='settings'&&!await settingsPanel.flush()){
+    history.pushState({page:'settings'},'',pageUrl('settings'));$('appShell').hidden=false;showTab('settings');toast('设置未能保存，请重试。');return;
+  }
+  await activateTab(page==='records'?'records':'home');
+}
+$('back').onclick=()=>window.__acoBack();
+window.addEventListener('popstate',event=>applyHistory(event.state));
 $('delete').onclick=()=>confirmRecordDelete(detail?.record);
 $('cancelDelete').onclick=dismissRecordDelete;
 $('confirm').addEventListener('cancel',e=>{e.preventDefault();dismissRecordDelete();});
@@ -622,8 +910,10 @@ $('confirmDelete').onclick=async()=>{
   const target=deleteTarget;if(!target)return;
   $('confirmDelete').disabled=true;
   try{
-    const result=await api('delete',target.id);liveChannel.forgetRecord(target,result.listVersion??0);
-    records=records.filter(r=>r.id!==target.id);total=Math.max(0,total-1);renderRecords();
+    const result=await api('delete',target.id);liveChannel.forgetRecord(target,result.listVersion??0);screenTimePanel.remove(target.id);
+    ++listSelection;++filterRequest;filterBusy=false;filteredLists.clear();
+    if(records.some(r=>r.id===target.id))total=Math.max(0,total-1);
+    records=records.filter(r=>r.id!==target.id);renderRecords();
     $('confirm').close();revealRecordDelete(null);
     if(history.state?.deleteRecord===target.id)history.go(activeId===target.id?-2:-1);
     else if(activeId===target.id)$('back').click();
@@ -631,15 +921,28 @@ $('confirmDelete').onclick=async()=>{
     toast('记录已删除');
   }catch(e){toast(e.message);}finally{$('confirmDelete').disabled=false;}
 };
-$('showSmall').onchange=()=>{
-  ++listSelection;revealRecordDelete(null);
-  // Both snapshots arrive together; filtering need not wait for the next tick.
-  const cached=liveChannel.cachedList($('showSmall').checked);
-  if(cached){records=cached.records;total=cached.total;renderRecords();}
-  refresh();
+function renderDateFilter(){
+  const year=$('filterYear'),month=$('filterMonth');
+  year.textContent=pad2(filterYear%100);month.textContent=pad2(filterMonth);
+  year.setAttribute('aria-valuenow',String(filterYear));year.setAttribute('aria-valuetext',`${filterYear}年`);
+  month.setAttribute('aria-valuenow',String(filterMonth));month.setAttribute('aria-valuetext',`${filterMonth}月`);
+}
+const initialDate=new Date();filterYear=initialDate.getFullYear();filterMonth=initialDate.getMonth()+1;renderDateFilter();
+$('yearUp').onclick=()=>{filterYear=Math.min(2100,filterYear+1);renderDateFilter();};
+$('yearDown').onclick=()=>{filterYear=Math.max(2000,filterYear-1);renderDateFilter();};
+$('monthUp').onclick=()=>{filterMonth=filterMonth%12+1;renderDateFilter();};
+$('monthDown').onclick=()=>{filterMonth=filterMonth===1?12:filterMonth-1;renderDateFilter();};
+$('applyMonth').onclick=()=>{
+  if(monthFilter&&monthFilter.year===filterYear&&monthFilter.month===filterMonth){cancelMonthFilter();return;}
+  monthFilter={year:filterYear,month:filterMonth};
+  $('applyMonth').setAttribute('aria-pressed','true');
+  selectRecords();
 };
-for(const b of document.querySelectorAll('[data-kind]'))b.onclick=()=>{kind=b.dataset.kind;for(const e of document.querySelectorAll('[data-kind]'))e.classList.toggle('selected',e===b);syncTheme();renderRecords();};
-$('more').onclick=async()=>{if(loading)return;loading=true;const selection=listSelection,small=$('showSmall').checked?1:0;try{const data=await api('list',small,records.length);if(selection!==listSelection)return;const list=liveChannel.appendList(small,data);records=list.records;total=list.total;renderRecords();}catch(e){if(selection===listSelection)toast(e.message);}finally{loading=false;}};
+$('showSmall').onchange=()=>{
+  selectRecords();
+};
+for(const b of document.querySelectorAll('[data-kind]'))b.onclick=()=>{kind=b.dataset.kind;for(const e of document.querySelectorAll('[data-kind]')){const selected=e===b;e.classList.toggle('selected',selected);e.setAttribute('aria-pressed',String(selected));}syncTheme();selectRecords();};
+$('more').onclick=async()=>{if(filteredList()){loadFiltered(false);return;}if(loading)return;loading=true;const selection=listSelection,small=$('showSmall').checked?1:0;try{const data=await api('list',small,records.length);if(selection!==listSelection)return;const list=liveChannel.appendList(small,data);records=list.records;total=list.total;recordsReady=true;renderRecords();}catch(e){if(selection===listSelection)toast(e.message);}finally{loading=false;}};
 document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);stopRemaining();if(document.hidden){gameFrequencies=null;renderGameFrequencies(null);settingsPanel.flush();liveChannel.close();}else{refresh();startRemaining();}});
 window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);stopRemaining();settingsPanel.flush();liveChannel.close();});
 window.addEventListener('pageshow',e=>{if(e.persisted){refresh();startRemaining();}});
@@ -647,5 +950,9 @@ document.addEventListener('pointerup',()=>{if(followLive&&detail?.record.active&
 $('confirm').addEventListener('close',()=>{deleteTarget=null;schedulePoll(0);startRemaining();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&expanded)toggleFullscreen(false);});
 themeUiReady=true;
-if(startInSettings)openSettings();
+window.__acoPageReady=true;
+if(startTab!=='home'){
+  history.pushState({page:startTab},'',pageUrl(startTab));
+  activateTab(startTab).catch(()=>{});
+}
 refresh();
