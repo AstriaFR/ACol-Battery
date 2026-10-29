@@ -51,6 +51,7 @@ import java.util.concurrent.*;
 public final class MainActivity extends Activity {
     // Stable package, signing identity, root paths and WebView origin preserve local data during renaming.
     static final String BASE="/data/adb/aco_battery_app",RUNTIME=BASE+"/runtime";
+    static final int SAVE_DATABASE_REBUILD=6103;
     static final class InitFailure extends Exception {
         final String diagnostics;
         InitFailure(String message){this(message,"");}
@@ -130,6 +131,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,android.content.Intent intent){
         super.onActivityResult(request,result,intent);if(dataTransfer!=null&&(request==DataTransferUi.PICK_RESTORE||request==DataTransferUi.SAVE_BACKUP))dataTransfer.result(request,result,intent);
+        else if(request==SAVE_DATABASE_REBUILD&&result==RESULT_OK&&intent!=null&&intent.getData()!=null)rebuildDatabase(intent.getData());
     }
     void showInitialization(){
         initialized=false;errorPage=null;errorText=null;errorTitle=null;errorCopy=null;errorRebuild=null;canRebuild=false;showingFallbackReport=false;
@@ -283,7 +285,7 @@ public final class MainActivity extends Activity {
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(22),dp(22),dp(22),dp(12));
         GradientDrawable box=new GradientDrawable();box.setColor(dark?Color.rgb(22,27,25):Color.WHITE);box.setCornerRadius(dp(22));panel.setBackground(box);
         TextView title=new TextView(this);title.setText(step==1?"清除所有数据？":"确认清除所有数据？");title.setTextSize(21);title.setTypeface(null,Typeface.BOLD);title.setTextColor(textColor);panel.addView(title);
-        TextView text=new TextView(this);text.setText(step==1?"将停止当前记录，并删除全部充放电记录、设置、使用时间缓存、错误日志和已有数据库备份。\n完成后应用会关闭，重新打开时重新初始化。":"这些数据将永久删除，无法恢复。\n确认后立即开始清除。");text.setTextSize(15);text.setTextColor(muted);text.setLineSpacing(dp(3),1.05f);text.setPadding(0,dp(14),0,dp(16));panel.addView(text);
+        TextView text=new TextView(this);text.setText(step==1?"将停止当前记录，并删除全部充放电记录、设置、使用时间缓存和错误日志。\n完成后应用会关闭，重新打开时重新初始化。":"这些数据将永久删除，无法恢复。\n确认后立即开始清除。");text.setTextSize(15);text.setTextColor(muted);text.setLineSpacing(dp(3),1.05f);text.setPadding(0,dp(14),0,dp(16));panel.addView(text);
         LinearLayout actions=new LinearLayout(this);actions.setGravity(Gravity.CENTER_VERTICAL);panel.addView(actions,new LinearLayout.LayoutParams(-1,dp(48)));
         Button cancel=new Button(this);cancel.setText("取消");cancel.setTextSize(16);cancel.setTextColor(dark?Color.rgb(112,211,173):Color.rgb(7,130,103));cancel.setBackgroundColor(Color.TRANSPARENT);
         Button confirm=new Button(this);confirm.setText(step==1?"继续（3）":"确认清除");confirm.setTextSize(16);confirm.setTextColor(Color.rgb(190,65,65));confirm.setBackgroundColor(Color.TRANSPARENT);
@@ -346,28 +348,58 @@ public final class MainActivity extends Activity {
         if(!canRebuild||rebuilding||destroyed)return;
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(22),dp(20),dp(22),dp(12));
         TextView title=new TextView(this);title.setText("重建数据库？");title.setTextSize(21);title.setTypeface(null,Typeface.BOLD);panel.addView(title);
-        TextView text=new TextView(this);text.setText("数据库内的记录和设置会重置，当前记录也会结束。\n现有数据库会先备份，完成后重新初始化。");text.setTextSize(15);text.setLineSpacing(dp(3),1.05f);text.setPadding(0,dp(14),0,dp(18));panel.addView(text);
+        TextView text=new TextView(this);text.setText("数据库内的记录和设置会重置，当前记录也会结束。\n请选择外部位置保存原数据库，保存并校验成功后才会重建。");text.setTextSize(15);text.setLineSpacing(dp(3),1.05f);text.setPadding(0,dp(14),0,dp(18));panel.addView(text);
         LinearLayout buttons=new LinearLayout(this);buttons.setGravity(Gravity.CENTER_VERTICAL);panel.addView(buttons,new LinearLayout.LayoutParams(-1,dp(48)));
         Button cancel=new Button(this);cancel.setText("取消");cancel.setTextColor(Color.rgb(7,130,103));cancel.setBackgroundColor(Color.TRANSPARENT);buttons.addView(cancel,new LinearLayout.LayoutParams(-2,-1));
         buttons.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
         Button confirm=new Button(this);confirm.setText("确认重建");confirm.setTextColor(Color.rgb(190,65,65));confirm.setBackgroundColor(Color.TRANSPARENT);buttons.addView(confirm,new LinearLayout.LayoutParams(-2,-1));
-        AlertDialog dialog=new AlertDialog.Builder(this).setView(panel).create();cancel.setOnClickListener(v->dialog.dismiss());confirm.setOnClickListener(v->{dialog.dismiss();rebuildDatabase();});dialog.show();
+        AlertDialog dialog=new AlertDialog.Builder(this).setView(panel).create();cancel.setOnClickListener(v->dialog.dismiss());confirm.setOnClickListener(v->{dialog.dismiss();chooseDatabaseBackup();});dialog.show();
     }
-    void rebuildDatabase(){
+    void chooseDatabaseBackup(){
+        try{String name="ACol电池-数据库备份-"+new SimpleDateFormat("yyyyMMdd-HHmmss",Locale.US).format(new Date())+".zip";
+            Intent picker=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(picker,SAVE_DATABASE_REBUILD);
+        }catch(Exception error){Toast.makeText(this,"无法打开系统文件选择器，数据库未更改。",Toast.LENGTH_LONG).show();}
+    }
+    void rebuildDatabase(Uri destination){
         if(!canRebuild||rebuilding||destroyed)return;
         canRebuild=false;rebuilding=true;closeErrorPage();retry.setVisibility(View.GONE);errorActions.setVisibility(View.GONE);progress.setVisibility(View.VISIBLE);
-        phase("重建数据库","正在停止后台并备份原数据库。");
+        phase("重建数据库","正在保存并校验原数据库。");
         worker.execute(()->{
+            String token=java.util.UUID.randomUUID().toString();boolean committed=false;
             try{
                 if(root!=null)root.close();rootReady=false;root=new RootSession();
                 if(!root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限。");
-                String output=root.command(admin("rebuild-database"),10);JSONObject result=new JSONObject(output);
-                if(!result.optBoolean("ok"))throw new IOException("数据库重建未完成，请重试。");
+                JSONObject result=new JSONObject(root.command(admin("prepare-database-export "+token),10));
+                if(!result.optBoolean("ok"))throw new IOException("无法准备数据库备份。");
+                long size=result.getLong("size");String expected=result.getString("sha256");
+                if(size<=0||!expected.matches("[0-9a-f]{64}"))throw new IOException("数据库备份信息无效。");
+                MessageDigest written=MessageDigest.getInstance("SHA-256");long total=0;
+                try(OutputStream out=getContentResolver().openOutputStream(destination,"wt")){
+                    if(out==null)throw new IOException("无法打开所选文件。");
+                    for(long block=0;total<size;block++){
+                        String encoded=root.command("dd if="+RootSession.quote(BASE+"/rebuild-export-"+token+".zip")+" bs=49152 skip="+block+" count=1 2>/dev/null | base64",10);
+                        byte[] bytes=Base64.decode(encoded,Base64.DEFAULT);if(bytes.length==0||total+bytes.length>size)throw new IOException("数据库备份读取不完整。");
+                        out.write(bytes);written.update(bytes);total+=bytes.length;
+                    }out.flush();
+                }
+                if(!hexDigest(written.digest()).equals(expected))throw new IOException("数据库备份校验失败。");
+                MessageDigest saved=MessageDigest.getInstance("SHA-256");long savedSize=0;
+                try(InputStream in=getContentResolver().openInputStream(destination)){
+                    if(in==null)throw new IOException("无法重新读取所选文件以校验备份。");byte[] buf=new byte[65536];int n;while((n=in.read(buf))!=-1){saved.update(buf,0,n);savedSize+=n;if(savedSize>size)throw new IOException("保存的数据库备份大小不正确。");}
+                }
+                if(savedSize!=size||!hexDigest(saved.digest()).equals(expected))throw new IOException("保存的数据库备份校验失败。");
+                runOnUiThread(()->{if(!destroyed)phase("重建数据库","备份已保存，正在重建数据库。");});
+                JSONObject reset=new JSONObject(root.command(admin("rebuild-database-external "+token),10));
+                if(!reset.optBoolean("ok"))throw new IOException("数据库重建未完成，请重试。");committed=true;
                 RootSession authorized=root;
-                runOnUiThread(()->{if(!destroyed){rebuilding=false;Toast.makeText(this,"原数据库已备份，正在重新初始化",Toast.LENGTH_LONG).show();initialize(authorized);}});
-            }catch(Exception failure){if(root!=null)root.close();fail("重建数据库",failure);}
+                runOnUiThread(()->{if(!destroyed){rebuilding=false;Toast.makeText(this,"数据库备份已保存，正在重新初始化",Toast.LENGTH_LONG).show();initialize(authorized);}});
+            }catch(Exception failure){
+                if(!committed&&root!=null)try{root.command(admin("cancel-database-export "+token),10);}catch(Exception ignored){}
+                if(root!=null)root.close();root=null;fail("重建数据库",failure);
+            }
         });
     }
+    static String hexDigest(byte[] bytes){StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(Locale.ROOT,"%02x",b&255));return out.toString();}
     static String digest(byte[] bytes)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))out.append(String.format("%02x",b&255));return out.toString();}
     String assetText(String name)throws IOException{try(InputStream in=getAssets().open(name)){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return out.toString("UTF-8").trim();}}
     File payload()throws Exception{

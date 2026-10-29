@@ -73,4 +73,22 @@ storage.clear();
   assert.equal(loadSelection('game',available).has('temp'),false,'a later user opt-out is preserved');
 }
 
-runCases([samplingSettings,recordingControl,selectionPreferences]).then(()=>console.log('Settings: intervals, confirmation, recording control and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function resetSettings(){
+ const root=path.join(__dirname,'../src/main/assets/webroot/');
+ const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
+ const {DEFAULT_SETTINGS}=await import(pathToFileURL(path.join(root,'config.js')).href);
+ const nodes={resetSettings:{disabled:false},themeToggle:{disabled:false}};globalThis.document={getElementById:id=>nodes[id]};
+ const store=new Map();globalThis.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};
+ const panel=Object.create(SettingsPanel.prototype),calls=[],defaults={...DEFAULT_SETTINGS,capacityAh:6.23};
+ Object.assign(panel,{ready:true,form:{elements:[{disabled:false}]},fastButton:{},recording:{},powerDisplay:{},priorityButtons:[],fastValue:true,powerDisplayValue:true,recordingValue:false,
+   askChange:async()=>true,flush:async()=>true,fill:()=>{},onSaved:()=>{},onHomePriority:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
+   updateFast(v){if(typeof v==='boolean')this.fastValue=v},updatePowerDisplay(v){this.powerDisplayValue=v},updateRecording(v){this.recordingValue=v},
+   api:async(action,...args)=>{calls.push([action,...args]);if(action==='default_settings')return{settings:defaults};if(action==='set_settings')return{settings:defaults};if(action==='set_fast')return{fastEnabled:false,settings:defaults};if(action==='set_power_display')return{powerDisplayEnabled:false,settings:defaults};if(action==='set_recording')return{recordingEnabled:true,settings:defaults};throw Error(action);}
+ });
+ assert.equal(await panel.resetDefaults(),true);
+ const save=calls.find(c=>c[0]==='set_settings');assert.equal(save[3],623,'uses device design capacity default');assert.equal(save.at(-1),0,'does not prune existing records');
+ assert.deepEqual(calls.map(c=>c[0]),['default_settings','set_settings','set_fast','set_power_display','set_recording','theme']);
+ assert.equal(panel.homePriority,'percentage');assert.equal(panel.resetBusy,false);assert.equal(panel.resetPromise,null);
+ calls.length=0;panel.askChange=async()=>false;assert.equal(await panel.resetDefaults(),false);assert.equal(calls.length,0,'cancelling does not modify settings');
+}
+runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});

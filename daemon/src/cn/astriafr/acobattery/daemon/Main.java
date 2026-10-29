@@ -251,13 +251,17 @@ public final class Main {
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
             .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",v[13]);
     }
-    void loadSettings()throws Exception {
-        settings=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
+    JSONObject defaultSettings()throws Exception {
+        JSONObject defaults=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
         Integer design=integer(read(BAT+"design_capacity"));
         if(design!=null&&design>=1000&&design<=20000){
             double ah=Math.round((design/1000.0-0.5)*100)/100.0;
-            if(ah>=0.01&&ah<=20)settings.put("capacityAh",ah);
+            if(ah>=0.01&&ah<=20)defaults.put("capacityAh",ah);
         }
+        return defaults;
+    }
+    void loadSettings()throws Exception {
+        settings=defaultSettings();
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='module_settings'",null)) {
             if(c.moveToFirst())try {settings=decodeSettings(new JSONArray(c.getString(0)));}
             catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
@@ -1321,6 +1325,7 @@ public final class Main {
         if(action.equals("set_fast")){if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("游戏模式参数无效");return setFast(p.getInt(0)==1,p.getInt(0)==1?"fast_started":"fast_stopped");}
         if(action.equals("shutdown")){requestStop("app_uninstalled".equals(p.optString(0))?"app_uninstalled":"service_updated");return o;}
         if(action.equals("settings"))return o.put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem).put("fastEnabled",fastEnabled).put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
+        if(action.equals("default_settings"))return o.put("settings",defaultSettings());
         if(action.equals("set_settings"))return saveSettings(p);
         if(action.equals("cache_records")){
             if(p.length()<1||p.length()>12)throw new IOException("缓存检查参数无效");

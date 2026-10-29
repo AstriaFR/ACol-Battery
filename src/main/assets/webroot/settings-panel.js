@@ -83,6 +83,30 @@ export class SettingsPanel{
     this.powerDisplayValue=enabled;this.powerDisplay.checked=enabled;this.powerDisplay.disabled=false;
     if(error)this.setStatus(error,true);
   }
+  async resetDefaults(){
+    if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
+    this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
+    try{
+      if(!await this.askChange('恢复默认设置？','恢复设置项和跟随系统主题；游戏模式与功耗悬浮显示将关闭，记录总开关将开启。已有记录和备份不会删除。'))return false;
+      if(!await this.flush())throw Error('当前设置未能保存，请重试。');
+      let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
+      for(const field of this.form.elements)field.disabled=true;
+      this.fastButton.disabled=true;this.recording.disabled=true;this.powerDisplay.disabled=true;document.getElementById('themeToggle').disabled=true;
+      const defaults=(await this.api('default_settings')).settings,args=encodeSettings({...DEFAULT_SETTINGS,...defaults});
+      const result=await this.api('set_settings',...args,0);
+      this.lastSaved=JSON.stringify(args);this.dirty=false;this.fill(result.settings);this.onSaved(result.settings);
+      if(this.fastValue){const fast=await this.api('set_fast',0);this.updateFast(fast.fastEnabled);this.onSaved(fast.settings);}
+      if(this.powerDisplayValue){const power=await this.api('set_power_display',0);this.updatePowerDisplay(power.powerDisplayEnabled,power.powerDisplayError);this.onSaved(power.settings);}
+      if(this.recordingValue===false){const recording=await this.api('set_recording',1);this.updateRecording(recording.recordingEnabled,recording.recordingProblem);this.onSaved(recording.settings);}
+      if(!saveHomePriority('percentage'))throw Error('首页显示设置未能保存。');
+      this.homePriority='percentage';for(const item of this.priorityButtons)item.setAttribute('aria-pressed',String(item.dataset.homePriority===this.homePriority));this.onHomePriority?.(this.homePriority);
+      this.onResetUi?.();this.setStatus('');return true;
+    }catch(error){this.setStatus(`恢复未全部完成，请检查当前设置。${error.message}`,true);return false;}
+    finally{
+      if(this.resetPromise){for(const field of this.form.elements)field.disabled=!this.ready;this.recording.disabled=false;this.powerDisplay.disabled=false;document.getElementById('themeToggle').disabled=false;this.updateFast();this.finishReset?.();this.resetPromise=null;this.finishReset=null;}
+      this.resetBusy=false;button.disabled=false;
+    }
+  }
   async togglePowerDisplay(enabled){
     if(this.powerDisplayBusy)return;
     const previous=this.powerDisplayValue??false;this.powerDisplayBusy=true;this.powerDisplay.disabled=true;this.powerDisplay.checked=previous;this.setStatus('');
@@ -276,6 +300,7 @@ export class SettingsPanel{
   }
   async flush(){
     clearTimeout(this.timer);
+    if(this.resetPromise)await this.resetPromise;
     if(!this.ready)return true;
     if(this.running){const write=this.running,success=await write;if(this.running===write)this.running=null;if(!success)return false;if(this.running||this.dirty)return this.flush();return true;}
     if(!this.dirty)return true;

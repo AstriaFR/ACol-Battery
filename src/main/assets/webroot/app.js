@@ -172,6 +172,8 @@ const themeController=new ThemeController(state=>{
   }catch(error){console.error('Theme redraw failed',error);}
 });
 $('themeToggle').onclick=()=>themeController.cycle();
+settingsPanel.onResetUi=()=>themeController.reset();
+$('resetSettings').onclick=async()=>{if(await settingsPanel.resetDefaults())toast('已恢复默认设置');};
 function showTab(tab){
   activeTab=tab;document.body.dataset.tab=tab;
   $('homePage').hidden=tab!=='home';

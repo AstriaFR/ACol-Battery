@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.zip.*;
 import org.json.JSONObject;
 
 /** Explicit database reset: verified backup first; interrupted resets block normal opening. */
@@ -69,6 +70,63 @@ public final class DatabaseRebuild {
         Files.delete(marker.toPath());
     }
     static String hex(byte[] bytes){StringBuilder text=new StringBuilder();for(byte b:bytes)text.append(String.format(Locale.ROOT,"%02x",b&255));return text.toString();}
+    static String stagedName(String token)throws IOException{
+        if(!token.matches("[0-9a-f-]{36}"))throw new IOException("数据库备份标识无效。");
+        return "db-0-"+token;
+    }
+    static void removeTree(File dir)throws IOException{
+        if(!dir.exists())return;
+        if(Files.isSymbolicLink(dir.toPath()))throw new IOException("数据库备份路径异常。");
+        File[] files=dir.listFiles();if(files==null)throw new IOException("无法读取临时备份。");
+        for(File file:files){if(file.isDirectory())removeTree(file);else Files.delete(file.toPath());}
+        Files.delete(dir.toPath());
+    }
+    public static JSONObject prepareExternal(File directory,String database,String token,Stop stop,Guard guard)throws Exception{
+        names(database);guard.check("stop");stop.stop();recover(directory,database,guard);
+        File backups=child(directory,"database-backups");Files.createDirectories(backups.toPath());
+        File backup=child(backups,stagedName(token));if(!backup.mkdir())throw new IOException("无法建立临时数据库备份。");
+        File archive=child(directory,"rebuild-export-"+token+".zip");boolean complete=false;
+        try{
+            JSONObject entries=new JSONObject(),hashes=new JSONObject();
+            for(String entry:names(database)){
+                guard.check("backup:"+entry);File source=child(directory,entry),target=child(backup,entry);
+                if(source.isFile()){copy(source,target,guard);entries.put(entry,"file");hashes.put(entry,hex(digest(target,guard)));}
+                else if(!source.exists())entries.put(entry,"absent");
+                else throw new IOException("数据库路径不是普通文件，请先手动检查。");
+            }
+            JSONObject manifest=new JSONObject().put("database",database).put("entries",entries).put("hashes",hashes);
+            StartupFailure.write(child(backup,"complete.json"),manifest.toString());
+            try(FileOutputStream file=new FileOutputStream(archive);ZipOutputStream zip=new ZipOutputStream(file)){
+                for(String entry:names(database))if(entries.getString(entry).equals("file")){
+                    zip.putNextEntry(new ZipEntry(entry));try(InputStream in=new FileInputStream(child(backup,entry))){byte[] buf=new byte[32768];int n;while((n=in.read(buf))!=-1){guard.check("archive");zip.write(buf,0,n);}}zip.closeEntry();
+                }
+                zip.putNextEntry(new ZipEntry("complete.json"));zip.write(manifest.toString().getBytes(StandardCharsets.UTF_8));zip.closeEntry();zip.finish();file.getFD().sync();
+            }
+            String hash=hex(digest(archive,guard));complete=true;
+            return new JSONObject().put("ok",true).put("size",archive.length()).put("sha256",hash);
+        }finally{if(!complete){Files.deleteIfExists(archive.toPath());removeTree(backup);}}
+    }
+    public static void cancelExternal(File directory,String token)throws Exception{
+        if(new File(directory,PENDING).exists())return;
+        File backups=child(directory,"database-backups"),backup=child(backups,stagedName(token));
+        Files.deleteIfExists(child(directory,"rebuild-export-"+token+".zip").toPath());removeTree(backup);
+    }
+    public static void commitExternal(File directory,String database,String token,Stop stop,Guard guard)throws Exception{
+        guard.check("stop");stop.stop();checkPending(directory);
+        File backup=child(child(directory,"database-backups"),stagedName(token));JSONObject manifest=load(child(backup,"complete.json"));
+        if(!database.equals(manifest.getString("database")))throw new IOException("数据库备份类型不匹配。");
+        JSONObject entries=manifest.getJSONObject("entries"),hashes=manifest.getJSONObject("hashes");
+        for(String entry:names(database)){
+            guard.check("verify:"+entry);File current=child(directory,entry),copy=child(backup,entry);String type=entries.getString(entry);
+            if(type.equals("absent")){if(current.exists())throw new IOException("数据库已发生变化，请重新备份。");}
+            else if(type.equals("file")){String expected=hashes.getString(entry);if(!current.isFile()||!copy.isFile()||!expected.equals(hex(digest(current,guard)))||!expected.equals(hex(digest(copy,guard))))throw new IOException("数据库已发生变化，请重新备份。");}
+            else throw new IOException("数据库备份状态异常。");
+        }
+        StartupFailure.write(new File(directory,PENDING),new JSONObject().put("backup",backup.getName()).toString());
+        for(String entry:names(database)){guard.check("reset:"+entry);remove(child(directory,entry));}
+        Files.delete(new File(directory,PENDING).toPath());
+        try{cancelExternal(directory,token);}catch(Exception ignored){} // Cleanup must not turn a committed reset into a failed reset.
+    }
     public static File rebuild(File directory,String database,Stop stop,Guard guard)throws Exception{
         names(database);guard.check("stop");stop.stop();recover(directory,database,guard);
         File backups=child(directory,"database-backups");Files.createDirectories(backups.toPath());

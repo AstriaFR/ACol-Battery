@@ -65,5 +65,10 @@ export class ThemeController{
     try{localStorage.setItem(storageKey,JSON.stringify(this.preference));}catch{}
     this.apply();
   }
+  reset(){
+    this.preference={step:'auto',dark:false};
+    localStorage.removeItem(storageKey);
+    this.apply();
+  }
   static applyStored(options){return new ThemeController(()=>{},options);}
 }

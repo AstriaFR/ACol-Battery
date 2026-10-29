@@ -2,6 +2,8 @@ package cn.astriafr.acobattery.common;
 
 import java.io.*;
 import java.nio.file.*;
+import java.util.UUID;
+import java.util.zip.ZipFile;
 import org.json.JSONObject;
 
 public final class DatabaseRebuildTest {
@@ -10,6 +12,25 @@ public final class DatabaseRebuildTest {
     static void write(File file,String text)throws Exception{Files.write(file.toPath(),text.getBytes("UTF-8"));}
     static String read(File file)throws Exception{return new String(Files.readAllBytes(file.toPath()),"UTF-8");}
     static final class Crash extends Error{}
+    static void externalBackup(File root)throws Exception{
+        File dir=new File(root,"external");check(dir.mkdir(),"Cannot create external test directory");
+        File db=new File(dir,"records.db"),wal=new File(dir,"records.db-wal");write(db,"original-db");write(wal,"original-wal");
+        String token=UUID.randomUUID().toString();JSONObject prepared=DatabaseRebuild.prepareExternal(dir,"records.db",token,()->{},OK);
+        File zip=new File(dir,"rebuild-export-"+token+".zip");check(prepared.getLong("size")==zip.length(),"Archive size mismatch");
+        try(ZipFile archive=new ZipFile(zip)){check(archive.getEntry("records.db")!=null&&archive.getEntry("records.db-wal")!=null,"Archive missing database files");}
+        check(read(db).equals("original-db")&&read(wal).equals("original-wal"),"Preparing backup modified database");
+        DatabaseRebuild.cancelExternal(dir,token);check(!zip.exists()&&db.exists()&&wal.exists(),"Cancellation did not preserve the original database");
+        token=UUID.randomUUID().toString();DatabaseRebuild.prepareExternal(dir,"records.db",token,()->{},OK);write(db,"changed-db");
+        try{DatabaseRebuild.commitExternal(dir,"records.db",token,()->{},OK);throw new AssertionError("Changed database accepted");}catch(IOException expected){}
+        check(read(db).equals("changed-db")&&wal.exists(),"Rejected commit modified the database");DatabaseRebuild.cancelExternal(dir,token);
+        token=UUID.randomUUID().toString();DatabaseRebuild.prepareExternal(dir,"records.db",token,()->{},OK);
+        try{DatabaseRebuild.commitExternal(dir,"records.db",token,()->{},phase->{if(phase.equals("reset:records.db-wal"))throw new Crash();});throw new AssertionError("Interruption not simulated");}catch(Crash expected){}
+        try{DatabaseRebuild.checkPending(dir);throw new AssertionError("Interrupted reset did not block startup");}catch(IOException expected){}
+        String retry=UUID.randomUUID().toString();DatabaseRebuild.prepareExternal(dir,"records.db",retry,()->{},OK);
+        check(read(db).equals("changed-db")&&read(wal).equals("original-wal"),"Interrupted reset did not recover original files");
+        DatabaseRebuild.commitExternal(dir,"records.db",retry,()->{},OK);
+        check(!db.exists()&&!wal.exists()&&!new File(dir,"rebuild-export-"+retry+".zip").exists(),"Successful reset retained live database or temporary archive");
+    }
     static void cleanup(File root,File file)throws Exception{
         check(file.getCanonicalPath().equals(root.getCanonicalPath())||file.getCanonicalPath().startsWith(root.getCanonicalPath()+File.separator),"Cleanup target rejected");
         if(file.isDirectory())for(File child:file.listFiles())cleanup(root,child);Files.delete(file.toPath());
@@ -17,6 +38,7 @@ public final class DatabaseRebuildTest {
     public static void main(String[] args)throws Exception{
         File root=Files.createTempDirectory("database-rebuild-").toFile();
         try{
+            externalBackup(root);
             File db=new File(root,"records.db"),wal=new File(root,"records.db-wal"),settings=new File(root,"ui-preferences.json");
             write(db,"database-original");write(wal,"wal-original");write(settings,"settings-original");int[] stopped={0};
             File backup=DatabaseRebuild.rebuild(root,"records.db",()->stopped[0]++,OK);
