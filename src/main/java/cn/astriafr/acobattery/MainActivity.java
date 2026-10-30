@@ -297,7 +297,7 @@ public final class MainActivity extends Activity {
             if(remaining>0){confirm.setEnabled(false);confirm.setAlpha(.45f);confirm.setText("继续（"+((remaining+999)/1000)+"）");handler.postDelayed(this,Math.min(1000,remaining));}
             else{confirm.setEnabled(true);confirm.setAlpha(1);confirm.setText("继续");}
         }};
-        cancel.setOnClickListener(v->dialog.dismiss());confirm.setOnClickListener(v->{if(clearDataDialog!=dialog||android.os.SystemClock.elapsedRealtime()<readyAt)return;dialog.dismiss();if(step==1)askClearAllData(2);else clearAllData();});
+        cancel.setOnClickListener(v->dialog.dismiss());confirm.setOnClickListener(v->{if(clearDataDialog!=dialog||android.os.SystemClock.elapsedRealtime()<readyAt)return;clearDataDialog=null;dialog.dismiss();if(step==1)askClearAllData(2);else clearAllData();});
         dialog.setOnDismissListener(v->{handler.removeCallbacks(countdown);if(clearDataDialog==dialog)clearDataDialog=null;});
         dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);dialog.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels-dp(32),dp(520)),-2);}
         if(step==1)countdown.run();

@@ -487,6 +487,7 @@ body:has(dialog[open])>.edge-scrollbar{visibility:hidden}
 .settings-panel,.battery-info-panel{padding-top:0}
 .recording-control{margin-bottom:10px}
 .recording-control .setting-heading{min-height:40px}
+.recording-control p{margin-top:4px}
 .power-display-control{margin-top:8px}
 #confirmRecording{transition:none}
 .recording-confirm[data-action=stop] #confirmRecording,.recording-confirm[data-action=stop] #confirmRecording:active,.recording-confirm[data-action=stop] #confirmRecording:focus{background:#c4443f;border-color:#c4443f;color:#fff}
