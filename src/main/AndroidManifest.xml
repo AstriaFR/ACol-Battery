@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="14090" android:versionName="2.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="14091" android:versionName="2.0">
   <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="37"/>
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
   <application android:name=".BatteryApplication" android:label="ACol电池" android:icon="@drawable/acol_icon" android:roundIcon="@drawable/acol_icon" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:enableOnBackInvokedCallback="true">

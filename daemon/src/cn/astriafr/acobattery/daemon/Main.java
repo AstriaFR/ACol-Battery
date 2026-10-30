@@ -146,7 +146,8 @@ public final class Main {
             report.put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE);
             report.put("nativeCapabilities",initWait()).put("nativeDiagnostics",waitDiagnostics());releaseWait();
             report.put("cutoffAvailable",cutoffAvailable());
-            report.put("reading",readingJson(readHardware(ctx,null,Core.detectCellCount(read(BAT+"aging_ffc_data")))));
+            Core.Reading probeReading=readHardware(ctx,null,Core.detectCellCount(read(BAT+"aging_ffc_data")));
+            report.put("reading",readingJson(probeReading)).put("powerInputFallback","android".equals(probeReading.onlineSource));
             DisplayManager manager=null;
             DisplayManager.DisplayListener listener=new DisplayManager.DisplayListener(){public void onDisplayAdded(int id){}public void onDisplayRemoved(int id){}public void onDisplayChanged(int id){}};
             try{
@@ -395,8 +396,18 @@ public final class Main {
     static double num(String s) {try{return Double.parseDouble(s.trim());}catch(Exception e){return Double.NaN;}}
     static Double nullable(double v){return Core.finite(v)?v:null;}
     static double field(Map<String,String> m,String k) {return num(m.getOrDefault(k,""));}
-    static boolean online() {
-        return POWER_INPUTS.online();
+    static PowerInputs.Result online(Context ctx) {
+        PowerInputs.Result result=POWER_INPUTS.online(()->{
+            if(ctx==null)return null;
+            try{
+                Intent battery=ctx.registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                if(battery==null||!battery.hasExtra(BatteryManager.EXTRA_PLUGGED))return null;
+                int plugged=battery.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1);
+                return plugged<0?null:plugged!=0;
+            }catch(Exception error){FallbackDiagnostics.record("Android 充电连接状态",error);return null;}
+        });
+        if(result.systemFallback)FallbackDiagnostics.record("充电连接状态回退","底层外部供电节点不可可靠读取，已使用 Android 电池广播的连接状态。");
+        return result;
     }
     static Core.Reading readHardware(String[] knownHeader) {
         return readHardware(null,knownHeader,Core.detectCellCount(read(BAT+"aging_ffc_data")));
@@ -464,7 +475,7 @@ public final class Main {
         if(!Core.finite(r.pct)||r.pct<0||r.pct>100)FallbackDiagnostics.record("系统电量校验","capacity 未提供 0–100 范围内的电量");
         if(cells==0)FallbackDiagnostics.record("电芯数量识别","aging_ffc_data="+diagnosticRead(BAT+"aging_ffc_data"));
         r.fv=field(m,"fv_mv");
-        r.online=online();r.full=field(m,"batt_full")==1;r.enabled=field(m,"mmi_chg")==1;
+        PowerInputs.Result power=online(ctx);r.online=power.online;r.onlineSource=power.systemFallback?"android":"sysfs";r.full=field(m,"batt_full")==1;r.enabled=field(m,"mmi_chg")==1;
         r.source="cells="+cells+"; voltage="+r.voltageSource+"; current="+r.currentSource+"; remaining="+r.rmSource+"; root capacity";
         if(!r.valid())r.error="剩余容量 / 系统电量读取失败";
         else if(cells==0)r.error="电芯数量待识别，稍后重试";
@@ -510,7 +521,7 @@ public final class Main {
         o.put("elapsed",r.elapsed).put("wall",r.wall).put("rm",nullable(r.rm)).put("pct",nullable(r.pct));
         o.put("current",nullable(r.chargingCurrent())).put("voltage",nullable(r.voltage()));
         o.put("cellCount",r.cellCount).put("displayCurrent",nullable(r.compensatedCurrent()));
-        o.put("voltageSource",r.voltageSource).put("currentSource",r.currentSource).put("rmSource",r.rmSource);
+        o.put("voltageSource",r.voltageSource).put("currentSource",r.currentSource).put("rmSource",r.rmSource).put("onlineSource",r.onlineSource);
         o.put("vmax",nullable(r.vmax)).put("vmin",nullable(r.vmin)).put("power",nullable(r.power()));
         o.put("cell1",nullable(r.cell1)).put("cell2",nullable(r.cell2));
         o.put("online",r.online).put("driverFull",r.full).put("enabled",r.enabled).put("fv",nullable(r.fv));
@@ -621,7 +632,7 @@ public final class Main {
                     if(stopping)break;
                     if(!recordingEnabled){sampling.takeScreenSample();continue;}
                     if(SystemClock.elapsedRealtime()>=fastAutoDeadline()){setFast(false,"fast_idle_timeout");continue;}
-                    long now=SystemClock.elapsedRealtime();boolean plugged=online();
+                    long now=SystemClock.elapsedRealtime();boolean plugged=online(ctx).online;
                     boolean screenSample=sampling.takeScreenSample();
                     Core.Reading screenReading=screenSample?hardwareReading(header):null;
                     if(screenReading!=null)latest=screenReading;

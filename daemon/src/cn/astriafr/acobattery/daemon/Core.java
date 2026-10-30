@@ -10,7 +10,7 @@ public final class Core {
         public double vmax = Double.NaN, vmin = Double.NaN, fv = Double.NaN, temp = Double.NaN;
         public double cell1 = Double.NaN, cell2 = Double.NaN;
         public int cellCount=2;
-        public String voltageSource="",currentSource="",rmSource="";
+        public String voltageSource="",currentSource="",rmSource="",onlineSource="";
         public boolean online, full, enabled;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }

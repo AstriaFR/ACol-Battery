@@ -3,9 +3,14 @@ package cn.astriafr.acobattery.daemon;
 import java.io.File;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Read external power supplies only; battery/parallel and device-scope outputs are not inputs. */
 final class PowerInputs {
+    static final class Result {
+        final boolean online,systemFallback;
+        Result(boolean online,boolean systemFallback){this.online=online;this.systemFallback=systemFallback;}
+    }
     private final File directory;
     private final Function<String,String> read;
     private List<File> nodes=Collections.emptyList();
@@ -27,17 +32,21 @@ final class PowerInputs {
         }
         nodes=new ArrayList<>(selected);nextScan=System.nanoTime()+60000000000L;
     }
-    synchronized boolean online(){
+    synchronized Result online(Supplier<Boolean> systemFallback){
         if(nextScan==0||System.nanoTime()>=nextScan)discover();
         boolean known=false,invalid=false;
         for(File node:nodes){
             if(!node.isFile())continue;
             String value=read.apply(node.getPath());
-            if("1".equals(value))return true;
+            if("1".equals(value))return new Result(true,false);
             if("0".equals(value))known=true;else invalid=true;
         }
         // Unreadable inputs are unknown, rather than evidence of unplugging.
-        if(invalid||!known)throw new IllegalStateException("充电连接状态读取失败，停止本次采样以免错误划分记录");
-        return false;
+        if(invalid||!known){
+            Boolean value=systemFallback==null?null:systemFallback.get();
+            if(value!=null)return new Result(value,true);
+            throw new IllegalStateException("充电连接状态读取失败，停止本次采样以免错误划分记录");
+        }
+        return new Result(false,false);
     }
 }

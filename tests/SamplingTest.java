@@ -1,6 +1,8 @@
 package cn.astriafr.acobattery.daemon;
 
 import java.util.concurrent.atomic.*;
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
 
 public final class SamplingTest {
     static void check(boolean value){if(!value)throw new AssertionError();}
@@ -53,8 +55,27 @@ public final class SamplingTest {
         check(!unknown.refresh(0,true)&&!unknown.known);check(unknown.accept(true,5000,false,"broadcast"));check(unknownSampling.takeScreenSample()&&unknownSampling.next==5000);
         check(ScreenState.POLL_MS==5000);
     }
-    public static void main(String[] args){
-        chargeTail();screenFallback();
-        System.out.println("Sampling: charge intervals, tail confirmation and screen-state fallback passed");
+    static void powerInputFallback()throws Exception{
+        Path root=Files.createTempDirectory("power-input-test-");
+        try{
+            Path usb=Files.createDirectory(root.resolve("usb")),node=usb.resolve("online");
+            Files.write(node,"0".getBytes(StandardCharsets.UTF_8));
+            PowerInputs inputs=new PowerInputs(root.toFile(),path->{try{return new String(Files.readAllBytes(Paths.get(path)),StandardCharsets.UTF_8).trim();}catch(Exception ignored){return "";}});
+            AtomicInteger calls=new AtomicInteger();
+            PowerInputs.Result normal=inputs.online(()->{calls.incrementAndGet();return true;});
+            check(!normal.online&&!normal.systemFallback&&calls.get()==0);
+            Files.write(node,"1".getBytes(StandardCharsets.UTF_8));normal=inputs.online(()->{calls.incrementAndGet();return false;});
+            check(normal.online&&!normal.systemFallback&&calls.get()==0);
+            Files.write(node,"unknown".getBytes(StandardCharsets.UTF_8));
+            PowerInputs.Result fallback=inputs.online(()->{calls.incrementAndGet();return true;});check(fallback.online&&fallback.systemFallback);
+            fallback=inputs.online(()->false);check(!fallback.online&&fallback.systemFallback);
+            try{inputs.online(()->null);throw new AssertionError("Unknown connection accepted");}catch(IllegalStateException expected){}
+            Files.delete(node);fallback=inputs.online(()->true);check(fallback.online&&fallback.systemFallback);
+            Files.write(node,"0".getBytes(StandardCharsets.UTF_8));normal=inputs.online(()->true);check(!normal.online&&!normal.systemFallback);
+        }finally{try(java.util.stream.Stream<Path> files=Files.walk(root)){for(Path file:(Iterable<Path>)files.sorted(java.util.Comparator.reverseOrder())::iterator)Files.delete(file);}}
+    }
+    public static void main(String[] args)throws Exception{
+        chargeTail();screenFallback();powerInputFallback();
+        System.out.println("Sampling: charge intervals, tail confirmation, screen and power input fallback passed");
     }
 }

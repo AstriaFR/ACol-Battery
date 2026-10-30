@@ -130,6 +130,8 @@ public final class StartupFeedback {
             out.add(new Notice("屏幕监听受限",data.has("screenStateKnown")&&!data.optBoolean("screenStateKnown")?"暂时无法确认亮息屏状态，将保留已知状态并继续尝试读取。":"已改用广播和状态检测，亮息屏切换的识别可能延迟。"));
         else if(!data.optString("screenError").isEmpty())out.add(new Notice("屏幕通知受限","亮息屏切换的识别可能延迟。"));
         if(data.has("cutoffAvailable")&&!data.optBoolean("cutoffAvailable"))out.add(new Notice("截止电压调整不可用","未找到所需接口，已跳过此功能，其他功能可继续使用。"));
+        if(data.optBoolean("powerInputFallback")||(reading!=null&&"android".equals(reading.optString("onlineSource"))))
+            out.add(new Notice("充电连接状态使用系统数据","底层供电节点无法可靠读取，已改用 Android 电池广播判断充电器连接状态。"));
         int cells=data.has("cellCount")?data.optInt("cellCount"):reading==null?-1:reading.optInt("cellCount",-1);
         if(cells==0)out.add(new Notice("电芯数量待确认","将继续自动识别，部分电流和功率数据暂不可用。"));
         if(reading!=null){

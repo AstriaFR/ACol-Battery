@@ -41,6 +41,9 @@ public final class StartupDiagnosticsTest {
     static void feedback()throws Exception{
         check(StartupFeedback.notices(null,healthy()).isEmpty(),"Healthy startup must not prompt");
         check(StartupFeedback.notices(null,new JSONObject()).isEmpty(),"Missing optional checks must not invent failures");
+        JSONObject powerFallback=healthy();powerFallback.getJSONObject("reading").put("onlineSource","android");
+        check(find(StartupFeedback.notices(null,powerFallback),"充电连接状态使用系统数据").text.contains("电池广播"),"Power input fallback must be explained");
+        check(find(StartupFeedback.notices(new JSONObject().put("powerInputFallback",true),healthy()),"充电连接状态使用系统数据")!=null,"Probe fallback must be reported");
         JSONObject capacityFallback=healthy();capacityFallback.getJSONObject("reading").put("rmSource","android");
         List<StartupFeedback.Notice> capacityNotices=StartupFeedback.notices(null,capacityFallback);
         check(capacityNotices.size()==1&&find(capacityNotices,"剩余容量使用系统数据").text.contains("CHARGE_COUNTER"),"Capacity fallback must appear in the startup notice");
