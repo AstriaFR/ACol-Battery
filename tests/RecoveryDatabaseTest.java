@@ -66,6 +66,11 @@ public final class RecoveryDatabaseTest {
         first.state=1;first.begin(reading(10000,5000,true));first.finish("full_tail_confirmed");release(first);
         Main next=open(dir,"boot-a");Core.Reading r=reading(11000,5000,true);r.full=true;next.recover(r);
         check(next.session<0);check(next.state==2);check(value(next,"SELECT COUNT(*) FROM sessions WHERE active=1")==0);release(next);
+        File logDir=Files.createTempDirectory("acol-recovery-charge-log-").toFile();Main logged=open(logDir,"boot-a");
+        logged.state=1;Core.Reading observed=reading(10000,5000,true);Core.applyTail(observed,4490,0,1);
+        logged.begin(observed);long loggedId=logged.session;check(logged.fullGate.vendorLogSeen);release(logged);
+        Main restored=open(logDir,"boot-a");restored.recover(reading(12000,5001,true));
+        check(restored.session==loggedId&&restored.fullGate.vendorLogSeen&&restored.fullGate.electricalDuration()==600000);release(restored);
     }
     static void damagedCheckpointAndRollback()throws Exception {
         File dir=Files.createTempDirectory("acol-recovery-rollback-").toFile();Main first=open(dir,"boot-a");

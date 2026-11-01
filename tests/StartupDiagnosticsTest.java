@@ -12,7 +12,7 @@ public final class StartupDiagnosticsTest {
         return new JSONObject().put("capabilities",31).put("screenListener",true).put("screenFallback",false)
             .put("screenStateKnown",true).put("cutoffAvailable",true).put("cellCount",2)
             .put("reading",new JSONObject().put("rm",4500).put("pct",80).put("cellCount",2)
-                .put("voltage",4000).put("current",-500).put("temp",32).put("tailAvailable",true).put("voltageSource","bcc").put("currentSource","bcc"));
+                .put("voltage",4000).put("current",-500).put("temp",32).put("voltageSource","bcc").put("currentSource","bcc"));
     }
     static StartupFeedback.Notice find(List<StartupFeedback.Notice> list,String title){for(StartupFeedback.Notice n:list)if(n.title.equals(title))return n;throw new AssertionError(title);}
     static void failureLifecycle()throws Exception{
@@ -41,17 +41,10 @@ public final class StartupDiagnosticsTest {
     static void feedback()throws Exception{
         check(StartupFeedback.notices(null,healthy()).isEmpty(),"Healthy startup must not prompt");
         check(StartupFeedback.notices(null,new JSONObject()).isEmpty(),"Missing optional checks must not invent failures");
-        JSONObject noTail=healthy();noTail.getJSONObject("reading").put("tailAvailable",false).put("fv",JSONObject.NULL);
-        check(find(StartupFeedback.notices(null,noTail),"尾充识别受限").text.contains("充电采样继续"),"Missing tail data must be an explicit nonfatal limitation");
-        check(StartupFeedback.downgradeReport(null,noTail).contains("tailAvailable：false"),"Tail capability must appear in the technical report");
-        check(StartupFeedback.notices(noTail,healthy()).isEmpty(),"Recovered tail inputs must override a limited probe");
-        for(String source:new String[]{"sysfs_status","android_status"}){
-            JSONObject fallback=healthy();fallback.getJSONObject("reading").put("tailSource",source);
-            check(find(StartupFeedback.notices(null,fallback),"尾充识别使用回退数据").text.contains(source.equals("sysfs_status")?"底层":"Android"),"Selected tail fallback must appear in the unified notice");
-            check(StartupFeedback.downgradeReport(null,fallback).contains(source),"Tail source must appear in the technical report");
-            fallback.getJSONObject("reading").put("tailAvailable",false);
-            check(find(StartupFeedback.notices(null,fallback),"尾充识别受限")!=null,"A status signal alone cannot replace missing target voltage");
-        }
+        JSONObject optionalLog=healthy();optionalLog.getJSONObject("reading").put("fv",0).put("driverFull",false).put("enabled",true).put("online",false);
+        check(StartupFeedback.notices(null,optionalLog).isEmpty(),"Idle charging log values must not cause a startup warning");
+        optionalLog.getJSONObject("reading").put("fv",JSONObject.NULL).put("online",true);
+        check(StartupFeedback.notices(null,optionalLog).isEmpty(),"An absent optional vendor log must not cause a startup warning");
         check(find(StartupFeedback.notices(null,healthy().put("usageError","服务尚未就绪")),"应用统计暂不可用").text.contains("继续重试"),"Optional usage failures must be reported without disabling recording");
         JSONObject unknownPower=healthy();unknownPower.getJSONObject("reading").put("onlineKnown",false).put("online",JSONObject.NULL).put("onlineSource","unavailable");
         check(find(StartupFeedback.notices(null,unknownPower),"充电连接状态待确认").text.contains("自动重试"),"Unknown connection must pause without fatal initialization");

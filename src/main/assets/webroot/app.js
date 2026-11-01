@@ -468,7 +468,6 @@ function renderStatus(s){
   if(s.screenFallback)warnings.push('屏幕监听不可用，已启用状态回退检测，亮息屏切换可能延迟。');
   else if(s.screenError)warnings.push('屏幕事件通知受限，亮息屏切换可能延迟。');
   if(s.screenStateKnown===false)warnings.push('屏幕状态暂不可用，等待状态恢复。');
-  if(s.state===1&&r.tailAvailable===false)warnings.push('尾充识别暂不可用，充电采样继续，拔线或停止记录时结束。');
   $('warning').textContent=warnings.join('\n');
 }
 function renderRecords(){

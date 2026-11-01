@@ -108,7 +108,7 @@ public final class StartupFeedback {
         for(String key:new String[]{"androidSdk","nativeCapabilities","capabilities","cutoffAvailable","cellCount","recordingProblem","screenListener","screenFallback","screenStateKnown","screenStateSource","screenError","usageError","error","powerInputDiagnostics","diagnosticsError"})
             if(data.has(key))out.append(key).append("：").append(data.opt(key)).append('\n');
         JSONObject reading=data.optJSONObject("reading");
-        if(reading!=null)for(String key:new String[]{"onlineKnown","online","onlineSource","rmSource","rm","pct","voltageSource","currentSource","tailAvailable","tailSource","fv","driverFull","enabled","chargeEnabledKnown","source","error"})
+        if(reading!=null)for(String key:new String[]{"onlineKnown","online","onlineSource","rmSource","rm","pct","voltageSource","currentSource","fv","driverFull","enabled","source","error"})
             if(reading.has(key))out.append("reading.").append(key).append("：").append(reading.opt(key)).append('\n');
         if(!data.optString("nativeDiagnostics").isEmpty())out.append(data.optString("nativeDiagnostics")).append('\n');
         Object logs=data.opt("fallbackDiagnostics");
@@ -138,9 +138,6 @@ public final class StartupFeedback {
         int cells=data.has("cellCount")?data.optInt("cellCount"):reading==null?-1:reading.optInt("cellCount",-1);
         if(cells==0)out.add(new Notice("电芯数量待确认","将继续自动识别，部分电流和功率数据暂不可用。"));
         if(reading!=null){
-            String tailSource=reading.optString("tailSource");
-            if(Arrays.asList("sysfs_status","android_status").contains(tailSource))out.add(new Notice("尾充识别使用回退数据",tailSource.equals("sysfs_status")?"厂商充电日志数据不完整，已改用底层电池充电状态，继续结合电流、电压和容量稳定性确认。":"厂商充电日志和底层状态不可用，已改用 Android 充电状态，继续结合电流、电压和容量稳定性确认。"));
-            if(reading.has("tailAvailable")&&!reading.optBoolean("tailAvailable"))out.add(new Notice("尾充识别受限","各级接口仍未提供完整的判定数据。充电采样继续，暂不自动判断尾充完成；拔线或停止记录时正常结束，接口恢复后自动恢复识别。"));
             if("android".equals(reading.optString("rmSource")))out.add(new Notice("剩余容量使用系统数据","未读到 battery_rm，已改用 Android 剩余容量（CHARGE_COUNTER），用于容量变化、耗电统计和剩余能量估算。"));
             boolean voltage="android".equals(reading.optString("voltageSource")),current="android".equals(reading.optString("currentSource"));
             if(voltage||current)out.add(new Notice("部分读数使用系统数据",(voltage&&current?"电压、电流":voltage?"电压":"电流")+"未取得优先底层读数，已使用 Android 系统数据。"));

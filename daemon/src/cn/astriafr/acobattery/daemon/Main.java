@@ -235,7 +235,6 @@ public final class Main {
         loadCellProfile();
         powerIndicator=new PowerIndicator(ctx,"1".equals(runtimeValue("power_indicator")));
         if(reset)Files.delete(resetFlag.toPath());
-        header=read(BAT+"battery_log_head").split(",",-1);
         performance=new PerformanceCollector((id,start,row,meta)->{
             synchronized(mutex){
                 if(stopping||!recordingEnabled||!fastEnabled||gameTrack.session!=id||gameTrack.startElapsed!=start)return;
@@ -494,7 +493,6 @@ public final class Main {
     }
     static double num(String s) {try{return Double.parseDouble(s.trim());}catch(Exception e){return Double.NaN;}}
     static Double nullable(double v){return Core.finite(v)?v:null;}
-    static double field(Map<String,String> m,String k) {return num(m.getOrDefault(k,""));}
     static PowerInputs.Result online(Context ctx) {
         PowerInputs.Result result=POWER_INPUTS.resolve(()->SYSTEM_POWER.read(SystemClock.elapsedRealtime(),()->{
             if(ctx==null)return null;
@@ -519,12 +517,21 @@ public final class Main {
     }
     void powerUnavailable(long now){
         powerError="充电连接状态暂不可用，采样已暂停，后台正在重试。";powerRetryAt=now+5000;powerGap=true;
-        candidate=null;candidateAt=-1;fullGate.reset();recoveryBoundary=true;gameTrack.powerGap=true;gameTrack.recoveryBoundary=true;
+        candidate=null;candidateAt=-1;fullGate.interrupt();recoveryBoundary=true;gameTrack.powerGap=true;gameTrack.recoveryBoundary=true;
     }
     static Core.Reading readHardware(String[] knownHeader) {
         return readHardware(null,knownHeader,Core.detectCellCount(read(BAT+"aging_ffc_data")));
     }
-    Core.Reading hardwareReading(String[] knownHeader){resolveCellProfile();return readHardware(ctx,knownHeader,cellCount);}
+    Core.Reading hardwareReading(String[] knownHeader){
+        resolveCellProfile();Core.Reading r=readHardware(ctx,knownHeader,cellCount,updated->header=updated);
+        // A successful foreground read also belongs to this charging record,
+        // even when it falls between two scheduled recorder samples.
+        if(state==1&&session>0&&r.onlineKnown&&r.online&&r.vendorLogRead&&!fullGate.vendorLogSeen){
+            db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('charge_log_session',?)",new Object[]{""+session});
+            fullGate.observe(r);
+        }
+        return r;
+    }
     Core.Reading powerDisplayReading(){
         Core.Reading fresh=latest;if(uiReading!=null&&(fresh==null||uiReading.elapsed>fresh.elapsed))fresh=uiReading;
         if(fresh!=null&&SystemClock.elapsedRealtime()-fresh.elapsed<=1000)return fresh;
@@ -577,53 +584,17 @@ public final class Main {
             else FallbackDiagnostics.record("Android CHARGE_COUNTER","接口未提供有效剩余容量；返回值="+counter);
         }catch(Exception e){FallbackDiagnostics.record("Android CHARGE_COUNTER",e);System.err.println("Android battery remaining capacity unavailable: "+e);}
     }
-    static int androidBatteryStatus(Context ctx)throws IOException {
-        if(ctx==null)throw new IOException("Android 电池服务不可用");
-        try{
-            BatteryManager manager=ctx.getSystemService(BatteryManager.class);
-            if(manager==null)throw new IOException("BatteryManager 服务不可用");
-            int status=manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS);
-            if(TailInputs.validStatus(status))return status;
-            throw new IOException("BATTERY_PROPERTY_STATUS 未返回有效状态："+status);
-        }catch(Exception error){FallbackDiagnostics.record("Android 充满状态属性",error);}
-        try{
-            Intent battery=ctx.registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            if(battery==null||!battery.hasExtra(BatteryManager.EXTRA_STATUS))throw new IOException("电池广播未提供 status");
-            int status=battery.getIntExtra(BatteryManager.EXTRA_STATUS,BatteryManager.BATTERY_STATUS_UNKNOWN);
-            if(TailInputs.validStatus(status))return status;
-            throw new IOException("电池广播 status 无效："+status);
-        }catch(Exception error){FallbackDiagnostics.record("Android 充满状态广播",error);}
-        throw new IOException("Android 电池属性和广播均未提供有效充电状态");
-    }
     static Core.Reading readHardware(Context ctx,String[] knownHeader,int cells) {
+        return readHardware(ctx,knownHeader,cells,null);
+    }
+    static Core.Reading readHardware(Context ctx,String[] knownHeader,int cells,java.util.function.Consumer<String[]> rememberHeader) {
         Core.Reading r=readGauge(ctx,cells);
-        String[] head=knownHeader==null?read(BAT+"battery_log_head").split(",",-1):knownHeader;
-        String[] values=read(BAT+"battery_log_content").split(",",-1);
-        Map<String,String> m=new HashMap<>();
-        if(values.length==head.length)for(int i=0;i<head.length;i++)m.put(head[i].trim(),values[i].trim());
-        if(knownHeader!=null&&(!m.containsKey("fv_mv")||!m.containsKey("batt_full")||!m.containsKey("mmi_chg"))){
-            // A header captured before the driver was ready must not disable tail detection forever.
-            head=read(BAT+"battery_log_head").split(",",-1);m.clear();
-            if(values.length==head.length)for(int i=0;i<head.length;i++)m.put(head[i].trim(),values[i].trim());
-        }
         readRemainingCapacity(ctx,r);r.pct=num(diagnosticRead(PS+"battery/capacity"));
         if(!Core.finite(r.pct)||r.pct<0||r.pct>100)FallbackDiagnostics.record("系统电量校验","capacity 未提供 0–100 范围内的电量");
         if(cells==0)FallbackDiagnostics.record("电芯数量识别","aging_ffc_data="+diagnosticRead(BAT+"aging_ffc_data"));
-        Core.applyTail(r,field(m,"fv_mv"),field(m,"batt_full"),field(m,"mmi_chg"));
-        if(!r.tailAvailable){
-            TailInputs.Reader reader=path->new String(Files.readAllBytes(Paths.get(path)),StandardCharsets.UTF_8);
-            TailInputs.Result status=TailInputs.resolve(PS,reader,()->androidBatteryStatus(ctx));
-            StringBuilder diagnostics=new StringBuilder("厂商充电日志数据不完整；fv_mv="+m.get("fv_mv")+"；batt_full="+m.get("batt_full")+"；mmi_chg="+m.get("mmi_chg")+"\n").append(status.diagnostics);
-            if(status.known()){
-                double fv=r.fv;
-                if(!Core.finite(fv)||fv<=0)fv=TailInputs.targetVoltage(PS,reader,cells,diagnostics);
-                Core.applyTailFallback(r,fv,status.status,status.source);
-            }
-            diagnostics.append("判定来源：").append(r.tailSource).append("；目标电压 mV：").append(r.fv)
-                .append(r.tailAvailable?"；继续联合确认尾充。":"；必要读数仍不足，充电采样继续，暂不自动判断尾充完成。");
-            FallbackDiagnostics.record("尾充识别回退 "+r.tailSource+(r.tailAvailable?"":" 受限"),diagnostics.toString());
-        }
         PowerInputs.Result power=online(ctx);r.online=power.online;r.onlineKnown=power.known;r.onlineSource=power.source;
+        String[] chargeHeader=ChargingLog.apply(r,knownHeader,BAT,path->new String(Files.readAllBytes(Paths.get(path)),StandardCharsets.UTF_8));
+        if(rememberHeader!=null&&chargeHeader!=null)rememberHeader.accept(chargeHeader);
         r.source="cells="+cells+"; voltage="+r.voltageSource+"; current="+r.currentSource+"; remaining="+r.rmSource+"; root capacity";
         if(!r.onlineKnown)r.error="充电连接状态暂不可用，记录采样等待重试";
         else if(!r.valid())r.error="剩余容量 / 系统电量读取失败";
@@ -673,7 +644,7 @@ public final class Main {
         o.put("voltageSource",r.voltageSource).put("currentSource",r.currentSource).put("rmSource",r.rmSource).put("onlineSource",r.onlineSource);
         o.put("vmax",nullable(r.vmax)).put("vmin",nullable(r.vmin)).put("power",nullable(r.power()));
         o.put("cell1",nullable(r.cell1)).put("cell2",nullable(r.cell2));
-        o.put("onlineKnown",r.onlineKnown).put("online",r.onlineKnown?r.online:JSONObject.NULL).put("driverFull",r.full).put("enabled",r.enabled).put("chargeEnabledKnown",r.chargeEnabledKnown).put("fv",nullable(r.fv)).put("tailAvailable",r.tailAvailable).put("tailSource",r.tailSource);
+        o.put("onlineKnown",r.onlineKnown).put("online",r.onlineKnown?r.online:JSONObject.NULL).put("driverFull",r.full).put("enabled",r.enabled).put("fv",nullable(r.fv));
         o.put("temp",nullable(r.temp)).put("source",r.source).put("error",r.error);return o;
     }
 
@@ -924,6 +895,7 @@ public final class Main {
                         Core.Reading saved=lastSample(id,c.getLong(3),c.getLong(5));
                         if(saved!=null&&saved.elapsed>=c.getLong(3)&&saved.elapsed<=c.getLong(4)&&saved.elapsed<=r.elapsed){
                             session=id;startElapsed=c.getLong(3);startWall=c.getLong(5);clockAdjusted=c.getInt(7)!=0;state=gameContext?0:r.online?1:0;
+                            if(state==1)fullGate.vendorLogSeen=(""+id).equals(runtimeValue("charge_log_session"));
                             if(progress!=null&&progress.optLong("session",-1)==id&&boot.equals(progress.optString("boot"))){
                                 Core.Reading checkpoint=restoreReading(progress.optJSONObject("previous"));
                                 if(checkpoint!=null&&checkpoint.elapsed==saved.elapsed&&checkpoint.elapsed<=r.elapsed)saved=checkpoint;
@@ -956,7 +928,7 @@ public final class Main {
         }finally{db.endTransaction();}
         if(session>=0)return;
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='full_tail_boot'",null)) {
-            if(!gameContext&&c.moveToFirst()&&r.online&&r.full&&boot.equals(c.getString(0))){state=2;return;}
+            if(!gameContext&&c.moveToFirst()&&r.online&&(r.full||Core.FullGate.electricalCandidate(r))&&boot.equals(c.getString(0))){state=2;return;}
         }
         state=gameContext?0:r.online?1:0;begin(r);
     }
@@ -1058,6 +1030,8 @@ public final class Main {
         try {
             db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),nullable(r.temp),r.online?1:0});
+            if(state==1&&r.online&&r.vendorLogRead&&!fullGate.vendorLogSeen)
+                db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('charge_log_session',?)",new Object[]{""+session});
             if(powerBoundary){
                 // Settle only the old side of the boundary. Charging RM gains
                 // must neither become app drain nor suppress later discharge.
@@ -1074,6 +1048,7 @@ public final class Main {
             if(!fast||previous==null||resumed||powerBoundary)checkpoint(r);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
+        if(state==1)fullGate.observe(r);
         updateRanges(r,recordedPower);
         previous=r;recoveryBoundary=false;powerGap=false;sampling.expected=interval();
         if(fast)samplePerformance(r.elapsed);

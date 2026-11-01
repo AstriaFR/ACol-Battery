@@ -1,7 +1,14 @@
+"""从项目字标字体生成 root 功耗显示所用的字形路径。"""
+import argparse
 from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from pathlib import Path
-font=TTFont('ACol-Battery/src/main/assets/webroot/assets/acol-brand.ttf')
+app=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--font',type=Path,default=app/'src/main/assets/webroot/assets/acol-brand.ttf')
+parser.add_argument('--output',type=Path,default=app/'daemon/src/cn/astriafr/acobattery/daemon/PowerGlyphs.java')
+options=parser.parse_args()
+font=TTFont(options.font)
 glyphs=font.getGlyphSet(); cmap=font.getBestCmap(); upem=font['head'].unitsPerEm
 class Pen(BasePen):
  def __init__(self): super().__init__(glyphs); self.ops=[]
@@ -20,5 +27,5 @@ for i,ch in enumerate(chars):
   lines.append(f'        p{i}.{method}({args});')
  lines.append(f'        PATHS[{i}]=p{i}; ADVANCES[{i}]={font["hmtx"][name][0]}f;')
 lines += ['    }','    private static int index(char c){return c>=\'0\'&&c<=\'9\'?c-\'0\':c==\'.\'?10:c==\'W\'?11:-1;}', '    static float width(String text){float result=0;for(int i=0;i<text.length();i++){int n=index(text.charAt(i));result+=n<0?EM*.5f:ADVANCES[n];}return result;}', '    static void draw(Canvas canvas,Paint paint,String text){for(int i=0;i<text.length();i++){int n=index(text.charAt(i));if(n<0){canvas.drawLine(EM*.08f,EM*.35f,EM*.42f,EM*.35f,paint);canvas.translate(EM*.5f,0);}else{canvas.drawPath(PATHS[n],paint);canvas.translate(ADVANCES[n],0);}}}', '}']
-Path('ACol-Battery/daemon/src/cn/astriafr/acobattery/daemon/PowerGlyphs.java').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+options.output.write_text('\n'.join(lines)+'\n',encoding='utf-8')
 print('glyphs',chars,'upem',upem,'ascent/descent',font['hhea'].ascent,font['hhea'].descent)

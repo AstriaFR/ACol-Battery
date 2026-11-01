@@ -32,13 +32,13 @@ public final class SamplingTest {
         check(changing.update(tail(300000),10000)); // Editing the interval need not reset the tail.
         for(double[] missing:new double[][]{{Double.NaN,1,1},{4450,Double.NaN,1},{4450,1,Double.NaN},{4450,2,1},{4450,1,-1}}){
             Core.FullGate limited=new Core.FullGate();Core.Reading r=tail(0);
-            Core.applyTail(r,missing[0],missing[1],missing[2]);check(!r.tailAvailable&&r.valid());
+            Core.applyTail(r,missing[0],missing[1],missing[2]);check(r.valid());
             for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!limited.update(r,10000));}
             // Valid live readings recover detection without inventing a completed tail.
             for(long t=610000;t<=910000;t+=10000){r=tail(t);check(limited.update(r,10000)==(t==910000));}
         }
         Core.Reading notFull=tail(0);Core.applyTail(notFull,4450,0,0);
-        check(notFull.tailAvailable&&!new Core.FullGate().update(notFull));
+        check(!new Core.FullGate().update(notFull));
     }
     static void screenFallback(){
         Core.Sampling sampling=new Core.Sampling();sampling.screenOnMs=180000;sampling.screenOffMs=900000;
@@ -64,41 +64,75 @@ public final class SamplingTest {
         check(!unknown.refresh(0,true)&&!unknown.known);check(unknown.accept(true,5000,false,"broadcast"));check(unknownSampling.takeScreenSample()&&unknownSampling.next==5000);
         check(ScreenState.POLL_MS==5000);
     }
-    static void tailFallback(){
-        AtomicInteger androidReads=new AtomicInteger();
-        TailInputs.Result status=TailInputs.resolve("/power/",path->"Full",()->{androidReads.incrementAndGet();return 2;});
-        check(status.known()&&status.status==5&&status.source.equals("sysfs_status")&&androidReads.get()==0);
-        status=TailInputs.resolve("/power/",path->"Charging",()->{throw new AssertionError("A valid non-Full root state must stop fallback");});
-        check(status.status==2);
-        status=TailInputs.resolve("/power/",path->path.contains("battery/")?"Unknown":"Full",()->{throw new AssertionError("BMS state was available");});
-        check(status.status==5&&status.source.equals("sysfs_status"));
-        status=TailInputs.resolve("/power/",path->{throw new java.io.IOException("unreadable");},()->{androidReads.incrementAndGet();return 5;});
-        check(status.status==5&&status.source.equals("android_status")&&androidReads.get()==1&&status.diagnostics.contains("unreadable"));
-        check(!TailInputs.resolve("/power/",path->"Unknown",()->1).known());
-        check(!TailInputs.resolve("/power/",path->"bad",()->{throw new SecurityException("denied");}).known());
-        for(String value:new String[]{"Full","Charging","Discharging","Not charging","Not_charging"})check(TailInputs.validStatus(TailInputs.parseStatus(value)));
-        for(String value:new String[]{"Unknown","100","Trickle","",null})check(!TailInputs.validStatus(TailInputs.parseStatus(value)));
-        check(TailInputs.targetVoltage("/power/",path->"4450000",1,new StringBuilder())==4450);
-        check(TailInputs.targetVoltage("/power/",path->"8900000",2,new StringBuilder())==4450);
-        check(!Core.finite(TailInputs.targetVoltage("/power/",path->"8900000",1,new StringBuilder())));
-        check(!Core.finite(TailInputs.targetVoltage("/power/",path->"4450000",0,new StringBuilder())));
-        for(String source:new String[]{"sysfs_status","android_status"}){
-            Core.FullGate gate=new Core.FullGate();
-            for(long t=0;t<=300000;t+=10000){
-                Core.Reading r=tail(t);r.pct=99;Core.applyTail(r,4450,Double.NaN,Double.NaN);
-                Core.applyTailFallback(r,4450,5,source);
-                check(r.tailAvailable&&!r.chargeEnabledKnown&&gate.update(r,10000)==(t==300000));
-            }
-            Core.Reading unavailable=tail(310000);Core.applyTail(unavailable,Double.NaN,Double.NaN,Double.NaN);
-            Core.applyTailFallback(unavailable,Double.NaN,5,source);check(!unavailable.tailAvailable&&!gate.update(unavailable,10000));
-            check(gate.progress(310000)==0);
-            Core.Reading paused=tail(0);Core.applyTail(paused,4450,Double.NaN,0);Core.applyTailFallback(paused,4450,5,source);
-            check(paused.chargeEnabledKnown&&!new Core.FullGate().update(paused));
-            Core.Reading charging=tail(0);Core.applyTailFallback(charging,4450,2,source);check(!new Core.FullGate().update(charging));
-            Core.Reading tooMuchCurrent=tail(0);tooMuchCurrent.current=-1000;Core.applyTailFallback(tooMuchCurrent,4450,5,source);
-            check(!new Core.FullGate().update(tooMuchCurrent));
+    static Core.Reading electrical(long elapsed){
+        Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.online=true;
+        r.cellCount=2;r.vmin=4390;r.vmax=4430;r.current=-24;return r;
+    }
+    static void electricalTail(){
+        for(int seconds=1;seconds<=10;seconds++){
+            Core.FullGate gate=new Core.FullGate();long step=seconds*1000L,finish=(300000+step-1)/step*step;
+            for(long t=0;t<=finish;t+=step)check(gate.update(electrical(t),step)==(t>=300000));
         }
-        Core.Reading original=tail(0);check(original.tailAvailable&&original.tailSource.equals("oplus_log"));
+        Core.Reading r=electrical(0);check(!r.valid()&&Core.FullGate.electricalCandidate(r));
+        r.vmax=4410;check(!Core.FullGate.electricalCandidate(r)); // Mean exactly 4.4 V is excluded.
+        r.vmax=4430;
+        for(double current:new double[]{-25,25,Double.NaN,Double.POSITIVE_INFINITY}){r.current=current;check(!Core.FullGate.electricalCandidate(r));}
+        for(double current:new double[]{-24.999,24.999,0}){r.current=current;check(Core.FullGate.electricalCandidate(r));}
+        r.cellCount=0;check(!Core.FullGate.electricalCandidate(r));r.cellCount=1;r.vmin=4401;check(Core.FullGate.electricalCandidate(r));
+        r.current=50;check(!Core.FullGate.electricalCandidate(r));r.current=-50;check(!Core.FullGate.electricalCandidate(r));
+        r.current=49.999;check(Core.FullGate.electricalCandidate(r));r.current=-49.999;check(Core.FullGate.electricalCandidate(r));
+        r.online=false;check(!Core.FullGate.electricalCandidate(r));r.online=true;r.onlineKnown=false;check(!Core.FullGate.electricalCandidate(r));
+        Core.FullGate gate=new Core.FullGate();
+        for(long t=0;t<=290000;t+=10000)check(!gate.update(electrical(t),10000));
+        check(!gate.update(electrical(310000),10000)&&gate.progress(310000)==0); // A missing sample restarts the five minutes.
+        for(long t=320000;t<=610000;t+=10000)check(gate.update(electrical(t),10000)==(t==610000));
+        r=electrical(620000);r.online=false;check(!gate.update(r,10000)&&gate.progress(620000)==0);
+        gate=new Core.FullGate();
+        for(long t=0;t<=150000;t+=10000)check(!gate.update(tail(t),10000));
+        for(long t=160000;t<=760000;t+=10000)check(gate.update(electrical(t),10000)==(t==760000)); // Vendor log seen: the independent path now needs ten minutes.
+        gate=new Core.FullGate();
+        for(long t=0;t<=300000;t+=10000){r=electrical(t);Core.applyTail(r,4450,1,1);r.rm=5000+t/1000;r.pct=Double.NaN;r.temp=Double.NaN;check(gate.update(r,10000)==(t==300000));}
+        gate.reset();check(gate.progress(300000)==0&&!gate.update(electrical(300000),10000));
+        check(!gate.update(electrical(290000),10000)&&gate.progress(290000)==0); // Monotonic clock rewind also restarts.
+        for(int seconds=1;seconds<=10;seconds++){
+            gate=new Core.FullGate();long step=seconds*1000L,finish=(600000+step-1)/step*step;
+            for(long t=0;t<=finish;t+=step){
+                r=electrical(t);if(t==0)Core.applyTail(r,0,0,1); // A valid idle value still proves the vendor log was read.
+                check(gate.update(r,step)==(t>=600000));
+            }
+            check(gate.vendorLogSeen&&gate.electricalDuration()==600000);
+            gate.interrupt();check(gate.vendorLogSeen&&gate.electricalDuration()==600000&&gate.progress(finish)==0);
+            gate.reset();check(!gate.vendorLogSeen&&gate.electricalDuration()==300000);
+        }
+        gate=new Core.FullGate();
+        for(long t=0;t<=600000;t+=10000){
+            r=electrical(t);if(t==240000)Core.applyTail(r,4490,0,1);
+            check(gate.update(r,10000)==(t==600000));
+            if(t==300000)check(gate.progress(t)==.5); // A successful late read extends the same continuous window.
+        }
+        for(int cells:new int[]{1,2}){
+            gate=new Core.FullGate();r=tail(0);r.cellCount=cells;r.current=cells==2?25:50;
+            for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!gate.update(r,10000));} // Both rules exclude exactly 50 mA after compensation.
+        }
+    }
+    static void optionalChargingLog(){
+        Core.Reading r=new Core.Reading();r.online=false;
+        check(ChargingLog.apply(r,null,"/vendor/",path->{throw new AssertionError("Read while unplugged");})==null);
+        r.online=true;r.onlineKnown=false;
+        check(ChargingLog.apply(r,null,"/vendor/",path->{throw new AssertionError("Read while power is unknown");})==null);
+        r.onlineKnown=true;AtomicInteger headerReads=new AtomicInteger();
+        ChargingLog.Reader reader=path->{
+            if(path.endsWith("battery_log_head")){headerReads.incrementAndGet();return ",fv_mv,batt_full,mmi_chg";}
+            if(path.endsWith("battery_log_content"))return ",4490,1,1";
+            throw new AssertionError("Unexpected tail interface: "+path);
+        };
+        String[] header=ChargingLog.apply(r,null,"/vendor/",reader);
+        check(r.full&&r.enabled&&r.vendorLogRead&&r.fv==4490&&headerReads.get()==1);
+        ChargingLog.apply(r,header,"/vendor/",reader);check(headerReads.get()==1);
+        ChargingLog.apply(r,new String[]{"stale"},"/vendor/",reader);check(r.full&&headerReads.get()==2);
+        r=electrical(0);ChargingLog.apply(r,null,"/vendor/",path->{throw new java.io.IOException("missing vendor interface");});
+        check(!r.full&&!r.enabled&&!r.vendorLogRead&&!Core.finite(r.fv)&&r.error.isEmpty());
+        Core.FullGate gate=new Core.FullGate();for(long t=0;t<=300000;t+=10000){r.elapsed=t;check(gate.update(r,10000)==(t==300000));}
     }
     static void powerInputFallback()throws Exception{
         Path root=Files.createTempDirectory("power-input-test-");
@@ -140,7 +174,7 @@ public final class SamplingTest {
         reader.invalidate();value=reader.read(1002,()->null,()->{throw new java.io.IOException("timeout");});check(!value.known&&value.diagnostics.contains("timeout"));
     }
     public static void main(String[] args)throws Exception{
-        chargeTail();tailFallback();screenFallback();powerInputFallback();systemPowerFallback();
-        System.out.println("Sampling: charge intervals, ordered tail fallbacks, sustained confirmation, screen and power input fallback passed");
+        chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();
+        System.out.println("Sampling: independent tail rules, exact boundaries, optional charging-only logs, screen and power input fallback passed");
     }
 }

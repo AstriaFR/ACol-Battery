@@ -12,9 +12,7 @@ public final class Core {
         public int cellCount=2;
         public String voltageSource="",currentSource="",rmSource="",onlineSource="";
         public boolean online, full, enabled;
-        public boolean tailAvailable;
-        public boolean chargeEnabledKnown;
-        public String tailSource="unavailable";
+        public boolean vendorLogRead;
         public boolean onlineKnown=true;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
@@ -136,42 +134,55 @@ public final class Core {
         public void reset(){last=-1;next=0;}
     }
 
-    /** A false driver flag is valid; a missing or malformed flag is not. */
+    /** Optional vendor data. Missing values silently leave this path unconfirmed. */
     public static void applyTail(Reading r,double fv,double full,double enabled) {
         r.fv=fv;r.full=full==1;r.enabled=enabled==1;
-        r.chargeEnabledKnown=enabled==0||enabled==1;
-        r.tailAvailable=finite(fv)&&fv>0&&(full==0||full==1)&&r.chargeEnabledKnown;
-        r.tailSource=r.tailAvailable?"oplus_log":"unavailable";
-    }
-    public static void applyTailFallback(Reading r,double fv,int status,String source) {
-        r.fv=fv;r.full=status==5;r.tailSource=source;
-        r.tailAvailable=status>=2&&status<=5&&finite(fv)&&fv>0;
+        r.vendorLogRead=finite(fv)&&fv>=0&&(full==0||full==1)&&(enabled==0||enabled==1);
     }
 
     public static final class FullGate {
         public long since = -1, last = -1;
-        private double minRm, maxRm;
-        public void reset() { since = last = -1; }
+        private long electricalSince=-1,electricalLast=-1;
+        public boolean vendorLogSeen;
+        public void interrupt() { since=last=electricalSince=electricalLast=-1; }
+        public void reset() { interrupt();vendorLogSeen=false; }
+        public void observe(Reading r) { if(r.onlineKnown&&r.online&&r.vendorLogRead)vendorLogSeen=true; }
+        public long electricalDuration() { return vendorLogSeen?600000:300000; }
+        private static boolean smallCurrent(Reading r) {
+            return (r.cellCount==1||r.cellCount==2)&&finite(r.compensatedCurrent())&&Math.abs(r.compensatedCurrent())<50;
+        }
+        public static boolean electricalCandidate(Reading r) {
+            return r.onlineKnown&&r.online&&finite(r.voltage())&&r.voltage()>4400
+                &&smallCurrent(r);
+        }
         public boolean update(Reading r) {
             return update(r,1000);
         }
         public boolean update(Reading r,long expectedMs) {
-            boolean fallback=r.tailSource.equals("sysfs_status")||r.tailSource.equals("android_status");
-            boolean tail = r.tailAvailable && r.online && r.full && (r.enabled||fallback&&!r.chargeEnabledKnown) && r.valid()
-                && finite(r.current) && r.current >= -60 && r.current <= 40
-                && finite(r.fv) && r.vmin >= Math.max(4300, r.fv - 100)
-                && r.temp >= 10 && r.temp <= 45;
-            if (!tail) { reset(); return false; }
+            observe(r);
+            boolean tail = r.onlineKnown && r.online && r.full && r.enabled && smallCurrent(r)
+                && finite(r.fv) && r.vmin >= Math.max(4300, r.fv - 100);
             long maxGap=Math.max(3500,expectedMs+expectedMs/2);
-            if (since < 0 || last < 0 || r.elapsed - last > maxGap || r.elapsed < last) {
-                since = r.elapsed; minRm = maxRm = r.rm;
-            }
-            minRm = Math.min(minRm, r.rm); maxRm = Math.max(maxRm, r.rm);
-            if (maxRm - minRm > 3) { since = r.elapsed; minRm = maxRm = r.rm; }
-            last = r.elapsed;
-            return r.elapsed - since >= 300_000;
+            if(tail){
+                if(since<0||last<0||r.elapsed-last>maxGap||r.elapsed<last){
+                    since=r.elapsed;
+                }
+                last=r.elapsed;
+            }else{since=last=-1;}
+            // The electrical rule is independent: no RM, percentage, temperature,
+            // vendor full flag or target-voltage requirement is added to it.
+            if(electricalCandidate(r)){
+                if(electricalSince<0||electricalLast<0||r.elapsed-electricalLast>maxGap||r.elapsed<electricalLast)
+                    electricalSince=r.elapsed;
+                electricalLast=r.elapsed;
+            }else{electricalSince=electricalLast=-1;}
+            return since>=0&&r.elapsed-since>=300000||electricalSince>=0&&r.elapsed-electricalSince>=electricalDuration();
         }
-        public double progress(long now) { return since < 0 ? 0 : Math.min(1, (now - since) / 300_000.0); }
+        public double progress(long now) {
+            double vendor=since<0?0:(now-since)/300000.0;
+            double electrical=electricalSince<0?0:(now-electricalSince)/(double)electricalDuration();
+            return Math.max(0,Math.min(1,Math.max(vendor,electrical)));
+        }
     }
 
     public static final class Depletion {
