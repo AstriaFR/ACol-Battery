@@ -50,8 +50,13 @@ with zipfile.ZipFile(payload,'w',zipfile.ZIP_DEFLATED) as archive:
         if path.is_file():archive.write(path,path.relative_to(build/'payload').as_posix())
 (app/'src/main/assets/payload.sha256').write_text(hashlib.sha256(payload.read_bytes()).hexdigest(),encoding='ascii')
 shutil.copyfile(app/'src/main/assets/webroot/assets/acol-icon.png',build/'res/drawable/acol_icon.png')
-run(tools/'aapt2.exe','compile','--no-crunch',build/'res/drawable/acol_icon.png','-o',build)
-run(tools/'aapt2.exe','link','--manifest',app/'src/main/AndroidManifest.xml','-I',android,'-R',build/'drawable_acol_icon.png.flat','--java',build/'generated','-o',build/'resources.apk')
+compiled=build/'res/compiled'
+compiled.mkdir(exist_ok=True)
+resource_inputs=[build/'res/drawable/acol_icon.png',*sorted((app/'src/main/res').rglob('*.xml'))]
+for resource in resource_inputs:run(tools/'aapt2.exe','compile','--no-crunch',resource,'-o',compiled)
+resource_args=[]
+for resource in sorted(compiled.glob('*.flat')):resource_args.extend(['-R',resource])
+run(tools/'aapt2.exe','link','--manifest',app/'src/main/AndroidManifest.xml','-I',android,*resource_args,'--java',build/'generated','-o',build/'resources.apk')
 run(jdk/'javac.exe','--release','8','-encoding','UTF-8','-cp',android,'-d',build/'classes',*sorted((app/'src/main/java').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')))
 jar_classes(build/'classes',build/'app.jar')
 run(jdk/'java.exe','-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api','35','--lib',android,'--output',build/'dex',build/'app.jar')

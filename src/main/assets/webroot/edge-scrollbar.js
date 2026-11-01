@@ -8,7 +8,7 @@ export function scrollThumb(viewHeight,contentHeight,scrollTop,trackHeight){
 
 export class EdgeScrollbar{
   constructor(){
-    this.scrollers=[document.querySelector('#recordsPage .record-scroll'),document.querySelector('#settingsPanel .page-scroll'),document.getElementById('detailScroll'),document.getElementById('usageDayScroll'),document.getElementById('usageAppScroll'),document.getElementById('usageWeekScroll'),document.getElementById('usageMonthScroll'),document.getElementById('usageAppWeekScroll')].filter(Boolean);
+    this.scrollers=[document.querySelector('#recordsPage .record-scroll'),document.querySelector('#settingsPanel .page-scroll'),document.getElementById('detailScroll'),document.getElementById('batteryHistoryScroll'),document.getElementById('batterySnapshotScroll'),document.getElementById('usageDayScroll'),document.getElementById('usageAppScroll'),document.getElementById('usageWeekScroll'),document.getElementById('usageMonthScroll'),document.getElementById('usageAppWeekScroll')].filter(Boolean);
     this.track=document.createElement('div');this.track.className='edge-scrollbar';this.track.hidden=true;this.track.setAttribute('aria-hidden','true');
     this.thumb=document.createElement('div');this.thumb.className='edge-scrollbar-thumb';this.track.append(this.thumb);document.body.append(this.track);
     this.frame=0;this.schedule=()=>{
@@ -24,7 +24,7 @@ export class EdgeScrollbar{
       for(const child of scroller.children)this.resize.observe(child);
     }
     this.visibility=new MutationObserver(this.schedule);
-    for(const node of [document.body,document.getElementById('appShell'),document.getElementById('recordsPage'),document.getElementById('settingsPanel'),document.getElementById('detail'),document.getElementById('usageDetail'),document.getElementById('usageAppDetail'),document.getElementById('usageWeekDetail'),document.getElementById('usageMonthDetail'),document.getElementById('usageAppWeekDetail')])
+    for(const node of [document.body,document.getElementById('appShell'),document.getElementById('recordsPage'),document.getElementById('settingsPanel'),document.getElementById('detail'),document.getElementById('batteryHistoryPanel'),document.getElementById('batteryHistoryDetail'),document.getElementById('usageDetail'),document.getElementById('usageAppDetail'),document.getElementById('usageWeekDetail'),document.getElementById('usageMonthDetail'),document.getElementById('usageAppWeekDetail')])
       if(node)this.visibility.observe(node,{attributes:true,attributeFilter:['hidden','class']});
     window.addEventListener('resize',this.schedule);window.addEventListener('pageshow',this.schedule);document.addEventListener('visibilitychange',this.schedule);
     this.schedule();

@@ -1,4 +1,4 @@
-import{isoWeek,firstUsageWeek,calendarMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.0';
+import{isoWeek,firstUsageWeek,calendarMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.1';
 export const usagePages=new Set(['usage-day','usage-week','usage-month','usage-app','usage-app-week']);
 // Page switching replaces the current date; opening another page pushes native
 // history. Both header Back and system Back consume that same browser history.

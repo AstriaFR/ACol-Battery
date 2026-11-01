@@ -64,7 +64,7 @@ fingerprint() {
 validate_voltages() {
  for value in "$1" "$2"; do
   case "$value" in [0-9][0-9][0-9][0-9]) :;; *) fail "请输入四位整数电压，单位 mV。";; esac
-  [ "$value" -ge 2500 ] && [ "$value" -le 3500 ] || fail "可调范围为 2500–3500 mV。"
+  [ "$value" -ge 2600 ] && [ "$value" -le 3400 ] || fail "可调范围为 2600–3400 mV。"
  done
 }
 snapshot() {

@@ -7,6 +7,9 @@ const table=[
   [325,3140],[320,3100],[315,3070],[310,3000],[300,2950],[290,2900]
 ];
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
+export function canEstimateRemaining(record,reading){
+  return !(Number(record?.fast_seconds)>0)||(reading?.onlineKnown!==false&&reading?.online===false);
+}
 export function remainingMeanVoltage(millivolts){
   if(!finite(millivolts)||millivolts<=0)return null;
   const cv=Math.round(millivolts/10);

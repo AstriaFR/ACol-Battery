@@ -1,5 +1,5 @@
-import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.0';
-import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.0';
+import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.1';
+import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.1';
 const yieldUI=()=>new Promise(resolve=>setTimeout(()=>{if('requestIdleCallback'in window)requestIdleCallback(()=>resolve(),{timeout:400});else resolve();},80));
 export class HomeUsagePanel extends DailyUsageChart{
   constructor(api){
@@ -32,6 +32,7 @@ export class HomeUsagePanel extends DailyUsageChart{
       for(let i=0;i<10;i++){
         if(!this.visible()||generation!==this.generation)return;
         const day=nextDate(first,i),summary=await this.cache.summary(day),from=summary?.through??day,target=Math.min(nextDate(day),Date.now()-5000);
+        if(summary?.deleted)continue;
         // Finished dates require only a tiny summary record, never their app/hour layers.
         let changed=false;
         if(from<target){
@@ -50,7 +51,7 @@ export class HomeUsagePanel extends DailyUsageChart{
   }
   async repairDay(day,generation){
     const summary=await this.cache.summary(day);
-    if(!summary||summary.coveredMs>=summary.through-day)return false;
+    if(!summary||summary.deleted||summary.coveredMs>=summary.through-day)return false;
     const entry=await this.cache.getHours(day);let changed=false,attempts=0;
     this.repairAttempts??=new Map();
     for(let hour=0;hour<24;hour++){

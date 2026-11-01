@@ -1,9 +1,10 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.0';
-import{batteryColor}from'./curve-colors.js?v=acol-2.0';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.1';
+import{remainingEstimate}from'./estimate.js?v=acol-2.1';
+import{batteryColor}from'./curve-colors.js?v=acol-2.1';
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
-const scaleSettingsKey=()=>JSON.stringify([chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
+const scaleSettingsKey=()=>JSON.stringify([chartSettings.energyWh,chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
 const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
   &&peak-base>=(full-base)*1.1-Math.max(1,Math.abs(full-base))*1e-12;
 export const series=[
@@ -12,22 +13,27 @@ export const series=[
   {key:'current',index:3,name:'充电电流',axis:'电流',unit:'mA',digits:0},
   {key:'voltage',index:4,name:'电芯均压',axis:'电压',unit:'mV',digits:1},
   {key:'power',index:5,name:'实时功率',axis:'功率',unit:'W',digits:6},
-  {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',digits:1}
+  {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',digits:1},
+  {key:'energy',index:11,name:'剩余能量(估算)',axis:'剩余能量(估算)',unit:'Wh',digits:2}
 ];
 export const valid=v=>typeof v==='number'&&Number.isFinite(v);
-export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'||s.key!=='current').map(s=>{
+export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'?s.key!=='energy':s.key!=='current').map(s=>{
   let item={...s,color:batteryColor(s.key)};
-  if(kind==='discharge'&&s.key==='power')item={...item,name:fast?'实时功耗':'平均功耗',axis:'功耗',digits:2};
+  if(kind==='discharge'&&s.key==='power')item={...item,name:fast?'实时功率':'平均功耗',axis:fast?'功率':'功耗',digits:2};
   if(kind==='discharge'&&s.key==='temp')item={...item,axis:'电池温度'};
   if(s.key==='voltage'&&cellCount!==2)item={...item,name:'电池电压'};
   return item;
 });}
 export function plotPoints(points,kind,cellCount=2,fast=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3]))return p;const row=[...p];row[3]*=cellCount===2?2:1;return row;});
-  if(fast)return points.map(p=>{if(valid(p[5])&&p[5]<0){const row=[...p];row[5]=null;return row;}return p;});
+  const withEnergy=p=>{
+    const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
+    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4]},null)?.wh??null;return row;
+  };
+  if(fast)return points.map(withEnergy);
   return points.filter(p=>!valid(p[7])||p[7]>=20000).map(p=>{
-    if(valid(p[5])&&(p[5]>15||p[5]<0)){const row=[...p];row[5]=null;return row;}
-    return p;
+    const row=withEnergy(p);if(valid(row[5])&&(row[5]>15||row[5]<0))row[5]=null;
+    return row;
   });
 }
 export function niceBounds(values,key){
@@ -44,6 +50,13 @@ export function sampleText(value,digits=6){
 }
 export function signalScale(s,values,kind='charge',fast=false,previous=null){
   const known=values.filter(valid);
+  if(s.key==='energy'){
+    let peak=0;for(const value of known)peak=Math.max(peak,value);
+    const configured=chartSettings.energyWh;
+    const observed=Math.max(peak,previous?.observed?previous.full:0);
+    const full=valid(configured)&&configured>0?(chartSettings.capacityAuto?Math.max(configured,observed):configured):observed;
+    return{base:0,full:full||1,min:0,observed:full>0,label:full>0?`${full.toFixed(valid(configured)&&configured>0?2:full<2?2:1)} Wh`:'暂无数据'};
+  }
   if(s.key==='rm'){
     const configured=chartSettings.capacityAh*1000,full=chartSettings.capacityAuto?Math.max(configured,previous?.full??0,...known):configured;
     return{base:0,full,min:0,label:`${(full/1000).toFixed(2)} Ah`};
@@ -55,10 +68,11 @@ export function signalScale(s,values,kind='charge',fast=false,previous=null){
     return{base,full,min:base,label:`${(base/1000).toFixed(2)}–${(full/1000).toFixed(2)} V`};
   }
   if(kind==='discharge'&&s.key==='power'){
-    let peak=0;for(const value of known)if(value>=0&&(fast||value<=15))peak=Math.max(peak,value);
+    let peak=0,min=fast?(previous?.min??0):0;
+    for(const value of known){if(fast){peak=Math.max(peak,Math.abs(value));min=Math.min(min,value);}else if(value>=0&&value<=15)peak=Math.max(peak,value);}
     const observed=peak>0||!!previous?.observed;
     const full=Math.max(previous?.observed?previous.full:0,peak)||1;
-    return{base:0,full,min:0,observed,label:observed?`${full.toFixed(2)} W`:'暂无峰值'};
+    return{base:0,full,min,observed,label:observed?`${full.toFixed(2)} W`:'暂无峰值'};
   }
   if(s.key==='current'||s.key==='power'){
     const step=s.key==='current'?2000:10;
@@ -95,6 +109,7 @@ export function signalScale(s,values,kind='charge',fast=false,previous=null){
 }
 export const scalePercent=(value,scale)=>(value-scale.base)/(scale.full-scale.base)*100;
 export const axisMinimum=(kind,scales)=>kind==='charge'?0:Math.floor(Math.min(0,...scales.map(s=>scalePercent(s.min,s)))/10)*10;
+export const plotAxisMinimum=(kind,scales,reverse=false,maximum=110)=>['charge','discharge'].includes(kind)?(reverse?-maximum:0):axisMinimum(kind,scales);
 export function actualAxis(s,scale){
   if(s.key==='temp')return{title:`${s.axis} ℃`,label:percent=>(scale.base+(scale.full-scale.base)*percent/100).toFixed(1)};
   const factor=['rm','voltage'].includes(s.key)||s.key==='current'&&scale.full>=1000?1000:1;
@@ -107,11 +122,35 @@ export function timeLabel(ms){
   const label=h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;
   return label;
 }
-// Shape-preserving interpolation; power, charge current and every performance curve stay thinner.
-export function smoothPath(ctx,points){
+// Collapse quantized percentage plateaus into temporal anchors, retaining endpoints
+// and every actual rise/fall. Raw samples remain available for inspection.
+export function percentageAnchors(points){
+  if(points.length<3)return points;
+  const groups=[];
+  for(let start=0;start<points.length;){
+    let end=start;while(end+1<points.length&&points[end+1][1]===points[start][1])end++;
+    groups.push({start,end});start=end+1;
+  }
+  if(groups.length===1)return[points[0],points.at(-1)];
+  return groups.map(({start,end},i)=>i===0?points[0]:i===groups.length-1?points.at(-1):[(points[start][0]+points[end][0])/2,points[start][1]]);
+}
+// Percentage paths use time-weighted monotone tangents after plateau consolidation.
+export function smoothPath(ctx,points,percentage=false){
+  if(percentage)points=percentageAnchors(points);
   if(!points.length)return;ctx.moveTo(...points[0]);if(points.length===1)return;
   const d=points.slice(1).map((p,i)=>(p[1]-points[i][1])/(p[0]-points[i][0]||1));
   const m=points.map((_,i)=>i===0?d[0]:i===points.length-1?d[d.length-1]:(d[i-1]*d[i]<=0?0:2*d[i-1]*d[i]/(d[i-1]+d[i])));
+  if(percentage&&points.length>2){
+    const h=points.slice(1).map((p,i)=>Math.max(1e-9,p[0]-points[i][0]));
+    for(let i=1;i<m.length-1;i++){
+      if(d[i-1]*d[i]<=0){m[i]=0;continue;}
+      const a=2*h[i]+h[i-1],b=h[i]+2*h[i-1];
+      m[i]=(a+b)/(a/d[i-1]+b/d[i]);
+    }
+    const edge=(a,b,ha,hb)=>{const value=((2*ha+hb)*a-ha*b)/(ha+hb);return value*a<=0?0:a*b<=0&&Math.abs(value)>3*Math.abs(a)?3*a:value;};
+    m[0]=edge(d[0],d[1],h[0],h[1]);
+    const last=d.length-1;m[m.length-1]=edge(d[last],d[last-1],h[last],h[last-1]);
+  }
   for(let i=0;i<d.length;i++){
     if(d[i]===0){m[i]=m[i+1]=0;continue;}
     const a=m[i]/d[i],b=m[i+1]/d[i],norm=a*a+b*b;
@@ -216,7 +255,7 @@ export class Chart{
         const hit=()=>{
           if(!segment.length)return false;
           if(segment.length===1)return Math.hypot(pixel-segment[0][0],y-segment[0][1])<=13;
-          ctx.beginPath();smoothPath(ctx,segment);return ctx.isPointInStroke(pixel,y);
+          ctx.beginPath();smoothPath(ctx,segment,s.key==='pct');return ctx.isPointInStroke(pixel,y);
         };
         for(const row of visible){
           if(!valid(row[s.index])||!connected&&(row[6]&3)){
@@ -241,7 +280,7 @@ export class Chart{
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
-        return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
+        return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+
       (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.draw();
   }
@@ -250,6 +289,7 @@ export class Chart{
     const [from,to]=this.window;if(to<=from)return;
     ctx.save();ctx.fillStyle=cssColor('--plot-screen-off','rgba(112,119,128,.10)');
     for(const [start,end] of this.screenOffSpans){
+      if(!this.fast&&end-start<chartSettings.screenOnMinutes*60000)continue;
       if(end<=from)continue;if(start>=to)break;
       const a=Math.max(from,start),b=Math.min(to,end);if(b<=a)continue;
       ctx.fillRect(this.left+(a-from)/(to-from)*width,top,(b-a)/(to-from)*width,height);
@@ -262,14 +302,14 @@ export class Chart{
     const ctx=this.ctx;ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);this.width=w;
     const selected=this.signals().filter(s=>this.enabled.has(s.key));
     const scales=new Map(this.signals().map(s=>[s.key,this.scaleFor(s)]));
-    const hi=this.axisMaximum(),lo=this.kind==='charge'&&this.reverseCharge?-hi:axisMinimum(this.kind,[...scales.values()]);
+    const hi=this.axisMaximum(),lo=plotAxisMinimum(this.kind,[...scales.values()],this.reversePlot,hi);
     const axisSeries=this.signals().find(s=>s.key===this.axisKey);
     const axis=axisSeries?actualAxis(axisSeries,scales.get(axisSeries.key)):null;
     this.canvas.dataset.axis=axisSeries?.key??'percent';
     const tickValues=[];for(let v=lo;v<=hi;v+=10)tickValues.push(v);
     const tickLabel=v=>axis?axis.label(v):String(v);
     // Reserve the same gutter before/after expanding the charge plot.
-    const gutterTicks=this.kind==='charge'?Array.from({length:23},(_,i)=>i*10-110):tickValues;
+    const gutterTicks=['charge','discharge'].includes(this.kind)?Array.from({length:23},(_,i)=>i*10-110):tickValues;
     ctx.font='10px system-ui';this.left=Math.max(34,Math.ceil(Math.max(...gutterTicks.map(v=>ctx.measureText(tickLabel(v)).width)))+9);this.right=8;
     const top=22,bottom=h-25,pw=w-this.left-this.right,ph=bottom-top;if(pw<=0||ph<=0)return;
     this.top=top;this.bottom=bottom;this.axisLo=lo;this.axisHi=hi;
@@ -305,7 +345,7 @@ export class Chart{
       ctx.save();ctx.beginPath();ctx.rect(this.left,top-2,pw,ph+4);ctx.clip();ctx.strokeStyle=s.color;ctx.lineWidth=special?.75:.9;ctx.globalAlpha=special?.7:.86;ctx.lineJoin='miter';ctx.lineCap='round';
       let segment=[];const flush=()=>{
         if(!segment.length)return;ctx.beginPath();
-        smoothPath(ctx,segment);
+        smoothPath(ctx,segment,s.key==='pct');
         ctx.stroke();if(segment.length===1){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
       };
       for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(!connected&&(p[6]&3))flush();segment.push(map(p));}flush();ctx.restore();

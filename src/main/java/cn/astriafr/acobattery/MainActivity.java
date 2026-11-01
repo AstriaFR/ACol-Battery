@@ -71,6 +71,7 @@ public final class MainActivity extends Activity {
     String errorReport="",downgradeReport="";boolean showingFallbackReport;
     JSONObject probeReport;
     boolean pageLoaded;
+    boolean tileSettingsPending;
     java.util.List<StartupFeedback.Notice> pendingNotices=java.util.Collections.emptyList();
     AlertDialog startupNotice;
     AlertDialog clearDataDialog;
@@ -104,11 +105,21 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state){
         super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.WHITE);getWindow().setNavigationBarColor(Color.WHITE);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        tileSettingsPending=isTileSettingsIntent(getIntent());
         dataTransfer=new DataTransferUi(this);if(dataTransfer.resume())return;
         if(getSharedPreferences("maintenance",MODE_PRIVATE).getBoolean("clearPending",false)){clearAllData();return;}
         worker.execute(this::importOldErrorReports);
         if(getSharedPreferences("startup",MODE_PRIVATE).getBoolean("initialized",false)&&getSharedPreferences("startup",MODE_PRIVATE).getInt("androidSdk",0)==Build.VERSION.SDK_INT){showWeb();connectExisting();}
         else{showInitialization();initialize();}
+    }
+    static boolean isTileSettingsIntent(Intent intent){return intent!=null&&"android.service.quicksettings.action.QS_TILE_PREFERENCES".equals(intent.getAction());}
+    @Override protected void onNewIntent(Intent intent){
+        super.onNewIntent(intent);setIntent(intent);
+        if(isTileSettingsIntent(intent)){tileSettingsPending=true;openTileSettings();}
+    }
+    void openTileSettings(){
+        if(!tileSettingsPending||web==null||!pageLoaded)return;
+        tileSettingsPending=false;closeErrorPage();if(errorLogs!=null)errorLogs.close();web.evaluateJavascript("window.__acoOpenSettings&&window.__acoOpenSettings()",null);
     }
     void registerBack(){
         if(destroyed||!getWindow().getDecorView().isAttachedToWindow())return;
@@ -149,7 +160,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.0 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.1 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);
@@ -161,10 +172,6 @@ public final class MainActivity extends Activity {
         errorActions.addView(rebuild,new LinearLayout.LayoutParams(-1,dp(44)));
         LinearLayout.LayoutParams actionLine=new LinearLayout.LayoutParams(-1,-2);actionLine.topMargin=dp(12);layout.addView(errorActions,actionLine);
         mount(layout);
-        try{
-            File previous=new File(getFilesDir(),"initialization-error.txt");
-            if(previous.isFile()&&previous.length()<=524288){errorReport=StartupFeedback.compactReport(new String(java.nio.file.Files.readAllBytes(previous.toPath()),StandardCharsets.UTF_8));if(!errorReport.isEmpty()){errorView.setText("查看上次错误");errorActions.setVisibility(View.VISIBLE);}}
-        }catch(IOException ignored){}
     }
     void phase(String name,String text){currentPhase=name;if(destroyed)return;runOnUiThread(()->{stage.setText(name);detail.setText(text);});}
     void connectionPhase(String text){
@@ -212,15 +219,17 @@ public final class MainActivity extends Activity {
         errorTitle.setText(fallback?"初始化降级报告":"初始化问题");errorText.setText(report);
         reportHome.setVisibility(rootReady&&web!=null?View.VISIBLE:View.GONE);
         errorRebuild.setVisibility(!fallback&&canRebuild&&!rebuilding?View.VISIBLE:View.GONE);
-        if(errorPage.getParent()!=contentFrame){if(errorPage.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)errorPage.getParent()).removeView(errorPage);contentFrame.addView(errorPage,new FrameLayout.LayoutParams(-1,-1));}
-        errorPage.setVisibility(View.VISIBLE);errorPage.bringToFront();
+        boolean newErrorParent=errorPage.getParent()!=contentFrame;
+        if(newErrorParent){if(errorPage.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)errorPage.getParent()).removeView(errorPage);contentFrame.addView(errorPage,new FrameLayout.LayoutParams(-1,-1));}
+        boolean entering=newErrorParent||PageMotion.closing(errorPage)||errorPage.getVisibility()!=View.VISIBLE||!errorPage.isAttachedToWindow();
+        errorPage.bringToFront();if(entering)PageMotion.enter(errorPage);
     }
     Button pageBackButton(Runnable action){
         boolean dark=activeDarkTheme==null?systemDark():activeDarkTheme;
         Button button=new Button(this);button.setText("返回");button.setAllCaps(false);button.setTextSize(15);button.setTextColor(dark?Color.rgb(206,232,218):Color.rgb(25,126,103));button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(0);button.setMinimumHeight(0);button.setPadding(dp(8),0,dp(8),0);
         GradientDrawable background=new GradientDrawable();background.setColor(dark?Color.rgb(11,17,13):Color.WHITE);background.setCornerRadius(dp(10));background.setStroke(dp(1),dark?Color.rgb(35,54,42):Color.rgb(232,236,241));button.setBackground(background);button.setOnClickListener(v->action.run());return button;
     }
-    void closeErrorPage(){if(errorPage!=null)errorPage.setVisibility(View.GONE);showingFallbackReport=false;}
+    void closeErrorPage(){PageMotion.hide(errorPage);showingFallbackReport=false;}
     String prepareDowngradeReport(JSONObject probe,JSONObject status,List<StartupFeedback.Notice> notices){
         if(notices.isEmpty())return "";
         String report="时间："+new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z",Locale.US).format(new Date())+"\n版本："+appVersion()+"\n设备："+Build.MANUFACTURER+" "+Build.MODEL+" / Android "+Build.VERSION.RELEASE+"\n"+StartupFeedback.downgradeReport(probe,status);
@@ -416,7 +425,7 @@ public final class MainActivity extends Activity {
         probeReport=null;downgradeReport="";pendingNotices=java.util.Collections.emptyList();
         if(startupNotice!=null){startupNotice.dismiss();startupNotice=null;}
         retry.setVisibility(View.GONE);progress.setVisibility(View.VISIBLE);
-        if(errorActions!=null){errorActions.setVisibility(errorReport.isEmpty()?View.GONE:View.VISIBLE);errorView.setText("查看上次错误");}
+        if(errorActions!=null)errorActions.setVisibility(View.GONE);
         if(errorText!=null)errorText.setText("");
         closeErrorPage();
         worker.execute(()->{
@@ -522,7 +531,7 @@ public final class MainActivity extends Activity {
         initialized=true;web=new WebView(this);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setSupportMultipleWindows(false);settings.setMediaPlaybackRequiresUserGesture(true);web.addJavascriptInterface(new Bridge(),"AcoNative");
         web.setWebViewClient(new WebViewClient(){
-            @Override public void onPageFinished(WebView view,String url){if(view==web){pageLoaded=true;showStartupNotice();}}
+            @Override public void onPageFinished(WebView view,String url){if(view==web){pageLoaded=true;openTileSettings();showStartupNotice();}}
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
                 Uri url=request.getUrl();
                 if(request.isForMainFrame()&&request.hasGesture()&&"https://github.com/AstriaFR/ACol-Battery".equals(url.toString())){
@@ -547,7 +556,7 @@ public final class MainActivity extends Activity {
             }
         });
         web.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
-        mount(web);web.loadUrl("https://aco.local/webroot/index.html");
+        mount(web);web.loadUrl("https://aco.local/webroot/index.html"+(tileSettingsPending?"#settings":""));
     }
     void mount(View child){
         contentFrame=new FrameLayout(this);contentFrame.setBackgroundColor(Color.rgb(246,248,251));

@@ -90,7 +90,7 @@ final class DataTransfer {
         try(SQLiteDatabase db=SafeDatabase.open(file)){
             try(android.database.Cursor check=db.rawQuery("PRAGMA quick_check(1)",null)){if(!check.moveToFirst()||!"ok".equalsIgnoreCase(check.getString(0)))throw new IOException("备份数据库校验失败。");}
             for(String name:new String[]{"sessions","samples","runtime"})try(android.database.Cursor tables=db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?",new String[]{name})){if(!tables.moveToFirst())throw new IOException("备份数据库缺少必要数据表。");}
-            db.execSQL("UPDATE sessions SET active=0,reason='backup_restored' WHERE active=1");db.execSQL("DELETE FROM runtime WHERE key IN ('session_progress_v1','full_tail_boot','cell_count_v1')");
+            db.execSQL("UPDATE sessions SET active=0,reason='backup_restored' WHERE active=1");db.execSQL("DELETE FROM runtime WHERE key IN ('session_progress_v1','game_progress_v1','full_tail_boot','cell_count_v1')");
             try(android.database.Cursor checkpoint=db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)",null)){if(!checkpoint.moveToFirst()||checkpoint.getInt(0)!=0)throw new IOException("备份数据库尚未完成写入。");}
         }
     }

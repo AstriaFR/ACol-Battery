@@ -1,8 +1,17 @@
-import{spawn,exec}from'./root-bridge.js?v=acol-2.0';
+import{spawn,exec}from'./root-bridge.js?v=acol-2.1';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 
+export function compareRecords(a,b){
+  const rank=r=>r.active?(Number(r.fast_seconds)>0?0:1):2;
+  return rank(a)-rank(b)||b.id-a.id;
+}
+
 export class LiveChannel{
-  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.lists=null;this.listSequence=0;this.sentList=0;this.mode=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
+  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.lists=null;this.listSequence=0;this.sentList=0;this.mode=0;this.small=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
+  selectSmall(value){
+    const small=Number(!!value);if(this.small===small)return;
+    this.close();this.small=small;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;
+  }
   setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===1)this.infoSnapshot=null;}
   stopProcess(connection){
     if(!connection.pid||connection.killed)return;
@@ -17,7 +26,7 @@ export class LiveChannel{
   open(){
     if(this.connection&&!this.connection.closed)return;
     const connection={closed:false,pid:null,killed:false};this.connection=connection;
-    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),this.infoSnapshot?'0':'1']);
+    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),this.infoSnapshot?'0':'1',String(this.small)]);
     const failed=()=>{
       if(connection.closed)return;
       connection.closed=true;if(this.connection!==connection)return;
@@ -54,17 +63,25 @@ export class LiveChannel{
   }
   accept(packet){
     if(packet.batteryInfo)this.infoSnapshot=packet.batteryInfo;
-    this.merge(packet.previous);this.merge(packet);
+    this.merge(packet.previous);this.merge(packet.parallelPrevious);this.merge(packet.parallel);this.merge(packet);
     this.latest=packet;this.receivedAt=Date.now();++this.sequence;
     const resumeId=Math.max(0,packet.status.session);
     this.resumeAfter=resumeId?(this.rows.get(resumeId)?.points.at(-1)?.[0]??(resumeId===this.resumeId?this.resumeAfter:0)):0;
     this.resumeId=resumeId;
     if(Array.isArray(packet.records)&&(packet.listVersion??0)>=this.minimumListVersion){
+      if(packet.listSmall!==undefined){
+        const small=!!packet.listSmall,key=small?'all':'normal',totalKey=small?'totalAll':'total';
+        const hidePct=packet.status.settings?.hidePct??this.lists?.hidePct,rows=packet.records.filter(row=>!this.deleted.has(row.id));
+        this.lists??={normal:null,all:null,total:0,totalAll:0,hidePct};
+        this.lists[key]=this.mergeHead(rows,packet.total,this.lists[key]??[],this.lists[totalKey],small||hidePct===this.lists.hidePct);
+        this.lists[totalKey]=packet.total;this.lists.totalAll=packet.totalRecords;this.lists.hidePct=hidePct;++this.listSequence;
+      }else{
       const hidePct=packet.status.settings?.hidePct??this.lists?.hidePct;
       const normal=packet.records.filter(row=>!this.deleted.has(row.id)),all=packet.recordsAll.filter(row=>!this.deleted.has(row.id));
       const total=packet.total-(packet.records.length-normal.length),totalAll=packet.totalAll-(packet.recordsAll.length-all.length);
       this.lists={normal:this.mergeHead(normal,total,this.lists?.normal,this.lists?.total,hidePct===this.lists?.hidePct),total,
         all:this.mergeHead(all,totalAll,this.lists?.all,this.lists?.totalAll,true),totalAll,hidePct};++this.listSequence;
+      }
     }
     for(const waiter of this.waiters.splice(0)){
       clearTimeout(waiter.timer);waiter.resolve(packet);
@@ -84,17 +101,17 @@ export class LiveChannel{
     return this.latest.status;
   }
   mergeHead(head,total,previous=[],previousTotal=0,keep=true){
-    const oldest=head.at(-1)?.id;
+    previous??=[];const oldest=head.filter(row=>!row.active).at(-1)?.id;
     // A periodic first-page snapshot updates the head without losing loaded pages.
-    const tail=keep&&total>=previousTotal&&oldest?previous.filter(row=>row.id<oldest&&!this.deleted.has(row.id)):[];
-    return[...head,...tail].slice(0,total);
+    const tail=keep&&total>=previousTotal&&oldest?previous.filter(row=>!row.active&&row.id<oldest&&!this.deleted.has(row.id)):[];
+    return[...head,...tail].sort(compareRecords).slice(0,total);
   }
   appendList(small,page){
     if((page.listVersion??0)<this.minimumListVersion)return this.cachedList(small);
     if(!this.lists)return page;
     const key=small?'all':'normal',totalKey=small?'totalAll':'total',rows=new Map();
-    for(const row of [...this.lists[key],...page.records])if(!this.deleted.has(row.id)&&!rows.has(row.id))rows.set(row.id,row);
-    this.lists[key]=[...rows.values()].sort((a,b)=>b.id-a.id);this.lists[totalKey]=page.total;
+    for(const row of [...(this.lists[key]??[]),...page.records])if(!this.deleted.has(row.id)&&!rows.has(row.id))rows.set(row.id,row);
+    this.lists[key]=[...rows.values()].sort(compareRecords);this.lists[totalKey]=page.total;if(Number.isInteger(page.totalRecords))this.lists.totalAll=page.totalRecords;
     return this.cachedList(small);
   }
   forgetRecord(record,version=0){
@@ -102,7 +119,7 @@ export class LiveChannel{
     this.minimumListVersion=Math.max(this.minimumListVersion,version);
     this.deleted.add(record.id);this.rows.set(record.id,{record:null,points:[]});
     if(this.lists){
-      this.lists.normal=this.lists.normal.filter(row=>row.id!==record.id);this.lists.all=this.lists.all.filter(row=>row.id!==record.id);
+      this.lists.normal=this.lists.normal?.filter(row=>row.id!==record.id);this.lists.all=this.lists.all?.filter(row=>row.id!==record.id);
       this.lists.totalAll=Math.max(0,this.lists.totalAll-1);
       if(record.active||record.fast_seconds>0||Math.abs(record.pct_end-record.pct_start)>this.lists.hidePct)this.lists.total=Math.max(0,this.lists.total-1);
       ++this.listSequence;
@@ -113,9 +130,10 @@ export class LiveChannel{
     if(!Array.isArray(records))return null;
     // Pagination and active-row updates must not mutate the shared snapshots.
     const active=this.deleted.has(this.latest?.activeRecord?.id)?null:this.latest?.activeRecord;
-    return{records:records.map(row=>row.id===active?.id?active:row),total:small?this.lists.totalAll:this.lists.total};
+    return{records:records.map(row=>row.id===active?.id?active:row.active&&this.rows.get(row.id)?.record||row).sort(compareRecords),total:small?this.lists.totalAll:this.lists.total,totalRecords:this.lists.totalAll};
   }
   async live(args){
+    this.selectSmall(args[3]);
     await this.wait(this.consumed);this.consumed=this.sequence;
     const [id,after,wantList,small]=args,packet=this.latest;
     const result={ok:true,status:packet.status,activeRecord:packet.activeRecord,batteryInfo:this.infoSnapshot,frequencies:packet.frequencies};

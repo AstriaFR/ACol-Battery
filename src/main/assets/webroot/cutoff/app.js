@@ -1,6 +1,6 @@
-import{installPageDepth}from'../page-navigation.js?v=acol-2.0';
-import { exec as localExec, cancelTopDialog } from '../root-bridge.js?v=acol-2.0';
-import { ThemeController } from '../theme.js?v=acol-2.0';
+import{installPageDepth}from'../page-navigation.js?v=acol-2.1';
+import { exec as localExec, cancelTopDialog } from '../root-bridge.js?v=acol-2.1';
+import { ThemeController } from '../theme.js?v=acol-2.1';
 const embedded=window.parent!==window&&new URLSearchParams(location.search).get('embedded')==='1';
 const cutoffTheme=ThemeController.applyStored({followParent:embedded});
 if(!embedded)installPageDepth();
@@ -87,8 +87,8 @@ async function plan(action) {
   if (action === 'set') {
     const shutdown = $('shutdownInput').value;
     const term = $('termInput').value;
-    if (![shutdown, term].every(v => /^\d{4}$/.test(v) && Number(v) >= 2500 && Number(v) <= 3500)) {
-      message('请输入 2500–3500 mV 的整数电压。', true); return;
+    if (![shutdown, term].every(v => /^\d{4}$/.test(v) && Number(v) >= 2600 && Number(v) <= 3400)) {
+      message('请输入 2600–3400 mV 的整数电压。', true); return;
     }
     args = `plan set ${shutdown} ${term}`;
   }

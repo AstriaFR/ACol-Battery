@@ -23,7 +23,7 @@
 
 - 电池与采样：`CoreTest`、`BatteryDetailsTest`、`SamplingTest`、`GameSamplingTest`、`HourlyEnergyTest`、`TimelineTest`。充电尾充与屏幕状态回退统一在 `SamplingTest` 中维护。
 - 记录：`RecordFilterTest`、`RecordingGateTest`、`RecoveryTest`、`RecoveryDatabaseTest`。
-- 初始化与连接：`StartupDiagnosticsTest`、`ProcessResponseTest`、`RootSessionStartupTest`、`FrameworkWatchTest`。启动失败与降级报告统一在 `StartupDiagnosticsTest` 中维护，命令截止时间与进程响应统一在 `ProcessResponseTest` 中维护。
+- 初始化与连接：`StartupDiagnosticsTest`、`ProcessResponseTest`、`RootSessionStartupTest`、`AppBridgeTest`、`FrameworkWatchTest`。启动失败与降级报告统一在 `StartupDiagnosticsTest` 中维护，命令截止时间与进程响应统一在 `ProcessResponseTest` 中维护，前后台命令路由由 `AppBridgeTest` 检查。
 - 数据与运行文件：`DatabaseRebuildTest`、`SafeDatabaseDeviceTest`、`DataTransferTest`、`MaintenanceTest`、`RuntimePayloadTest`、`RuntimeTransactionTest`。
 - 独立功耗显示：`PowerDisplayStateTest`。
 

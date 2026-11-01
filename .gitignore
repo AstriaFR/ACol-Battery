@@ -1,5 +1,6 @@
 build/
 dist/
+signing/
 src/main/assets/payload.zip
 src/main/assets/payload.sha256
 __pycache__/

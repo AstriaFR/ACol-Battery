@@ -3,7 +3,31 @@ const{pathToFileURL}=require('node:url');
 const{runCases}=require('./helpers.cjs');
 
 async function scales(){
-const {Chart,series,signalScale,setChartSettings,plotPoints}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+const {Chart,series,signalScale,setChartSettings,plotPoints,plotAxisMinimum}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+ const signedScale={base:0,full:20,min:-15};
+ for(const kind of ['charge','discharge']){
+  assert.equal(plotAxisMinimum(kind,[signedScale],false),0);
+  assert.equal(plotAxisMinimum(kind,[signedScale],true),-110);
+ }
+ const energy=series.find(s=>s.key==='energy');
+ const energyRows=plotPoints([[0,5000,90,null,4000,3,0,30000],[30000,1000,20,null,3000,2,0,30000]],'discharge');
+ assert.equal(energyRows[0][11],5000*3.632/1000);assert.equal(energyRows[1][11],2.95);
+ assert.equal(plotPoints([[0,5000,90,null,null,3,0,30000]],'discharge')[0][11],null);
+ const chargingRows=[
+  [0,5000,90,null,4000,-12,0,3000,null,null,30,null,1],
+  [3000,5001,90,null,4000,2,0,3000,null,null,30,null,1],
+  [6000,4999,90,null,4000,2,0,3000,null,null,30,null,0]
+ ];
+ const gameEnergy=plotPoints(chargingRows,'discharge',2,true);
+ assert.equal(gameEnergy[0][11],null);assert.equal(gameEnergy[1][11],null);assert.ok(gameEnergy[2][11]>0);
+ assert.equal(chargingRows[2][11],null,'derived energy never changes stored samples');
+ setChartSettings({energyWh:null});assert.equal(signalScale(energy,energyRows.map(p=>p[11]),'discharge').full,18.16);
+ setChartSettings({energyWh:25.34});assert.equal(signalScale(energy,[18.16],'discharge').full,25.34);
+ setChartSettings({energyWh:15,capacityAuto:true});let energyScale=signalScale(energy,[18.16],'discharge');assert.equal(energyScale.full,18.16);assert.equal(signalScale(energy,[10],'discharge',false,energyScale).full,18.16);
+ setChartSettings({energyWh:15,capacityAuto:false});assert.equal(signalScale(energy,[18.16],'discharge',false,energyScale).full,15);
+ setChartSettings({energyWh:null,capacityAuto:false});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
+ setChartSettings({energyWh:0});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
+ setChartSettings({});
  const current=series.find(s=>s.key==='current'),power=series.find(s=>s.key==='power');
  const next=(s,values,previous,kind='charge',fast=false)=>signalScale(s,values,kind,fast,previous);
  let scale=next(current,[0,10000]);assert.equal(scale.full,10000);assert.equal(scale.label,'10 A');
@@ -54,6 +78,7 @@ const {Chart,series,signalScale,setChartSettings,plotPoints}=await import(pathTo
  game=next(power,[60.499],game,'discharge',true);assert.equal(game.full,60.499);
  game=next(power,[60.5],game,'discharge',true);assert.equal(game.full,60.5);
  game=next(power,[1],game,'discharge',true);assert.equal(game.full,60.5);
+ const chargingGame=next(power,[-35,4],null,'discharge',true);assert.equal(chargingGame.full,35);assert.equal(chargingGame.min,-35);
  assert.equal(next(current,[]).full,2000);
  assert.equal(next(power,[]).full,10);
  // Current range must use the displayed single-/dual-cell current basis.
@@ -63,6 +88,7 @@ const {Chart,series,signalScale,setChartSettings,plotPoints}=await import(pathTo
  }
  const points=[[0,5000,50,5000,4000,50,0,null,4000,4000,30]];
  const copy=JSON.stringify(points);assert.equal(plotPoints(points,'charge',2)[0][3],10000);assert.equal(JSON.stringify(points),copy);
+ assert.equal(plotPoints([[0,5000,50,null,4000,-12,0,null]],'discharge',2,true)[0][5],-12);
  const shortIntervals=[null,9999,10000,19999,20000].map((dt,i)=>[i,5000,50,null,4000,2,0,dt]);
  assert.deepEqual(plotPoints(shortIntervals,'discharge',2,false).map(row=>row[0]),[0,4]);
  assert.equal(plotPoints(shortIntervals,'discharge',2,true).length,5);
@@ -112,6 +138,20 @@ const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/
  assert.equal(ctx.transform,2);assert.equal(ctx.lineWidth,1);assert.equal(ctx.states.length,0);
 }
 
+async function percentageInterpolation(){
+ const{percentageAnchors,smoothPath}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+ const raw=[[0,100],[2,100],[3,99],[5,99],[9,98],[16,98],[18,97],[22,97]],original=JSON.stringify(raw);
+ const anchors=percentageAnchors(raw);assert.equal(anchors.length,4);assert.deepEqual(anchors[0],raw[0]);assert.deepEqual(anchors.at(-1),raw.at(-1));
+ assert.equal(JSON.stringify(raw),original,'raw readings stay unchanged');
+ assert.deepEqual(percentageAnchors([[0,90],[5,90],[10,90]]),[[0,90],[10,90]]);
+ const reversal=percentageAnchors([[0,90],[2,89],[3,89],[5,90],[9,90],[11,88]]);assert.ok(reversal.some(p=>p[1]===89)&&reversal.some(p=>p[1]===90),'real reversals are retained');
+ let start,previous=100,curves=0;
+ smoothPath({moveTo(x,y){start=[x,y];},bezierCurveTo(x1,y1,x2,y2,x,y){
+  for(let i=1;i<=100;i++){const t=i/100,u=1-t,value=u*u*u*start[1]+3*u*u*t*y1+3*u*t*t*y2+t*t*t*y;assert.ok(value<=previous+1e-9&&value>=97-1e-9,'no new wiggles or overshoot');previous=value;}
+  start=[x,y];curves++;
+ }},raw,true);assert.equal(curves,anchors.length-1);
+}
+
 async function batteryTemperature(){
 const storage=new Map();
 globalThis.localStorage={
@@ -145,7 +185,7 @@ async function screenOffProjection(){
 const root=path.join(__dirname,'../src/main/assets/webroot/');
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 const{ScreenOffOverlay}=await import(pathToFileURL(path.join(root,'screen-off-overlay.js')).href);
- const{Chart}=await import(pathToFileURL(path.join(root,'chart.js')).href);
+ const{Chart,setChartSettings}=await import(pathToFileURL(path.join(root,'chart.js')).href);
  let visible=true,draws=0,errors=0;const requests=[];
  const chart={enabled:new Set(),draw:()=>draws++};
  const overlay=new ScreenOffOverlay(chart,(action,id)=>new Promise((resolve,reject)=>requests.push({action,id,resolve,reject})),()=>visible,()=>errors++);
@@ -165,15 +205,21 @@ const{ScreenOffOverlay}=await import(pathToFileURL(path.join(root,'screen-off-ov
  globalThis.document={hidden:false,documentElement:{}};
  globalThis.getComputedStyle=()=>({getPropertyValue:()=>''});
  const rectangles=[],ctx={save(){},restore(){},fillRect(...args){rectangles.push(args);}};
- const fake={kind:'discharge',enabled:new Set(['screenOff']),window:[100,300],left:40,screenOffSpans:[[0,150],[200,400],[500,600]]};
+ const fake={kind:'discharge',fast:true,enabled:new Set(['screenOff']),window:[100,300],left:40,screenOffSpans:[[0,150],[200,400],[500,600]]};
  Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);
  assert.deepEqual(rectangles,[[40,22,100,200],[240,22,200,200]]);
- document.hidden=true;Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,2);
- document.hidden=false;fake.kind='charge';Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,2);
+ setChartSettings({screenOnMinutes:2});
+ fake.fast=false;fake.window=[60000,180000];fake.screenOffSpans=[[0,119999],[0,120000],[100000,110000],[120000,240001]];
+ rectangles.length=0;Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.deepEqual(rectangles,[[40,22,200,200],[240,22,200,200]],'filter by full duration before viewport clipping; equal threshold is retained');
+ setChartSettings({screenOnMinutes:3});rectangles.length=0;Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,0,'setting changes apply without rereading spans');
+ fake.fast=true;Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,4,'game mode retains short screen-off spans');
+ const painted=rectangles.length;
+ document.hidden=true;Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,painted);
+ document.hidden=false;fake.kind='charge';Chart.prototype.drawScreenOff.call(fake,ctx,22,200,400);assert.equal(rectangles.length,painted);
  const stored=new Map();globalThis.localStorage={getItem:key=>stored.get(key)??null,setItem:(key,value)=>stored.set(key,value)};
  const{saveSelection,loadSelection}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
  saveSelection('game',new Set(['temp','screenOff']),['temp','screenOff']);assert.ok(loadSelection('game',['temp','screenOff']).has('screenOff'));
  assert.ok(!loadSelection('discharge',['temp','screenOff']).has('screenOff'),'charge/discharge/game preferences stay independent');
 }
 
-runCases([scales,hitGeometry,batteryTemperature,screenOffProjection]).then(()=>console.log('Charts: scales, hit geometry, battery temperature and screen-off projection passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([scales,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection]).then(()=>console.log('Charts: scales, hit geometry, battery temperature and screen-off projection passed')).catch(error=>{console.error(error);process.exitCode=1;});

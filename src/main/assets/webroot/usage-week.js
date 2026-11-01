@@ -1,6 +1,6 @@
-import{isoWeek,moveWeek,firstUsageWeek,calendarMonth,moveMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.0';
-import{roundedDuration,dateText}from'./daily-usage-chart.js?v=acol-2.0';
-import{midnight}from'./daily-usage-cache.js?v=acol-2.0';
+import{isoWeek,moveWeek,firstUsageWeek,calendarMonth,moveMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.1';
+import{roundedDuration,dateText}from'./daily-usage-chart.js?v=acol-2.1';
+import{midnight}from'./daily-usage-cache.js?v=acol-2.1';
 const ns='http://www.w3.org/2000/svg',names=['一','二','三','四','五','六','日'];
 function svg(tag,attrs){const node=document.createElementNS(ns,tag);for(const[key,value]of Object.entries(attrs))node.setAttribute(key,String(value));return node;}
 export class UsageWeekPanel{

@@ -30,24 +30,29 @@ public final class GameSamplingTest {
         Main m=open(Files.createTempDirectory("acol-game-clock-").toFile());
         try{
             m.settings=Main.decodeSettings(settings(power,performance));m.fastEnabled=true;m.state=0;m.configureSampling(false);
-            long base=SystemClock.elapsedRealtime();m.begin(reading(base));m.sampling.sampled(0,base);long stats=m.fastStatsNext;
+            long base=SystemClock.elapsedRealtime();m.begin(reading(base));m.sampling.sampled(0,base);long ordinary=m.session;
+            m.withGame(()->{m.begin(reading(base));m.sampling.sampled(0,base);});long game=m.gameTrack.session,stats=m.gameTrack.fastStatsNext;
             // A wall-clock correction takes the existing attribution fallback;
             // this host harness has no Android UsageStats service.
-            m.fastStatsPrevious.wall-=3000;
+            m.gameTrack.fastStatsPrevious.wall-=3000;
             int perfCount=1;
             for(int second=1;second<=60;second++){
                 long now=base+second*1000,last=m.performanceCadence.last;
                 if(now>=m.sampling.next){m.append(reading(now));m.sampling.sampled(0,now);}
-                else if(now>=m.fastStatsNext)m.sampleFastStats(reading(now),false);
-                m.samplePerformance(now);
+                m.collectGame(reading(now),false,now);
                 if(m.performanceCadence.last!=last)perfCount++;
             }
-            check(count(m,"SELECT COUNT(*) FROM samples")==1+60/power);
+            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+game)==1+60/power);
+            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+ordinary)==1);
             check(perfCount==1+60/performance);
-            check(m.fastStatsNext==stats+60000); // Power sampling still settles RM once per minute.
-            check(count(m,"SELECT COUNT(*) FROM sessions")==1);
-            check(count(m,"SELECT fast_seconds FROM sessions")==power);
-            check(count(m,"SELECT performance_seconds FROM sessions")==performance);
+            check(m.gameTrack.fastStatsNext==stats+60000); // Power sampling still settles RM once per minute.
+            check(count(m,"SELECT COUNT(*) FROM sessions")==2);
+            check(count(m,"SELECT fast_seconds FROM sessions WHERE id="+game)==power);
+            check(count(m,"SELECT performance_seconds FROM sessions WHERE id="+game)==performance);
+            m.stopGame(reading(base+60000),"fast_stopped");m.fastEnabled=false;m.configureSampling(false);
+            check(m.session==ordinary&&m.previous.elapsed==base&&m.sampling.next==base+120000);
+            check(count(m,"SELECT active FROM sessions WHERE id="+ordinary)==1);
+            check(count(m,"SELECT active FROM sessions WHERE id="+game)==0);
         }finally{close(m);}
     }
     static void edits()throws Exception{
@@ -55,12 +60,13 @@ public final class GameSamplingTest {
         try{
             m.settings=Main.decodeSettings(settings(10,2));m.fastEnabled=true;m.state=0;m.configureSampling(false);
             long now=SystemClock.elapsedRealtime();m.begin(reading(now));m.sampling.sampled(0,now);id=m.session;
-            long powerNext=m.sampling.next,stats=m.fastStatsNext;
-            save(m,settings(10,5));check(m.session==id);check(m.sampling.next==powerNext);check(m.fastStatsNext==stats);
+            Main current=m;m.withGame(()->{current.begin(reading(now));current.sampling.sampled(0,now);});
+            long powerNext=m.gameTrack.sampling.next,stats=m.gameTrack.fastStatsNext;
+            save(m,settings(10,5));check(m.session==id);check(m.gameTrack.sampling.next==powerNext);check(m.gameTrack.fastStatsNext==stats);
             long perfNext=m.performanceCadence.next;
-            save(m,settings(3,5));check(m.session==id);check(m.performanceCadence.next==perfNext);check(m.fastStatsNext==stats);
-            check(m.sampling.next==now+3000);check(count(m,"SELECT COUNT(*) FROM samples")==1);
-            check(new JSONArray(m.runtimeValue("module_settings")).length()==14);
+            save(m,settings(3,5));check(m.session==id);check(m.performanceCadence.next==perfNext);check(m.gameTrack.fastStatsNext==stats);
+            check(m.gameTrack.sampling.next==now+3000);check(m.sampling.next==now+120000);check(count(m,"SELECT COUNT(*) FROM samples")==2);
+            check(new JSONArray(m.runtimeValue("module_settings")).length()==15);
             JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,3,1,2]");
             save(m,legacy);check(m.settings.getInt("performanceSeconds")==5);
             check(AppBridge.parse(AppBridge.ROOT+"bin/curve-client set_settings 5 30 560 1 300 450 50 60 2 15 3 1 2 5 0").length==17);
@@ -69,7 +75,7 @@ public final class GameSamplingTest {
         m=open(directory);
         try{
             check(m.settings.getInt("performanceSeconds")==5);
-            check(count(m,"SELECT performance_seconds FROM sessions")==3); // Old rows used one shared interval.
+            check(count(m,"SELECT performance_seconds FROM sessions WHERE fast_seconds>0")==3); // Old rows used one shared interval.
         }finally{close(m);}
     }
     public static void main(String[] args)throws Exception{

@@ -22,7 +22,7 @@ final class ErrorLogPages {
     final Set<String> displayed=new HashSet<>();
     ErrorLogPages(MainActivity app){this.app=app;local=new ErrorLogStore(new File(app.getFilesDir(),"error-logs"));}
     boolean visible(){return active&&page!=null&&page.getVisibility()==View.VISIBLE;}
-    synchronized void close(){active=false;generation++;if(page!=null)page.setVisibility(View.GONE);}
+    synchronized void close(){active=false;generation++;PageMotion.hide(page);}
     synchronized void open(){
         if(app.destroyed||app.contentFrame==null||app.clearingData)return;
         generation++;active=true;busy=false;localOffset=rootOffset=0;localDone=rootDone=false;localQueue.clear();rootQueue.clear();displayed.clear();
@@ -40,7 +40,7 @@ final class ErrorLogPages {
         status=new TextView(app);status.setTextSize(13);status.setTextColor(muted);status.setPadding(0,app.dp(18),0,app.dp(12));content.addView(status);
         more=plain("加载更多",muted);more.setOnClickListener(v->load());content.addView(more,new LinearLayout.LayoutParams(-1,app.dp(46)));more.setVisibility(View.GONE);
         scroll.addView(content);LinearLayout.LayoutParams scrollLine=new LinearLayout.LayoutParams(-1,0,1);scrollLine.topMargin=app.dp(12);layout.addView(scroll,scrollLine);
-        page=new FrameLayout(app);page.addView(layout,new FrameLayout.LayoutParams(-1,-1));app.contentFrame.addView(page,new FrameLayout.LayoutParams(-1,-1));load();
+        page=new FrameLayout(app);page.addView(layout,new FrameLayout.LayoutParams(-1,-1));app.contentFrame.addView(page,new FrameLayout.LayoutParams(-1,-1));PageMotion.enter(page);load();
     }
     Button plain(String text,int color){Button b=new Button(app);b.setText(text);b.setTextSize(14);b.setTextColor(color);b.setBackgroundColor(Color.TRANSPARENT);b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(app.dp(8),0,app.dp(8),0);return b;}
     void confirmClear(){

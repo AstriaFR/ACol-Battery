@@ -46,10 +46,10 @@ public final class AppBridge {
         else if(command.startsWith(cutoff)){route="cutoff";command=command.substring(cutoff.length());}
         else throw new IllegalArgumentException("不支持的操作");
         String[] words=command.trim().split(" +");
-        if(words.length<1||words.length>16)throw new IllegalArgumentException("参数无效");
+        if(words.length<1||words.length>17)throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
-            if(!java.util.Arrays.asList("status","list","detail","performance","screen_usage","screen_off_spans","hour_apps","hour_energy","daily_usage","cache_records","delete","live","watch","stop_watch","settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
+            if(!java.util.Arrays.asList("status","list","detail","performance","screen_usage","screen_off_spans","hour_apps","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","cache_records","delete","live","watch","stop_watch","settings","default_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
             if(action.equals("daily_usage")){
                 if(words.length!=4||!words[1].matches("[0-9]{1,20}")||!words[2].matches("[0-9]{1,20}")||!words[3].matches("[A-Za-z0-9_-]{1,4096}"))throw new IllegalArgumentException("使用情况参数无效");
             }else if(action.equals("error_log")){

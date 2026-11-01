@@ -1,4 +1,4 @@
-import{ScreenTimeCache,normalizeSpans,missingSpans,hourlyTotals,normalizeAppSpans,hourAppRows}from'./screen-time-cache.js?v=acol-2.0';
+import{ScreenTimeCache,normalizeSpans,missingSpans,hourlyTotals,normalizeAppSpans,hourAppRows}from'./screen-time-cache.js?v=acol-2.1';
 const ns='http://www.w3.org/2000/svg';
 const startOfDay=wall=>{const d=new Date(wall);d.setHours(0,0,0,0);return d.getTime()};
 const moveDay=(wall,amount)=>{const d=new Date(wall);d.setDate(d.getDate()+amount);return d.getTime()};

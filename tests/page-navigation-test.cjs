@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict'),path=require('node:path');
+const{pathToFileURL}=require('node:url');const{runCases}=require('./helpers.cjs');
+async function navigationMotion(){
+ const listeners=new Map(),observers=[],animations=[];
+ globalThis.window={addEventListener:(name,fn)=>{const list=listeners.get(name)||[];list.push(fn);listeners.set(name,list)}};
+ const media={matches:false,addEventListener(name,fn){this.change=fn}};globalThis.matchMedia=()=>media;
+ const element=(id,hidden=true,parent=null)=>({id,hidden,parent,events:{},addEventListener(name,fn){this.events[name]=fn},closest(){return this.hidden||this.parent?.hidden?this:null},animate(frames,options){let reject,resolve;const animation={frames,options,cancelled:false,finished:new Promise((a,b)=>{resolve=a;reject=b}),cancel(){this.cancelled=true;reject(Error('cancelled'))},finish(){resolve()}};animations.push({node:this,animation});return animation}});
+ const shell=element('appShell',false),home=element('homePage',false,shell),records=element('recordsPage',true,shell),settings=element('settingsPanel',true,shell),detail=element('detail'),week=element('usageWeekDetail'),frame=element('cutoffFrame'),dialog=element('modal',false);
+ const nodes=[shell,home,records,settings,detail,week,frame],byId=new Map(nodes.map(n=>[n.id,n]));
+ globalThis.document={hidden:false,documentElement:{hasAttribute:()=>false},getElementById:id=>byId.get(id),querySelectorAll:selector=>selector==='dialog'?[dialog]:[],addEventListener:window.addEventListener};
+ globalThis.history={state:{page:'home',homeDepth:0},pushState(state){this.state=state},replaceState(state){this.state=state}};
+ globalThis.MutationObserver=class{constructor(callback){this.callback=callback;this.targets=new Map();observers.push(this)}observe(node,options){this.targets.set(node,options)}};
+ const mutation=(node,attribute)=>{for(const observer of observers)if(observer.targets.get(node)?.attributeFilter.includes(attribute))observer.callback([{target:node}])};
+ const emit=(name,event)=>{for(const fn of listeners.get(name)||[])fn(event)};
+ const flush=()=>new Promise(setImmediate);
+ const{installPageMotion}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/page-motion.js')).href);installPageMotion();
+ assert.equal(animations.length,0,'initial paint must not replay navigation');
+ history.replaceState({page:'settings',homeDepth:1});home.hidden=true;settings.hidden=false;mutation(settings,'hidden');await flush();assert.equal(animations.length,0,'startup routing has no animation');
+ history.replaceState({page:'home',homeDepth:0});settings.hidden=true;home.hidden=false;mutation(home,'hidden');await flush();
+ emit('pointerdown');
+ history.pushState({page:'records',homeDepth:1});home.hidden=true;records.hidden=false;mutation(records,'hidden');await flush();assert.equal(animations.at(-1).node,records);
+ const first=animations.at(-1).animation;mutation(records,'hidden');await flush();assert.equal(animations.length,1,'live refresh is not navigation');
+ history.pushState({page:'record',homeDepth:2});shell.hidden=true;detail.hidden=false;mutation(shell,'hidden');mutation(detail,'hidden');await flush();assert.equal(first.cancelled,true,'superseded page releases its animation');assert.ok(animations.at(-1).animation.frames[0].transform.includes('24px'));
+ const forward=animations.at(-1).animation;history.state={page:'records',homeDepth:1};emit('popstate',{state:history.state});detail.hidden=true;shell.hidden=false;mutation(detail,'hidden');mutation(shell,'hidden');await flush();assert.equal(forward.cancelled,true);assert.ok(animations.at(-1).animation.frames[0].transform.includes('-18px'),'Back uses reverse motion');
+ emit('aco-theme-change');assert.equal(animations.at(-1).animation.cancelled,true,'theme transition cancels navigation motion');
+ dialog.open=true;mutation(dialog,'open');await flush();const count=animations.length;mutation(dialog,'open');await flush();assert.equal(animations.length,count,'one enter per modal opening');dialog.open=false;mutation(dialog,'open');await flush();assert.equal(animations.at(-1).animation.cancelled,true);
+ media.matches=true;media.change();history.pushState({page:'settings',homeDepth:1});records.hidden=true;settings.hidden=false;mutation(settings,'hidden');await flush();assert.equal(animations.length,count,'reduced motion preserves immediate navigation');
+ media.matches=false;history.pushState({page:'usage-week',homeDepth:2});shell.hidden=true;week.hidden=false;mutation(week,'hidden');await flush();document.hidden=true;emit('visibilitychange');assert.equal(animations.at(-1).animation.cancelled,true,'backgrounding releases motion');
+}
+runCases([navigationMotion]).then(()=>console.log('Navigation: enter/back, rapid changes, live refresh isolation, modals, theme and reduced motion passed')).catch(error=>{console.error(error);process.exitCode=1});

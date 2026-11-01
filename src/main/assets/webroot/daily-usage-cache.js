@@ -2,6 +2,7 @@ const finite=value=>Number.isFinite(value)&&value>=0;
 export const midnight=wall=>{const date=new Date(wall);date.setHours(0,0,0,0);return date.getTime()};
 export const nextDate=(day,amount=1)=>{const date=new Date(day);date.setDate(date.getDate()+amount);return date.getTime()};
 export const localZone=()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'local'}catch{return'local'}};
+export const canDeleteUsageDay=(day,now=Date.now())=>Number.isFinite(day)&&midnight(day)===day&&day<midnight(now);
 export function newDay(day,zone){
   return{key:`${zone}|${day}`,v:1,zone,dayStart:day,dayEnd:nextDate(day),through:day,state:'0',labels:{},hours:Array.from({length:24},()=>({onMs:0,coveredMs:0,apps:[]}))};
 }
@@ -43,10 +44,11 @@ export class DailyUsageCache{
     this.ready=new Promise((resolve,reject)=>{
       let finished=false;const finish=(error,db)=>{if(finished){db?.close();return;}finished=true;clearTimeout(timer);error?reject(error):resolve(db)},timer=setTimeout(()=>finish(Error('缓存打开超时')),10000);
       try{
-        const request=indexedDB.open('acol.daily-usage.cache',3);
+        const request=indexedDB.open('acol.daily-usage.cache',4);
         request.onupgradeneeded=()=>{
           const db=request.result;
           for(const name of stores)if(!db.objectStoreNames.contains(name))db.createObjectStore(name,{keyPath:name==='app_totals'?['zone','pkg','dayStart']:name==='app_hours'?['zone','dayStart','pkg']:name==='hour_apps'?['zone','dayStart','hour']:['zone','dayStart']});
+          const totals=request.transaction.objectStore('app_totals');if(!totals.indexNames.contains('zoneDay'))totals.createIndex('zoneDay',['zone','dayStart']);
           // Legacy days are converted only when that date is requested.
           if(db.objectStoreNames.contains('days')){const old=request.transaction.objectStore('days');if(!old.indexNames.contains('zoneDay'))old.createIndex('zoneDay',['zone','dayStart']);}
         };
@@ -176,6 +178,21 @@ export class DailyUsageCache{
     const prefix=JSON.stringify([this.zone,day]);
     for(const id of this.memory.keys())if(id.includes(prefix)||id.includes(prefix.slice(0,-1)+','))this.memory.delete(id);
   }
+  async deleteDay(day){
+    if(!Number.isFinite(day)||midnight(day)!==day)throw Error('日期无效');
+    const db=await this.open(),names=[...stores,...(db.objectStoreNames.contains('days')?['days']:[])],zone=this.zone;
+    await this.transaction(names,'readwrite',(s)=>{
+      for(const name of ['hours','day_apps','progress','app_total_days'])s[name].delete([zone,day]);
+      for(const name of ['app_hours','hour_apps','app_totals']){
+        const source=name==='app_totals'?s[name].index('zoneDay'):s[name];
+        const range=name==='app_totals'?IDBKeyRange.only([zone,day]):IDBKeyRange.bound([zone,day],[zone,day,[]]);
+        const request=source.openCursor(range);request.onsuccess=()=>{const cursor=request.result;if(cursor){cursor.delete();cursor.continue();}};
+      }
+      if(s.days)s.days.delete(`${zone}|${day}`);
+      s.summaries.put({zone,dayStart:day,dayEnd:nextDate(day),through:nextDate(day),onMs:0,coveredMs:0,deleted:true});
+    });
+    this.forgetDay(day);
+  }
   /** Replace one incomplete hour, updating all derived totals in one transaction. */
   async repairHour(result,hour){
     const day=result.dayStart,zone=this.zone,key=keyOf(zone,day),a=new Date(day),b=new Date(day);
@@ -185,12 +202,12 @@ export class DailyUsageCache{
     const incoming=new Map();
     for(const row of value.apps??[]){if(typeof row?.[0]!=='string'||!finite(row[1]))throw Error('补读应用数据无效');incoming.set(row[0],(incoming.get(row[0])??0)+row[1]);}
     const summary=await this.transaction(stores,'readwrite',(s,set,fail,read)=>{
-      let base,oldHour,dayApps,pending=3;const appHours=new Map();
+      let base,oldHour,dayApps,deleted=false,pending=4;const appHours=new Map();
       const prepare=()=>{
         if(--pending)return;
         // Do not replace a newer tail with an older in-flight request, or trade
         // confirmed time for another unknown result.
-        if(!base||Math.min(b.getTime(),base.through)!==result.through||value.coveredMs<=base.hours[hour].coveredMs)return;
+        if(deleted||!base||Math.min(b.getTime(),base.through)!==result.through||value.coveredMs<=base.hours[hour].coveredMs)return;
         const old=new Map((oldHour?.apps??[]).map(row=>[row.pkg,row.ms])),packages=new Set([...old.keys(),...incoming.keys()]);
         const finish=()=>{
           try{
@@ -214,6 +231,7 @@ export class DailyUsageCache{
         pending=packages.size;if(!pending){finish();return;}
         for(const pkg of packages)read(s.app_hours,[zone,day,pkg],value=>{appHours.set(pkg,value);if(--pending===0)finish();});
       };
+      read(s.summaries,key,value=>{deleted=!!value?.deleted;prepare();});
       read(s.hours,key,value=>{base=value;prepare();});read(s.hour_apps,[zone,day,hour],value=>{oldHour=value;prepare();});read(s.day_apps,key,value=>{dayApps=value;prepare();});
     });
     if(!summary)return false;this.forgetDay(day);this.remember('summaries',key,summary);return true;
@@ -228,7 +246,7 @@ export class DailyUsageCache{
       for(const row of hour.apps??[]){if(typeof row?.[0]!=='string'||!finite(row[1]))throw Error('应用使用数据无效');if(!deltas.has(row[0]))deltas.set(row[0],Array(24).fill(0));deltas.get(row[0])[index]+=row[1];}
     });
     const written=await this.transaction(stores,'readwrite',(s,set,fail,read)=>{
-      let base,dayApps,indexMarker,pending=3;const oldHours=new Map(),oldApps=new Map();
+      let base,dayApps,indexMarker,deleted,pending=4;const oldHours=new Map(),oldApps=new Map();
       const finish=()=>{
         try{
           const meta={zone,dayStart:day,dayEnd:result.dayEnd,through:result.through};
@@ -253,12 +271,14 @@ export class DailyUsageCache{
       };
       const prepare=()=>{
         if(--pending)return;
+        if(deleted){set(deleted);return;}
         if(!base||replace)base={through:day,hours:emptyHours()};
         if(base.through!==result.from){fail(Error('使用统计已更新，请重新读取'));return;}
         pending=changedHours.length+deltas.size;if(!pending){finish();return;}
         for(const hour of changedHours)read(s.hour_apps,[zone,day,hour],value=>{oldHours.set(hour,replace?undefined:value);if(--pending===0)finish();});
         for(const pkg of deltas.keys())read(s.app_hours,[zone,day,pkg],value=>{oldApps.set(pkg,replace?undefined:value);if(--pending===0)finish();});
       };
+      read(s.summaries,key,value=>{deleted=value?.deleted?value:null;prepare()});
       read(s.hours,key,value=>{base=value;prepare()});read(s.day_apps,key,value=>{dayApps=replace?undefined:value;prepare()});read(s.app_total_days,key,value=>{indexMarker=value;prepare()});
     });
     // Clear only this date's small in-memory layers. Durable history is retained.

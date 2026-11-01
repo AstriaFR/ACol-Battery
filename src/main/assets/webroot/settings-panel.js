@@ -1,18 +1,8 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.0';
-import{loadHomePriority,saveHomePriority}from'./preferences.js?v=acol-2.0';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.1';
 export class SettingsPanel{
-  constructor(api,onSaved,onHomePriority){
+  constructor(api,onSaved){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
     this.ready=false;this.dirty=false;this.running=null;this.timer=null;this.lastSaved='';this.editor=null;
-    this.homePriority=loadHomePriority();this.onHomePriority=onHomePriority;
-    this.priorityButtons=[...this.form.querySelectorAll('[data-home-priority]')];
-    const showPriority=()=>{for(const button of this.priorityButtons)button.setAttribute('aria-pressed',String(button.dataset.homePriority===this.homePriority));};
-    showPriority();
-    for(const button of this.priorityButtons)button.onclick=()=>{
-      if(!this.ready)return;const value=button.dataset.homePriority;if(value===this.homePriority)return;
-      if(!saveHomePriority(value)){this.setStatus('首页显示设置未能保存，请重试。',true);return;}
-      this.homePriority=value;showPriority();this.onHomePriority?.(value);
-    };
     this.fastButton=document.getElementById('toggleFast');this.fastBusy=false;this.fastValue=false;this.editorBusy=false;
     this.fastButton.onclick=()=>this.toggleFast();
     this.gameInfo=document.getElementById('gameModeExplanation');
@@ -87,7 +77,7 @@ export class SettingsPanel{
     if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
     this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
     try{
-      if(!await this.askChange('恢复默认设置？','恢复设置项和跟随系统主题；游戏模式与功耗悬浮显示将关闭，记录总开关将开启。已有记录和备份不会删除。'))return false;
+      if(!await this.askChange('恢复默认设置？','恢复设置项和跟随系统主题；游戏性能统计与功耗悬浮显示将关闭，记录总开关将开启。已有记录和备份不会删除。'))return false;
       if(!await this.flush())throw Error('当前设置未能保存，请重试。');
       let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
       for(const field of this.form.elements)field.disabled=true;
@@ -98,8 +88,6 @@ export class SettingsPanel{
       if(this.fastValue){const fast=await this.api('set_fast',0);this.updateFast(fast.fastEnabled);this.onSaved(fast.settings);}
       if(this.powerDisplayValue){const power=await this.api('set_power_display',0);this.updatePowerDisplay(power.powerDisplayEnabled,power.powerDisplayError);this.onSaved(power.settings);}
       if(this.recordingValue===false){const recording=await this.api('set_recording',1);this.updateRecording(recording.recordingEnabled,recording.recordingProblem);this.onSaved(recording.settings);}
-      if(!saveHomePriority('percentage'))throw Error('首页显示设置未能保存。');
-      this.homePriority='percentage';for(const item of this.priorityButtons)item.setAttribute('aria-pressed',String(item.dataset.homePriority===this.homePriority));this.onHomePriority?.(this.homePriority);
       this.onResetUi?.();this.setStatus('');return true;
     }catch(error){this.setStatus(`恢复未全部完成，请检查当前设置。${error.message}`,true);return false;}
     finally{
@@ -134,8 +122,6 @@ export class SettingsPanel{
   async toggleFast(){
     if(!this.ready||this.fastBusy)return;const enabled=!this.fastValue;this.fastBusy=true;this.updateFast();this.setStatus('');
     try{
-      const seconds=this.form.elements.namedItem('fastSeconds').value,performanceSeconds=this.form.elements.namedItem('performanceSeconds').value;
-      if(!await this.askChange(enabled?'开启游戏模式？':'关闭游戏模式？',enabled?`结束当前记录，功耗每 ${seconds} 秒、性能每 ${performanceSeconds} 秒采样，耗电统计固定每分钟按 RM 计算。游戏记录不自动删除，接入充电后退出。`:'结束游戏记录并补结算，立即建立普通记录。',!enabled))return;
       if(!await this.flush())throw Error('设置未能保存，请重试。');
       const result=await this.api('set_fast',enabled?1:0);this.fastValue=result.fastEnabled;this.onSaved(result.settings);
     }catch(e){this.setStatus(e.message,true);}
@@ -167,11 +153,11 @@ export class SettingsPanel{
   closeRecordingConfirmation(){if(this.recordingConfirm.open)this.recordingConfirm.close();const resolve=this.recordingResolve;this.recordingResolve=null;resolve?.(false);}
   edit(key,push=true){
     if(!this.ready||this.keypad.open)return;
-    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
-    const field=this.form.elements.namedItem(key),decimal=['capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
+    const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',energyWh:'默认能量量程',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
+    const field=this.form.elements.namedItem(key),decimal=['energyWh','capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
     this.editor={key,field,draft:field.value,fresh:true,decimal,signed};
     document.getElementById('keypadTitle').textContent=names[key];
-    const unit=key.endsWith('Pct')?'%':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
+    const unit=key.endsWith('Pct')?'%':key==='energyWh'?'Wh':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
     document.getElementById('keypadUnit').textContent=unit;
     const minimum=decimal?Number(field.min).toFixed(2):field.min,maximum=decimal?Number(field.max).toFixed(2):field.max;
     document.getElementById('keypadRange').textContent=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
@@ -198,6 +184,7 @@ export class SettingsPanel{
   }
   async commitEditor(){
     const e=this.editor;if(!e||this.editorBusy)return;
+    if(e.key==='energyWh'&&e.draft===''){e.field.value='';e.field.dispatchEvent(new Event('change',{bubbles:true}));this.dismissEditor();return;}
     if(!/^-?\d+(?:\.\d*)?$/.test(e.draft)){this.editorError('请输入完整数值。');return;}
     let value;
     try{value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);}
@@ -268,6 +255,7 @@ export class SettingsPanel{
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key);
       if(['capacityAuto','fastAutoOff'].includes(key)){result[key]=field.checked;continue;}
+      if(key==='energyWh'&&field.value.trim()===''){result[key]=null;field.removeAttribute('aria-invalid');continue;}
       const good=field.value.trim()!==''&&field.checkValidity();field.setAttribute('aria-invalid',String(!good));
       if(!good)throw Error('请输入完整数值。');
       result[key]=field.valueAsNumber;
@@ -278,7 +266,7 @@ export class SettingsPanel{
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key),v=value[key];
       if(['capacityAuto','fastAutoOff'].includes(key))field.checked=v;
-      else field.value=['capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
+      else field.value=v===null||v===undefined?'':['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
       field.removeAttribute('aria-invalid');
     }
   }

@@ -1,6 +1,6 @@
-import{ScreenTimePanel}from'./screen-time.js?v=acol-2.0';
-import{midnight,dailyView,neighboringDates}from'./daily-usage-cache.js?v=acol-2.0';
-import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.0';
+import{ScreenTimePanel}from'./screen-time.js?v=acol-2.1';
+import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.1';
+import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.1';
 export const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 export const dateText=wall=>{const d=new Date(wall);return`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`};
 export function roundedDuration(ms){
@@ -12,6 +12,11 @@ export class DailyUsageChart extends ScreenTimePanel{
   constructor(api,options){
     super(api,{prefix:options.prefix,hint:'每日亮屏时长 · 长按小时查看应用',inspect:options.inspect,tipHost:options.tipHost,minuteUnit:'分'});
     this.formatDate=options.formatDate??dateText;this.formatDuration=options.formatDuration??roundedDuration;
+    if(['homeUsage','usageDay'].includes(options.prefix)){
+      this.deleteButton=document.createElement('button');this.deleteButton.type='button';this.deleteButton.className='usage-day-delete';this.deleteButton.textContent='删除当天数据';this.deleteButton.hidden=true;
+      const hint=this.node('screenTimeHint'),footer=document.createElement('div');footer.className='usage-day-footer';hint.before(footer);footer.append(hint,this.deleteButton);
+      this.deleteButton.onclick=()=>this.onDeleteDay?.(this.day);
+    }
     this.getCache=options.getCache;this.cache=this.getCache();this.onDate=options.onDate;this.day=midnight(Date.now());this.dayToken=0;this.navToken=0;this.pkg=null;
   }
   close(){this.dayToken++;this.navToken++;this.cancelPress();this.hideTip();}
@@ -28,7 +33,7 @@ export class DailyUsageChart extends ScreenTimePanel{
   async display(day,pkg=null,label=''){
     const changed=day!==this.day||pkg!==this.pkg,token=++this.dayToken;this.day=day;this.pkg=pkg;this.label=label;this.cache=this.getCache();
     if(changed){this.hourDetails=null;this.selected=null;this.entry=null;this.data=null;this.cancelPress();this.hideTip();}
-    this.host.hidden=false;this.navigation();
+    this.host.hidden=false;if(this.deleteButton)this.deleteButton.hidden=!canDeleteUsageDay(day);this.navigation();
     if(!this.entry){this.drawEmpty();this.node('screenTimeTotal').textContent='—';this.node('screenTimeHint').textContent='正在读取当天缓存…';}
     try{
       const [entry,app,hourApps]=await Promise.all([this.cache.getHours(day),pkg?this.cache.getAppHours(day,pkg):null,pkg?null:this.cache.getAllHourApps(day)]);if(token!==this.dayToken)return;

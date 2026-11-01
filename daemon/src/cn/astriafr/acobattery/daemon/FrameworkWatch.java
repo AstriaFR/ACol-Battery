@@ -13,6 +13,11 @@ final class FrameworkWatch implements AutoCloseable {
     private final Runnable wake;
     private final IBinder.DeathRecipient death=this::lost;
     private volatile boolean failed,closed;
+    private String usageError="";
+    String usageError(){return usageError;}
+    private void optionalUnavailable(String name,String detail){
+        if(name.equals("usagestats"))usageError="应用使用统计服务暂不可用："+detail;
+    }
 
     FrameworkWatch(Runnable wake){this.wake=wake;}
     void start()throws Exception {
@@ -22,11 +27,11 @@ final class FrameworkWatch implements AutoCloseable {
     void start(Lookup lookup)throws Exception {
         try {
             for(String name:new String[]{"activity","usagestats","display","power","package"}) {
-                boolean optional=name.equals("display")||name.equals("power");
+                boolean optional=name.equals("display")||name.equals("power")||name.equals("usagestats");
                 IBinder binder;
-                try{binder=lookup.get(name);}catch(Exception unavailable){if(optional)continue;throw unavailable;}
-                if(binder==null||!binder.isBinderAlive()){if(optional)continue;throw new IOException("系统服务尚未就绪："+name);}
-                try{binder.linkToDeath(death,0);services.add(binder);}catch(Exception unavailable){if(!optional)throw unavailable;}
+                try{binder=lookup.get(name);}catch(Exception unavailable){if(optional){optionalUnavailable(name,cause(unavailable).toString());continue;}throw unavailable;}
+                if(binder==null||!binder.isBinderAlive()){if(optional){optionalUnavailable(name,"服务尚未就绪");continue;}throw new IOException("系统服务尚未就绪："+name);}
+                try{binder.linkToDeath(death,0);services.add(binder);}catch(Exception unavailable){if(!optional)throw unavailable;optionalUnavailable(name,cause(unavailable).toString());}
             }
             if(!healthy())throw new IOException("系统服务正在重启，稍后自动重试。");
         }catch(Exception e){close();throw e;}

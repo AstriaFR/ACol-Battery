@@ -1,5 +1,5 @@
-import{ScreenTimePanel}from'./screen-time.js?v=acol-2.0';
-import{RecordEnergyCache,energyRows,formatWh}from'./record-energy-cache.js?v=acol-2.0';
+import{ScreenTimePanel}from'./screen-time.js?v=acol-2.1';
+import{RecordEnergyCache,energyRows,formatWh}from'./record-energy-cache.js?v=acol-2.1';
 
 const nextDay=wall=>{const d=new Date(wall);d.setDate(d.getDate()+1);return d.getTime();};
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;

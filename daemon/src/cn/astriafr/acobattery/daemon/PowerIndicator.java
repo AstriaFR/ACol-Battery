@@ -80,7 +80,7 @@ final class PowerIndicator implements AutoCloseable {
             canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
             String value=text;
             Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-            float measured=PowerGlyphs.width(value);float scale=.85f*Math.min((width-4)/Math.max(1,measured),height/1250f);
+            float measured=PowerGlyphs.width(value);float scale=.765f*Math.min((width-4)/Math.max(1,measured),height/1250f);
             paint.setColor(textColor);paint.setStyle(Paint.Style.FILL);
             canvas.save();canvas.translate((width-measured*scale)/2,height/2f+350*scale);canvas.scale(scale,-scale);
             PowerGlyphs.draw(canvas,paint,value);canvas.restore();
@@ -90,7 +90,7 @@ final class PowerIndicator implements AutoCloseable {
         try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
             int stack=(Integer)Display.class.getMethod("getLayerStack").invoke(display);
             SurfaceControl.Transaction.class.getMethod("setLayerStack",SurfaceControl.class,int.class).invoke(tx,layer,stack);
-            tx.setLayer(layer,Integer.MAX_VALUE-100).setPosition(layer,Math.max(0,metrics.widthPixels*.35f-width/2),Math.max(0,(bar-height)/2));
+            tx.setLayer(layer,Integer.MAX_VALUE-100).setPosition(layer,Math.max(0,metrics.widthPixels*.35f-width/2),Math.max(0,(bar-height)/2)+density);
             SurfaceControl.Transaction.class.getMethod(display.getState()==Display.STATE_ON?"show":"hide",SurfaceControl.class).invoke(tx,layer);tx.apply();
         }
     }

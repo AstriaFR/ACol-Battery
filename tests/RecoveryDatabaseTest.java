@@ -40,18 +40,18 @@ public final class RecoveryDatabaseTest {
     }
     static void fastMinuteAnchor()throws Exception {
         File dir=Files.createTempDirectory("acol-recovery-game-").toFile();Main first=open(dir,"boot-a");
-        first.fastEnabled=true;first.sampling.fastMs=1000;first.state=0;
+        first.gameContext=true;first.fastEnabled=true;first.sampling.fastMs=1000;first.state=0;
         first.begin(reading(10000,5000,false));long id=first.session;
         first.fastStatsPrevious=reading(30000,4998,false);first.fastStatsNext=70000;
         first.depletion.restore(-4);first.checkpoint(first.previous);release(first);
-        Main next=open(dir,"boot-a");next.fastEnabled=true;next.sampling.fastMs=1000;
+        Main next=open(dir,"boot-a");next.gameContext=true;next.fastEnabled=true;next.sampling.fastMs=1000;
         next.recover(reading(40000,4996,false));check(next.session==id);
         check(next.fastStatsPrevious.elapsed==40000);check(next.fastStatsNext==70000);
         close(amount(next,"mah",Core.OTHER),0); // Saved rebound credit absorbs the 2 mAh correction.
         check(value(next,"SELECT fast_seconds FROM sessions")>0);check(value(next,"SELECT active FROM sessions")==1);
         next.sampleFastStats(reading(40000,4996,false),true);close(amount(next,"mah",Core.OTHER),0);
         release(next);
-        Main twice=open(dir,"boot-a");twice.fastEnabled=true;twice.sampling.fastMs=1000;
+        Main twice=open(dir,"boot-a");twice.gameContext=true;twice.fastEnabled=true;twice.sampling.fastMs=1000;
         twice.recover(reading(50000,4991,false));check(twice.session==id);check(twice.fastStatsNext==70000);
         close(amount(twice,"mah",Core.OTHER),3);close(amount(twice,"energy_mwh",Core.OTHER),0);release(twice);
     }

@@ -1,4 +1,4 @@
-import{ScreenTimeCache}from'./screen-time-cache.js?v=acol-2.0';
+import{ScreenTimeCache}from'./screen-time-cache.js?v=acol-2.1';
 
 export const roundedWh=value=>Math.round((Math.max(0,Number(value)||0)+Number.EPSILON)*100)/100;
 export const formatWh=value=>`${roundedWh(value).toFixed(2)} Wh`;

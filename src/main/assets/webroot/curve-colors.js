@@ -7,5 +7,8 @@ export function curveColor(index){
   const palette=document.documentElement.dataset.theme==='dark'?darkPalette:lightPalette;
   return palette[index]??`hsl(${Math.round((index*137.508)%360)} 82% ${document.documentElement.dataset.theme==='dark'?72:32}%)`;
 }
-const indices={rm:3,pct:0,current:1,voltage:2,power:5,temp:4};
-export function batteryColor(key){return curveColor(indices[key]??0);}
+const indices={rm:3,pct:0,current:1,voltage:2,power:5,temp:4,energy:6};
+export function batteryColor(key){
+  if(key==='energy')return document.documentElement.dataset.theme==='dark'?'#FFB266':'#E58A24';
+  return curveColor(indices[key]??0);
+}

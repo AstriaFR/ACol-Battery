@@ -7,7 +7,10 @@ async function samplingSettings(){
 const root=path.join(__dirname,'../src/main/assets/webroot/');
  const {DEFAULT_SETTINGS,encodeSettings,settingsKeys}=await import(pathToFileURL(path.join(root,'config.js')).href);
  const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
- assert.equal(encodeSettings(DEFAULT_SETTINGS).length,14);
+ assert.equal(encodeSettings(DEFAULT_SETTINGS).length,15);
+ assert.equal(encodeSettings(DEFAULT_SETTINGS)[14],10001);
+ for(const value of [0,0.01,25.34,100])assert.equal(encodeSettings({...DEFAULT_SETTINGS,energyWh:value})[14],Math.round(value*100));
+ for(const value of [-0.01,100.01,1.001])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,energyWh:value}));
  assert.equal(DEFAULT_SETTINGS.fastSeconds,10);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,30);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
  for(const value of [1,30,60,120])assert.equal(encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value})[9],value);
  for(const value of [0,121,1.5])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value}));
@@ -54,12 +57,8 @@ globalThis.localStorage={
 };
 globalThis.document={documentElement:{dataset:{theme:'light'}}};
 const root=path.join(__dirname,'../src/main/assets/webroot/');
-const{loadSelection,saveSelection,loadHomePriority,saveHomePriority}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
+const{loadSelection,saveSelection}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
 storage.clear();
-  assert.equal(loadHomePriority(),'percentage','home priority defaults to percentage');
-  assert.ok(saveHomePriority('capacity'));
-  assert.equal(loadHomePriority(),'capacity','an explicit capacity preference is preserved');
-
   const available=['rm','pct','voltage','power','temp'];
   const defaults=loadSelection('game',available);
   assert.ok(defaults.has('temp'),'temperature is enabled for new game records by default');
@@ -80,15 +79,21 @@ async function resetSettings(){
  const nodes={resetSettings:{disabled:false},themeToggle:{disabled:false}};globalThis.document={getElementById:id=>nodes[id]};
  const store=new Map();globalThis.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};
  const panel=Object.create(SettingsPanel.prototype),calls=[],defaults={...DEFAULT_SETTINGS,capacityAh:6.23};
- Object.assign(panel,{ready:true,form:{elements:[{disabled:false}]},fastButton:{},recording:{},powerDisplay:{},priorityButtons:[],fastValue:true,powerDisplayValue:true,recordingValue:false,
-   askChange:async()=>true,flush:async()=>true,fill:()=>{},onSaved:()=>{},onHomePriority:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
+ Object.assign(panel,{ready:true,form:{elements:[{disabled:false}]},fastButton:{},recording:{},powerDisplay:{},fastValue:true,powerDisplayValue:true,recordingValue:false,
+   askChange:async()=>true,flush:async()=>true,fill:()=>{},onSaved:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
    updateFast(v){if(typeof v==='boolean')this.fastValue=v},updatePowerDisplay(v){this.powerDisplayValue=v},updateRecording(v){this.recordingValue=v},
    api:async(action,...args)=>{calls.push([action,...args]);if(action==='default_settings')return{settings:defaults};if(action==='set_settings')return{settings:defaults};if(action==='set_fast')return{fastEnabled:false,settings:defaults};if(action==='set_power_display')return{powerDisplayEnabled:false,settings:defaults};if(action==='set_recording')return{recordingEnabled:true,settings:defaults};throw Error(action);}
  });
  assert.equal(await panel.resetDefaults(),true);
  const save=calls.find(c=>c[0]==='set_settings');assert.equal(save[3],623,'uses device design capacity default');assert.equal(save.at(-1),0,'does not prune existing records');
  assert.deepEqual(calls.map(c=>c[0]),['default_settings','set_settings','set_fast','set_power_display','set_recording','theme']);
- assert.equal(panel.homePriority,'percentage');assert.equal(panel.resetBusy,false);assert.equal(panel.resetPromise,null);
+ assert.equal(panel.resetBusy,false);assert.equal(panel.resetPromise,null);
  calls.length=0;panel.askChange=async()=>false;assert.equal(await panel.resetDefaults(),false);assert.equal(calls.length,0,'cancelling does not modify settings');
 }
-runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function gameToggle(){
+ const {SettingsPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/settings-panel.js')).href);
+ const panel=Object.create(SettingsPanel.prototype),calls=[];
+ Object.assign(panel,{ready:true,fastValue:false,fastBusy:false,updateFast(){},setStatus(message){if(message)throw Error(message)},flush:async()=>true,onSaved(){},askChange(){throw Error('Game toggle must not request confirmation')},api:async(action,value)=>{calls.push([action,value]);return{fastEnabled:!!value,settings:{}}}});
+ await panel.toggleFast();assert.equal(panel.fastValue,true);await panel.toggleFast();assert.equal(panel.fastValue,false);assert.deepEqual(calls,[['set_fast',1],['set_fast',0]]);assert.equal(panel.fastBusy,false);
+}
+runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});

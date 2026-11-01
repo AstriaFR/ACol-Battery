@@ -8,11 +8,18 @@ public final class RecoveryTest {
     }
     static void close(double value,double expected){check(Math.abs(value-expected)<1e-9);}
     public static void main(String[] args){
+        Core.Sampling longSleep=new Core.Sampling();longSleep.restoreExpected(120*60000L);
+        check(longSleep.expected==120*60000L&&longSleep.maxGap()==180*60000L);
+        close(new Core.Depletion().consume(5000,4900,100*60000L,longSleep.maxGap()),100);
+        check(!Core.finite(new Core.Depletion().consume(5000,4900,181*60000L,longSleep.maxGap())));
+        longSleep.restoreExpected(Long.MAX_VALUE);check(longSleep.expected==120*60000L);
+        longSleep.restoreExpected(-1);check(longSleep.expected==1000);
         // APK updater and system_server recovery preserve kernel boot and monotonic clock.
         check(resume("boot-a","boot-a","discharge",false,false,false,2000,2300));
         check(resume("boot-a","boot-a","discharge",false,false,false,2000,3600000));
         check(resume("boot-a","boot-a","charge",false,true,false,2000,2300));
         check(resume("boot-a","boot-a","discharge",true,false,true,2000,2300));
+        check(resume("boot-a","boot-a","discharge",true,true,true,2000,2300));
         check(!resume("boot-a","boot-b","discharge",false,false,false,2000,2300));
         check(!resume("boot-a","boot-a","discharge",false,true,false,2000,2300));
         check(!resume("boot-a","boot-a","charge",false,false,false,2000,2300));

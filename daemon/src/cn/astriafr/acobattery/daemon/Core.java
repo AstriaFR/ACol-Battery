@@ -12,6 +12,10 @@ public final class Core {
         public int cellCount=2;
         public String voltageSource="",currentSource="",rmSource="",onlineSource="";
         public boolean online, full, enabled;
+        public boolean tailAvailable;
+        public boolean chargeEnabledKnown;
+        public String tailSource="unavailable";
+        public boolean onlineKnown=true;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
         // OPLUS gauge current is negative while charging.
@@ -29,7 +33,13 @@ public final class Core {
     public static boolean resumeSession(String savedBoot,String boot,String kind,boolean wasFast,
             boolean online,boolean fast,long start,long end,long now) {
         return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot)&&start>=0&&end>=start&&now>=end
-            &&(online?"charge":"discharge").equals(kind)&&wasFast==(!online&&fast);
+            &&(fast?wasFast&&"discharge".equals(kind):!wasFast&&(online?"charge":"discharge").equals(kind));
+    }
+    public static long gamePowerInterval(boolean online,long gameSeconds,long chargeSeconds){
+        return (online?chargeSeconds:gameSeconds)*1000;
+    }
+    public static boolean gameDischargeInterval(Reading before,Reading after){
+        return before.onlineKnown&&after.onlineKnown&&!before.online&&!after.online;
     }
     public static boolean resumableStop(String reason) {
         return "service_updated".equals(reason)||"framework_restarted".equals(reason);
@@ -96,11 +106,13 @@ public final class Core {
     }
 
     public static final class Sampling {
+        public static final long MAX_INTERVAL_MS=120*60000L;
         public boolean interactive=true,screenSample;
         public long next,expected=120000;
         public long screenOnMs=120000,screenOffMs=1800000,chargeMs=3000,fastMs;
         public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
+        public void restoreExpected(long saved) { expected=Math.max(1000,Math.min(MAX_INTERVAL_MS,saved)); }
         public boolean screen(boolean on,long now) {
             if(interactive==on)return false;
             interactive=on;screenSample=true;next=now;return true;
@@ -124,6 +136,18 @@ public final class Core {
         public void reset(){last=-1;next=0;}
     }
 
+    /** A false driver flag is valid; a missing or malformed flag is not. */
+    public static void applyTail(Reading r,double fv,double full,double enabled) {
+        r.fv=fv;r.full=full==1;r.enabled=enabled==1;
+        r.chargeEnabledKnown=enabled==0||enabled==1;
+        r.tailAvailable=finite(fv)&&fv>0&&(full==0||full==1)&&r.chargeEnabledKnown;
+        r.tailSource=r.tailAvailable?"oplus_log":"unavailable";
+    }
+    public static void applyTailFallback(Reading r,double fv,int status,String source) {
+        r.fv=fv;r.full=status==5;r.tailSource=source;
+        r.tailAvailable=status>=2&&status<=5&&finite(fv)&&fv>0;
+    }
+
     public static final class FullGate {
         public long since = -1, last = -1;
         private double minRm, maxRm;
@@ -132,7 +156,8 @@ public final class Core {
             return update(r,1000);
         }
         public boolean update(Reading r,long expectedMs) {
-            boolean tail = r.online && r.full && r.enabled && r.valid()
+            boolean fallback=r.tailSource.equals("sysfs_status")||r.tailSource.equals("android_status");
+            boolean tail = r.tailAvailable && r.online && r.full && (r.enabled||fallback&&!r.chargeEnabledKnown) && r.valid()
                 && finite(r.current) && r.current >= -60 && r.current <= 40
                 && finite(r.fv) && r.vmin >= Math.max(4300, r.fv - 100)
                 && r.temp >= 10 && r.temp <= 45;

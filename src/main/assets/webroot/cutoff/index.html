@@ -7,7 +7,7 @@
   <script>const systemDark=()=>{try{const d=window.AcoNative?.isSystemDark?.();if(typeof d==='boolean')return d}catch{}return matchMedia('(prefers-color-scheme: dark)').matches};try{const p=JSON.parse(localStorage.getItem('acol.theme.preference'));document.documentElement.dataset.theme=(p?.step==='auto'||!p?.step)?(systemDark()?'dark':'light'):(p.dark?'dark':'light')}catch{document.documentElement.dataset.theme=systemDark()?'dark':'light'}</script>
   <title>截止电压调整</title>
   <script>try{if(window.parent!==window&&new URLSearchParams(location.search).get('embedded')==='1'){const theme=window.parent.document.documentElement.dataset.theme;if(theme)document.documentElement.dataset.theme=theme}}catch{}document.documentElement.style.colorScheme=document.documentElement.dataset.theme==='dark'?'dark':'light';</script>
-  <link rel="stylesheet" href="style.css?v=acol-2.0">
+  <link rel="stylesheet" href="style.css?v=acol-2.1">
 </head>
 <body>
   <main>
@@ -23,15 +23,14 @@
       <h2 id="editTitle">调整电压</h2>
       <form id="voltageForm">
         <label for="termInput">电量计截止电压 <span>mV</span></label>
-        <input id="termInput" type="number" inputmode="none" min="2500" max="3500" step="1" required readonly aria-haspopup="dialog" disabled>
+        <input id="termInput" type="number" inputmode="none" min="2600" max="3400" step="1" required readonly aria-haspopup="dialog" disabled>
         <label for="shutdownInput">软件关机电压 <span>mV</span></label>
-        <input id="shutdownInput" type="number" inputmode="none" min="2500" max="3500" step="1" required readonly aria-haspopup="dialog" disabled>
-        <p class="note">两项电压均可设置为 2500–3500 mV。</p>
-        <div class="actions"><button id="restore" type="button" disabled>恢复厂商截止电压</button><button id="apply" class="accent" type="submit" disabled>确认修改…</button></div>
+        <input id="shutdownInput" type="number" inputmode="none" min="2600" max="3400" step="1" required readonly aria-haspopup="dialog" disabled>
+        <div class="actions"><button id="restore" type="button" disabled>恢复厂商截止电压</button><button id="apply" class="accent" type="submit" disabled>确认修改</button></div>
       </form>
     </section>
     <p id="message" role="status" aria-live="polite"></p>
-    <footer>两个电压设置一般接近，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。<br>仅在确认后修改一次，系统重启后可能需要重新设置。</footer>
+    <footer>两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。<br>仅在确认后修改一次，系统重启后可能需要重新设置。</footer>
   </main>
   <dialog id="confirmation" aria-labelledby="confirmTitle">
     <h2 id="confirmTitle"></h2><p id="confirmText"></p>
@@ -47,6 +46,6 @@
     <p id="cutoffKeypadError" class="keypad-error" role="status" hidden></p>
     <div class="keypad-grid"><button type="button" data-key="sign" aria-label="切换正负号">−</button><button type="button" data-key="clear">清空</button><button type="button" data-key="backspace" aria-label="退格">⌫</button><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="00">00</button><button type="button" data-key="0">0</button><button type="button" data-key="dot">.</button></div>
   </dialog>
-  <script type="module" src="app.js?v=acol-2.0"></script>
+  <script type="module" src="app.js?v=acol-2.1"></script>
 </body>
 </html>
