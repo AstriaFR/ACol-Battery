@@ -98,6 +98,61 @@ const {Chart,series,signalScale,setChartSettings,plotPoints,plotAxisMinimum}=awa
  const capacityStart=next(capacity,[5600]);assert.equal(next(capacity,[5601],capacityStart).full,5601);
 }
 
+async function chartTimes(){
+ const{Chart,systemTimeLabel,sampleSystemWall,chartSystemWall,wallTimeTicks,elapsedTimeTicks,elapsedMinuteLabel,timeAxisLabels}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+ const start=new Date(2026,10,2,23,59,30).getTime(),row=Array(14).fill(null);row[0]=60000;row[6]=0;row[13]=start+3600000;
+ assert.equal(systemTimeLabel(start),'23:59');assert.equal(systemTimeLabel(start,true),'11/02 23:59:30');
+ assert.equal(systemTimeLabel(start+60000),'00:00');assert.equal(systemTimeLabel(null),'—');
+ assert.equal(elapsedMinuteLabel(59000),'0:00');assert.equal(elapsedMinuteLabel(5*60000),'0:05');
+ assert.equal(elapsedMinuteLabel(65*60000+59000),'1:05');assert.equal(elapsedMinuteLabel(27*3600000),'27:00');
+ for(const minutes of[25,45,75,120,360,1440]){
+  const grid=elapsedTimeTicks([3*60000,(minutes+3)*60000],360);
+  assert.ok(grid.length>=3&&grid.length<=6);
+  assert.ok(grid.every(t=>t.x%(5*60000)===0&&t.x>3*60000&&t.x<(minutes+3)*60000),'charging ticks align to elapsed minutes, independent of timezone');
+ }
+ assert.deepEqual(elapsedTimeTicks([1000,59000],360),[]);
+ const measure=text=>text.length*6;
+ const crowded=timeAxisLabels('10:03','11:01',[{x:100,text:'10:15'},{x:343,text:'11:00'}],360,8,measure);
+ assert.equal(crowded[0].x,3,'start label sits near the canvas edge');
+ assert.ok(crowded.some(t=>t.text==='11:00'&&t.dy===-6),'the nearby round tick stays visible');
+ assert.equal(crowded.at(-1).dy,6);assert.equal(crowded.at(-1).x,357,'end label stays at the right canvas edge on the lower row');assert.equal(crowded.at(-1).align,'right');
+ assert.ok(crowded.every(t=>16+t.dy<25),'labels stay within the existing axis gutter');
+ const sparse=timeAxisLabels('0:00','1:25',[{x:180,text:'0:30'}],360,8,measure);
+ assert.ok(sparse.every(t=>t.dy===0),'no overlap keeps one row');
+ assert.equal(timeAxisLabels('0:00','1:25',[],360,8,measure,34)[0].x,34,'charging start stays at the plot axis');
+ assert.equal(sampleSystemWall(row,'charge'),start+3600000);
+ const walls=new Map([[60000,start+120000]]);assert.equal(sampleSystemWall(row,'performance',walls),start+120000);
+ assert.equal(sampleSystemWall(row,'performance',new Map()),null,'performance values are never mistaken for timestamps');
+ assert.equal(chartSystemWall([row],start,90000),row[13]+30000,'ticks follow the saved system clock after a clock correction');
+ assert.equal(chartSystemWall([[0]],start,60000),start+60000);assert.equal(chartSystemWall([],null,0),null);
+ const gridStart=new Date(2026,10,2,10,3).getTime();
+ const ticks=wallTimeTicks([],gridStart,[0,60*60000],360);
+ assert.ok(ticks.length>=3&&ticks.length<=6);assert.ok(ticks.every(t=>new Date(t.wall).getMinutes()%5===0));
+ assert.deepEqual(wallTimeTicks([],gridStart,[0,60000],360),[]);
+ for(const minutes of[25,45,75,120,360,1440]){
+  const grid=wallTimeTicks([],gridStart,[0,minutes*60000],360);
+  assert.ok(grid.length>=3&&grid.length<=6,`${minutes} minute window has a readable grid`);
+  assert.ok(grid.every((t,i)=>!i||(t.x-grid[i-1].x)*360/(minutes*60000)>=45));
+ }
+ const initial=Array(14).fill(null);initial[0]=0;initial[13]=gridStart;
+ const changed=Array(14).fill(null);changed[0]=30*60000;changed[13]=gridStart+90*60000;
+ const shifted=wallTimeTicks([initial,changed],gridStart,[0,60*60000],360);
+ assert.ok(shifted.every(t=>new Date(t.wall).getMinutes()%5===0));
+ assert.ok(shifted.some(t=>t.x<changed[0]&&t.wall===gridStart+t.x));
+ assert.ok(shifted.some(t=>t.x>=changed[0]&&t.wall===changed[13]+t.x-changed[0]));
+ const performancePoints=[initial,changed].map(point=>{const p=[...point];p[13]=999;return p;});
+ const performanceWalls=new Map([[0,initial[13]],[changed[0],changed[13]]]);
+ assert.equal(chartSystemWall(performancePoints,gridStart,45*60000,'performance',performanceWalls),changed[13]+15*60000);
+ assert.deepEqual(wallTimeTicks(performancePoints,gridStart,[0,60*60000],360,'performance',performanceWalls),shifted,'game battery and performance grids use the same recorded wall time');
+ assert.equal(chartSystemWall(performancePoints,gridStart,45*60000,'performance',new Map()),gridStart+45*60000,'old performance records fall back to record start, never a metric column');
+ const midnight=wallTimeTicks([],start,[0,60*60000],360);
+ assert.ok(midnight.length>=3&&midnight.every(t=>new Date(t.wall).getDate()===3));
+ const chart={points:[row],window:[0,120000],left:0,right:0,width:120,kind:'charge',startWall:start,tooltip:{},enabled:new Set(),signals:()=>[],cellCount:1,draw(){}};
+ Chart.prototype.inspect.call(chart,60,0,true);
+ assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(row[13],true)+'\n计时  1:00\n'));
+ delete row[13];Chart.prototype.inspect.call(chart,60,0,true);assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(start+60000,true)+'\n计时  1:00'));
+}
+
 async function hitGeometry(){
 // A vector-only Canvas test double; sample recorded cubic paths to test hit geometry.
 function context(){
@@ -222,4 +277,4 @@ const{ScreenOffOverlay}=await import(pathToFileURL(path.join(root,'screen-off-ov
  assert.ok(!loadSelection('discharge',['temp','screenOff']).has('screenOff'),'charge/discharge/game preferences stay independent');
 }
 
-runCases([scales,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection]).then(()=>console.log('Charts: scales, hit geometry, battery temperature and screen-off projection passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection]).then(()=>console.log('Charts: scales, system time and elapsed time, hit geometry, temperature and screen-off projection passed')).catch(error=>{console.error(error);process.exitCode=1;});

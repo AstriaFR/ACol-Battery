@@ -24,6 +24,9 @@ public final class CoreTest {
         missing(Core.dischargeEnergyMwh(3900,4100,-1));missing(Core.averagePower(400,0));
         Core.Sampling sampling=new Core.Sampling();sampling.expected=sampling.fastMs=1000;
         close(sampling.maxGap(),5000);sampling.fastMs=0;close(sampling.maxGap(),1500);
+        Core.Cadence cadence=new Core.Cadence(2000);cadence.configure(500,0);close(cadence.next,0);
+        cadence.sampled(0);close(cadence.next,500);close(cadence.due(499)?1:0,0);close(cadence.due(500)?1:0,1);
+        cadence.sampled(500);cadence.configure(1100,600);close(cadence.next,1600);close(cadence.interval,1100);
         System.out.println("Core: remaining capacity, cell compensation, instantaneous power and RM energy units passed");
     }
 }

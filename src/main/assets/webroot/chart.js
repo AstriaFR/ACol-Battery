@@ -1,6 +1,6 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.1';
-import{remainingEstimate}from'./estimate.js?v=acol-2.1';
-import{batteryColor}from'./curve-colors.js?v=acol-2.1';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2';
+import{remainingEstimate}from'./estimate.js?v=acol-2.2';
+import{batteryColor}from'./curve-colors.js?v=acol-2.2';
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
@@ -122,6 +122,88 @@ export function timeLabel(ms){
   const label=h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;
   return label;
 }
+export function elapsedMinuteLabel(ms){
+  const minutes=Math.max(0,Math.floor(ms/60000));
+  return `${Math.floor(minutes/60)}:${String(minutes%60).padStart(2,'0')}`;
+}
+export function systemTimeLabel(wall,precise=false){
+  if(!valid(wall))return'—';const date=new Date(wall);if(!Number.isFinite(date.getTime()))return'—';
+  const pad=value=>String(value).padStart(2,'0'),clock=`${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return precise?`${pad(date.getMonth()+1)}/${pad(date.getDate())} ${clock}:${pad(date.getSeconds())}`:clock;
+}
+export function sampleSystemWall(row,kind,wallByX){
+  const wall=kind==='performance'?wallByX?.get(row[0]):row[13];
+  return valid(wall)&&wall>=0?wall:null;
+}
+export function chartSystemWall(points,startWall,x,kind='discharge',wallByX){
+  let lo=0,hi=points.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(points[mid][0]<=x)lo=mid+1;else hi=mid;}
+  const anchor=points[Math.max(0,lo-1)],wall=anchor?sampleSystemWall(anchor,kind,wallByX):null;
+  return wall!==null?wall+(x-anchor[0]):valid(startWall)?startWall+x:null;
+}
+// Align discharge/game grids to local clock boundaries. Performance timestamps
+// live separately from metric columns, so never interpret a metric as a date.
+export function wallTimeTicks(points,startWall,window,width,kind='discharge',wallByX){
+  const [from,to]=window,span=to-from;if(!(span>0)||!Number.isFinite(span))return[];
+  const first=chartSystemWall(points,startWall,from,kind,wallByX);if(first===null)return[];
+  const segments=[];let begin=from,offset=first-from;
+  for(const row of windowPoints(points,from,to)){
+    const x=row[0];if(x<=from)continue;if(x>=to)break;
+    const wall=sampleSystemWall(row,kind,wallByX);
+    const next=wall!==null?wall-x:valid(startWall)?startWall:null;
+    // Sub-second wall/monotonic clock read jitter is irrelevant to minute ticks.
+    // Collapsing it avoids constructing a segment for every fast sample.
+    if(next===null||Math.abs(next-offset)<1000)continue;
+    segments.push([begin,x,offset]);begin=x;offset=next;
+  }
+  segments.push([begin,to,offset]);
+  return selectTimeTicks(segments,window,width,true);
+}
+export function elapsedTimeTicks(window,width){
+  return selectTimeTicks([[window[0],window[1],0]],window,width,false);
+}
+export function timeAxisLabels(start,end,ticks,width,right,measure,startX=3){
+  const edge=width-right,startRight=startX+measure(start),labels=[{text:start,x:startX,align:'left',dy:0}];
+  const grid=[];
+  for(const tick of ticks){
+    const half=measure(tick.text)/2,x=Math.max(3+half,Math.min(edge-half,tick.x));
+    if(x-half<startRight+4)continue;
+    const label={text:tick.text,x,align:'center',dy:0};labels.push(label);grid.push(label);
+  }
+  const last=grid.at(-1),overlap=last&&last.x+measure(last.text)/2+4>width-3-measure(end);
+  if(overlap){
+    // Two baselines fit inside the existing 25px axis gutter: no plot resize.
+    last.dy=-6;
+    labels.push({text:end,x:width-3,align:'right',dy:6});
+  }else labels.push({text:end,x:width-3,align:'right',dy:0});
+  return labels;
+}
+function selectTimeTicks(segments,[from,to],width,localClock){
+  const span=to-from;if(!(span>0)||!Number.isFinite(span))return[];
+  const minutes=[5,10,15,20,30,60,120,180,240,360,720,1440];
+  while(minutes.at(-1)*60000<span*2)minutes.push(minutes.at(-1)*2);
+  const maxLabels=Math.max(1,Math.min(6,Math.floor(width/50))),target=Math.min(4,maxLabels);
+  let best=[],bestScore=Infinity;
+  for(const minute of minutes){
+    const step=minute*60000,ticks=[];
+    for(const [a,b,shift] of segments){
+      const wallStart=a+shift,wallEnd=b+shift;
+      const zone=localClock?new Date(wallStart).getTimezoneOffset()*60000:0;
+      let wall=Math.ceil((wallStart-zone)/step)*step+zone;
+      for(;wall<wallEnd&&ticks.length<=maxLabels;wall+=step){
+        const x=wall-shift;if(x>from&&x<to)ticks.push({x,wall});
+      }
+      if(ticks.length>maxLabels)break;
+    }
+    if(ticks.length>maxLabels)continue;
+    const spacing=width/Math.max(1,span);
+    if(ticks.some((tick,i)=>i&&(tick.x-ticks[i-1].x)*spacing<45))continue;
+    const score=Math.abs(ticks.length-target)+(ticks.length<Math.min(3,maxLabels)?3:0);
+    if(score<bestScore){best=ticks;bestScore=score;}
+    if(score===0)break;
+  }
+  return best;
+}
 // Collapse quantized percentage plateaus into temporal anchors, retaining endpoints
 // and every actual rise/fall. Raw samples remain available for inspection.
 export function percentageAnchors(points){
@@ -174,8 +256,9 @@ export class Chart{
   constructor(canvas,tooltip,onWindow){
     this.canvas=canvas;this.ctx=canvas.getContext('2d');this.tooltip=tooltip;this.onWindow=onWindow;
     this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;
-    this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];
+    this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.startWall=null;this.wallByX=new Map();
     new ResizeObserver(()=>this.draw()).observe(canvas.parentElement);
+    globalThis.visualViewport?.addEventListener('resize',()=>this.draw());
     canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=this.local(e);this.pointers.set(e.pointerId,p);this.gesture=this.capture();this.moved=false;this.dragMarker=this.pointers.size===1&&this.marker!==null&&Math.abs(p[0]-this.markerX())<=14?e.pointerId:null;this.beginInspectionHold(e.pointerId,p);});
     canvas.addEventListener('pointermove',e=>{const hold=this.inspectionHold;if(hold&&!hold.active&&Math.hypot(...this.local(e).map((v,i)=>v-hold.point[i]))>14){if(Date.now()-hold.started>=180)this.activateInspectionHold(hold);else this.cancelInspectionHold();}this.move(e);if(this.inspectionHold?.active&&e.cancelable)e.preventDefault();},{passive:false});
     const end=e=>{this.cancelInspectionHold();const dragging=this.dragMarker===e.pointerId;if(!this.moved)this.inspect(...this.local(e));this.pointers.delete(e.pointerId);this.gesture=this.capture();this.dragMarker=null;if(this.moved&&!dragging)this.onWindow?.(this.window);};
@@ -225,7 +308,8 @@ export class Chart{
   set(points,total,window,options={}){
     const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2;
     if(kind!==this.kind||fast!==this.fast||cells!==this.cellCount||options.recordId!==undefined&&options.recordId!==this.recordId)this.scaleCache.clear();
-    if(options.recordId!==undefined){if(options.recordId!==this.recordId)this.screenOffSpans=[];this.recordId=options.recordId;}
+    if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
+    this.startWall=valid(options.startWall)?options.startWall:null;
     this.kind=kind;this.fast=fast;this.cellCount=cells;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
     if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;}this.draw();
   }
@@ -276,7 +360,8 @@ export class Chart{
     const x=this.window[0]+(pixel-this.left)/(this.width-this.left-this.right)*(this.window[1]-this.window[0]);
     let row=visible[0];for(const p of visible)if(Math.abs(p[0]-x)<Math.abs(row[0]-x))row=p;
     this.marker=row[0];this.inspectY=y;
-    this.tooltip.textContent=`时间  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]?' · 数据异常':''}\n`+
+    const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
+    this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]?' · 数据异常':''}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
@@ -298,7 +383,7 @@ export class Chart{
   }
   draw(){
     const w=this.canvas.clientWidth,h=this.canvas.clientHeight;if(!w||!h)return;
-    const ratio=devicePixelRatio||1;this.canvas.width=Math.round(w*ratio);this.canvas.height=Math.round(h*ratio);
+    const ratio=(devicePixelRatio||1)*(globalThis.visualViewport?.scale||1);this.canvas.width=Math.round(w*ratio);this.canvas.height=Math.round(h*ratio);
     const ctx=this.ctx;ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);this.width=w;
     const selected=this.signals().filter(s=>this.enabled.has(s.key));
     const scales=new Map(this.signals().map(s=>[s.key,this.scaleFor(s)]));
@@ -325,11 +410,21 @@ export class Chart{
       ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(this.left-3,y);ctx.lineTo(this.left,y);ctx.stroke();
     }
     ctx.font='10px system-ui';ctx.lineWidth=.65;
-    const timeTicks=Math.max(1,Math.min(pw<160?1:pw<320?2:4,Math.floor((this.window[1]-this.window[0])/1000)||1));
-    for(let i=0;i<=timeTicks;i++){
-      const x=this.left+pw*i/timeTicks;ctx.strokeStyle=cssColor('--plot-timegrid','#edf0f4');ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
-      ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(x,bottom);ctx.lineTo(x,bottom+4);ctx.stroke();
-      ctx.fillStyle=cssColor('--plot-label','#526172');ctx.textAlign=i===0?'left':i===timeTicks?'right':'center';ctx.fillText(timeLabel(this.window[0]+(this.window[1]-this.window[0])*i/timeTicks),x,bottom+16);
+    const wallAxis=this.kind==='discharge'||this.kind==='performance';
+    {
+      const label=x=>wallAxis?systemTimeLabel(chartSystemWall(this.points,this.startWall,x,this.kind,this.wallByX)):elapsedMinuteLabel(x);
+      const ticks=wallAxis?wallTimeTicks(this.points,this.startWall,this.window,pw,this.kind,this.wallByX):elapsedTimeTicks(this.window,pw);
+      const gridLabels=[];
+      for(const tick of ticks){
+        const x=this.left+pw*(tick.x-this.window[0])/(this.window[1]-this.window[0]);
+        ctx.strokeStyle=cssColor('--plot-timegrid','#edf0f4');ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
+        ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(x,bottom);ctx.lineTo(x,bottom+4);ctx.stroke();
+        gridLabels.push({x,text:wallAxis?systemTimeLabel(tick.wall):elapsedMinuteLabel(tick.x)});
+      }
+      ctx.fillStyle=cssColor('--plot-label','#526172');
+      for(const text of timeAxisLabels(label(this.window[0]),label(this.window[1]),gridLabels,w,this.right,value=>ctx.measureText(value).width,this.kind==='charge'?this.left:3)){
+        ctx.textAlign=text.align;ctx.fillText(text.text,text.x,bottom+16+text.dy);
+      }
     }
     ctx.strokeStyle=cssColor('--plot-border','#9aa7b6');ctx.lineWidth=.85;
     ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(this.left,bottom);ctx.moveTo(w-this.right,bottom);ctx.lineTo(w-this.right,top);ctx.stroke();

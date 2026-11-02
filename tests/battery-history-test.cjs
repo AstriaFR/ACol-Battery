@@ -13,5 +13,11 @@ const path=require('node:path'),assert=require('node:assert/strict');const{pathT
  // A delete completing after navigation invalidates the cached list without touching the new page.
  panel.deleteId=13;panel.snapshots.set(13,saved);panel.api=async()=>{panel.token++};reloaded=false;await panel.remove();assert.equal(panel.listDirty,true);assert.equal(reloaded,false);assert.equal(panel.snapshots.has(13),false);
  let returned=false;panel.state={page:'battery-history-detail',id:14};panel.deleteId=14;panel.detailDelete={disabled:false};panel.api=async()=>{};panel.back=()=>{returned=true};await panel.remove();assert.ok(returned);assert.equal(panel.detailDelete.disabled,true);assert.equal(reloaded,false);assert.equal(panel.listDirty,true);
+ let finish,calls=0;
+ Object.assign(panel,{state:{page:'battery-history'},active:true,deleting:false,recordButton:{},status:{textContent:''},api:async action=>{assert.equal(action,'battery_history_record');calls++;await new Promise(resolve=>{finish=resolve})},load:async function(){assert.equal(this.offset,0);assert.equal(this.items.size,0);this.status.textContent='';reloaded=true}});
+ reloaded=false;const saving=panel.record();await panel.record();assert.equal(calls,1);assert.equal(panel.recordButton.disabled,true);finish();await saving;
+ assert.ok(reloaded);assert.equal(panel.status.textContent,'已记录当前电池信息');assert.equal(panel.recordButton.disabled,false);assert.equal(panel.recordButton.textContent,'记录');
+ panel.api=async()=>{throw Error('读取失败')};await panel.record();assert.equal(panel.status.textContent,'记录失败：读取失败');assert.equal(panel.saving,false);assert.equal(panel.recordButton.disabled,false);
+ panel.api=async()=>{panel.active=false;panel.token++};reloaded=false;await panel.record();assert.equal(reloaded,false);assert.equal(panel.listDirty,true,'saving after navigation invalidates the cached list');
  console.log('Battery history UI: stored values and trust markers, ratios, low-cutoff fields and dated entries passed');
 })().catch(e=>{console.error(e);process.exitCode=1});

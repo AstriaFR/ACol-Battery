@@ -141,6 +141,7 @@ public final class Core {
     }
 
     public static final class FullGate {
+        private static final long VENDOR_DURATION_MS=180000;
         public long since = -1, last = -1;
         private long electricalSince=-1,electricalLast=-1;
         public boolean vendorLogSeen;
@@ -149,7 +150,7 @@ public final class Core {
         public void observe(Reading r) { if(r.onlineKnown&&r.online&&r.vendorLogRead)vendorLogSeen=true; }
         public long electricalDuration() { return vendorLogSeen?600000:300000; }
         private static boolean smallCurrent(Reading r) {
-            return (r.cellCount==1||r.cellCount==2)&&finite(r.compensatedCurrent())&&Math.abs(r.compensatedCurrent())<50;
+            return (r.cellCount==1||r.cellCount==2)&&finite(r.compensatedCurrent())&&Math.abs(r.compensatedCurrent())<100;
         }
         public static boolean electricalCandidate(Reading r) {
             return r.onlineKnown&&r.online&&finite(r.voltage())&&r.voltage()>4400
@@ -176,10 +177,10 @@ public final class Core {
                     electricalSince=r.elapsed;
                 electricalLast=r.elapsed;
             }else{electricalSince=electricalLast=-1;}
-            return since>=0&&r.elapsed-since>=300000||electricalSince>=0&&r.elapsed-electricalSince>=electricalDuration();
+            return since>=0&&r.elapsed-since>=VENDOR_DURATION_MS||electricalSince>=0&&r.elapsed-electricalSince>=electricalDuration();
         }
         public double progress(long now) {
-            double vendor=since<0?0:(now-since)/300000.0;
+            double vendor=since<0?0:(now-since)/(double)VENDOR_DURATION_MS;
             double electrical=electricalSince<0?0:(now-electricalSince)/(double)electricalDuration();
             return Math.max(0,Math.min(1,Math.max(vendor,electrical)));
         }

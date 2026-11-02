@@ -2,7 +2,7 @@ package cn.astriafr.acobattery.common;
 
 import org.json.*;
 
-/** Freeze measured/calculated values and their trust markings at tail completion. */
+/** Freeze measured/calculated values and their trust markings when a snapshot is taken. */
 public final class BatteryHistorySnapshot {
     private BatteryHistorySnapshot(){}
     static boolean positive(JSONObject info,String key){double v=info.optDouble(key,Double.NaN);return Double.isFinite(v)&&v>0;}

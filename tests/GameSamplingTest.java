@@ -21,12 +21,12 @@ public final class GameSamplingTest {
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.wall=1000000+elapsed;r.rm=5000;r.pct=80;
         r.current=300;r.cellCount=2;r.cell1=3900;r.cell2=4000;return r;
     }
-    static JSONArray settings(int power,int performance)throws JSONException{return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
+    static JSONArray settings(int power,double performance)throws JSONException{return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
     static void save(Main m,JSONArray values)throws Exception{
         try{m.saveSettings(new JSONArray(values.toString()).put(0));}
         catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
     }
-    static void schedule(int power,int performance)throws Exception{
+    static void schedule(int power,double performance)throws Exception{
         Main m=open(Files.createTempDirectory("acol-game-clock-").toFile());
         try{
             m.settings=Main.decodeSettings(settings(power,performance));m.fastEnabled=true;m.state=0;m.configureSampling(false);
@@ -36,19 +36,25 @@ public final class GameSamplingTest {
             // this host harness has no Android UsageStats service.
             m.gameTrack.fastStatsPrevious.wall-=3000;
             int perfCount=1;
-            for(int second=1;second<=60;second++){
-                long now=base+second*1000,last=m.performanceCadence.last;
+            for(int tenth=1;tenth<=600;tenth++){
+                long now=base+tenth*100,last=m.performanceCadence.last;
                 if(now>=m.sampling.next){m.append(reading(now));m.sampling.sampled(0,now);}
                 m.collectGame(reading(now),false,now);
                 if(m.performanceCadence.last!=last)perfCount++;
             }
             check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+game)==1+60/power);
             check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+ordinary)==1);
-            check(perfCount==1+60/performance);
+            check(perfCount==1+60000/Math.round(performance*1000));
             check(m.gameTrack.fastStatsNext==stats+60000); // Power sampling still settles RM once per minute.
             check(count(m,"SELECT COUNT(*) FROM sessions")==2);
             check(count(m,"SELECT fast_seconds FROM sessions WHERE id="+game)==power);
-            check(count(m,"SELECT performance_seconds FROM sessions WHERE id="+game)==performance);
+            try(Cursor c=m.db.rawQuery("SELECT performance_seconds FROM sessions WHERE id=?",new String[]{""+game})){check(c.moveToFirst()&&Math.abs(c.getDouble(0)-performance)<1e-9);}
+            check(m.performancePoints(game,0).getLong("intervalMs")==Math.round(performance*1000));
+            JSONObject raw=new JSONObject();m.rawPoints(raw,game,0,60000,-1);
+            check(raw.getJSONArray("points").getJSONArray(0).getLong(13)==1000000+base);
+            check(m.points(ordinary,0,60000,1600).getJSONArray(0).getLong(13)==1000000+base);
+            m.db.execSQL("INSERT INTO performance_samples(session,x,data,wall) VALUES(?,?,?,?)",new Object[]{game,0,"[0,60]",1000000+base});
+            check(m.performancePoints(game,0).getJSONArray("wallTimes").getJSONArray(0).getLong(1)==1000000+base);
             m.stopGame(reading(base+60000),"fast_stopped");m.fastEnabled=false;m.configureSampling(false);
             check(m.session==ordinary&&m.previous.elapsed==base&&m.sampling.next==base+120000);
             check(count(m,"SELECT active FROM sessions WHERE id="+ordinary)==1);
@@ -83,11 +89,12 @@ public final class GameSamplingTest {
         check(defaults.getInt("performanceSeconds")==2);check(defaults.getInt("screenOffMinutes")==30);check(defaults.getInt("chargeSeconds")==2);
         JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,7,1,2]");
         check(Main.decodeSettings(legacy).getInt("performanceSeconds")==7);
-        for(Object bad:new Object[]{0,61,1.5}){
+        for(double value:new double[]{0.5,0.6,1.1,2,19.9,20})check(Math.abs(Main.decodeSettings(settings(10,value)).getDouble("performanceSeconds")-value)<1e-9);
+        for(Object bad:new Object[]{0,0.4,20.1,60,1.05}){
             JSONArray v=settings(10,10);v.put(13,bad);
             try{Main.decodeSettings(v);throw new AssertionError("Invalid performance interval accepted");}catch(java.io.IOException expected){}
         }
-        schedule(60,1);schedule(1,60);schedule(7,3);edits();
-        System.out.println("Game sampling: independent power/performance clocks, 1-60 s bounds, settings/schema upgrade, unchanged session and minute RM accounting passed");
+        schedule(60,0.5);schedule(1,20);schedule(7,1.1);edits();
+        System.out.println("Game sampling: independent clocks, 0.5-20 s performance bounds, fractional intervals, settings/schema upgrade, unchanged session and minute RM accounting passed");
     }
 }

@@ -16,26 +16,26 @@ public final class SamplingTest {
             sampling.chargeMs=seconds*1000L;check(sampling.interval(1)==seconds*1000L);
             sampling.sampled(1,500);check(sampling.next==500+seconds*1000L);
             Core.FullGate gate=new Core.FullGate();boolean confirmed=false;
-            long confirmedAt=(300000+seconds*1000L-1)/(seconds*1000L)*(seconds*1000L);
+            long confirmedAt=(180000+seconds*1000L-1)/(seconds*1000L)*(seconds*1000L);
             for(long elapsed=0;elapsed<=confirmedAt;elapsed+=seconds*1000L){
                 boolean full=gate.update(tail(elapsed),seconds*1000L);
-                if(elapsed<300000)check(!full);else{check(full);confirmed=true;}
+                if(elapsed<180000)check(!full);else{check(full);confirmed=true;}
             }
             check(confirmed);
         }
         Core.FullGate gate=new Core.FullGate();
-        for(long t=0;t<=290000;t+=10000)check(!gate.update(tail(t),10000));
-        check(!gate.update(tail(310000),10000)); // A real missing sample resets confirmation.
+        for(long t=0;t<=170000;t+=10000)check(!gate.update(tail(t),10000));
+        check(!gate.update(tail(190000),10000)); // A real missing sample resets confirmation.
         Core.FullGate changing=new Core.FullGate();
         for(long t=0;t<=100000;t+=2000)check(!changing.update(tail(t),2000));
-        for(long t=110000;t<300000;t+=10000)check(!changing.update(tail(t),10000));
-        check(changing.update(tail(300000),10000)); // Editing the interval need not reset the tail.
+        for(long t=110000;t<180000;t+=10000)check(!changing.update(tail(t),10000));
+        check(changing.update(tail(180000),10000)); // Editing the interval need not reset the tail.
         for(double[] missing:new double[][]{{Double.NaN,1,1},{4450,Double.NaN,1},{4450,1,Double.NaN},{4450,2,1},{4450,1,-1}}){
             Core.FullGate limited=new Core.FullGate();Core.Reading r=tail(0);
             Core.applyTail(r,missing[0],missing[1],missing[2]);check(r.valid());
             for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!limited.update(r,10000));}
             // Valid live readings recover detection without inventing a completed tail.
-            for(long t=610000;t<=910000;t+=10000){r=tail(t);check(limited.update(r,10000)==(t==910000));}
+            for(long t=610000;t<=790000;t+=10000){r=tail(t);check(limited.update(r,10000)==(t==790000));}
         }
         Core.Reading notFull=tail(0);Core.applyTail(notFull,4450,0,0);
         check(!new Core.FullGate().update(notFull));
@@ -76,11 +76,11 @@ public final class SamplingTest {
         Core.Reading r=electrical(0);check(!r.valid()&&Core.FullGate.electricalCandidate(r));
         r.vmax=4410;check(!Core.FullGate.electricalCandidate(r)); // Mean exactly 4.4 V is excluded.
         r.vmax=4430;
-        for(double current:new double[]{-25,25,Double.NaN,Double.POSITIVE_INFINITY}){r.current=current;check(!Core.FullGate.electricalCandidate(r));}
-        for(double current:new double[]{-24.999,24.999,0}){r.current=current;check(Core.FullGate.electricalCandidate(r));}
+        for(double current:new double[]{-50,50,Double.NaN,Double.POSITIVE_INFINITY}){r.current=current;check(!Core.FullGate.electricalCandidate(r));}
+        for(double current:new double[]{-49.999,49.999,0}){r.current=current;check(Core.FullGate.electricalCandidate(r));}
         r.cellCount=0;check(!Core.FullGate.electricalCandidate(r));r.cellCount=1;r.vmin=4401;check(Core.FullGate.electricalCandidate(r));
-        r.current=50;check(!Core.FullGate.electricalCandidate(r));r.current=-50;check(!Core.FullGate.electricalCandidate(r));
-        r.current=49.999;check(Core.FullGate.electricalCandidate(r));r.current=-49.999;check(Core.FullGate.electricalCandidate(r));
+        r.current=100;check(!Core.FullGate.electricalCandidate(r));r.current=-100;check(!Core.FullGate.electricalCandidate(r));
+        r.current=99.999;check(Core.FullGate.electricalCandidate(r));r.current=-99.999;check(Core.FullGate.electricalCandidate(r));
         r.online=false;check(!Core.FullGate.electricalCandidate(r));r.online=true;r.onlineKnown=false;check(!Core.FullGate.electricalCandidate(r));
         Core.FullGate gate=new Core.FullGate();
         for(long t=0;t<=290000;t+=10000)check(!gate.update(electrical(t),10000));
@@ -91,7 +91,7 @@ public final class SamplingTest {
         for(long t=0;t<=150000;t+=10000)check(!gate.update(tail(t),10000));
         for(long t=160000;t<=760000;t+=10000)check(gate.update(electrical(t),10000)==(t==760000)); // Vendor log seen: the independent path now needs ten minutes.
         gate=new Core.FullGate();
-        for(long t=0;t<=300000;t+=10000){r=electrical(t);Core.applyTail(r,4450,1,1);r.rm=5000+t/1000;r.pct=Double.NaN;r.temp=Double.NaN;check(gate.update(r,10000)==(t==300000));}
+        for(long t=0;t<=180000;t+=10000){r=electrical(t);Core.applyTail(r,4450,1,1);r.rm=5000+t/1000;r.pct=Double.NaN;r.temp=Double.NaN;check(gate.update(r,10000)==(t==180000));}
         gate.reset();check(gate.progress(300000)==0&&!gate.update(electrical(300000),10000));
         check(!gate.update(electrical(290000),10000)&&gate.progress(290000)==0); // Monotonic clock rewind also restarts.
         for(int seconds=1;seconds<=10;seconds++){
@@ -111,8 +111,8 @@ public final class SamplingTest {
             if(t==300000)check(gate.progress(t)==.5); // A successful late read extends the same continuous window.
         }
         for(int cells:new int[]{1,2}){
-            gate=new Core.FullGate();r=tail(0);r.cellCount=cells;r.current=cells==2?25:50;
-            for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!gate.update(r,10000));} // Both rules exclude exactly 50 mA after compensation.
+            gate=new Core.FullGate();r=tail(0);r.cellCount=cells;r.current=cells==2?50:100;
+            for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!gate.update(r,10000));} // Both rules exclude exactly 100 mA after compensation.
         }
     }
     static void optionalChargingLog(){

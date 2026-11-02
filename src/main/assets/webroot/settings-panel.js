@@ -1,4 +1,4 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.1';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.2';
 export class SettingsPanel{
   constructor(api,onSaved){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
@@ -154,12 +154,12 @@ export class SettingsPanel{
   edit(key,push=true){
     if(!this.ready||this.keypad.open)return;
     const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',energyWh:'默认能量量程',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
-    const field=this.form.elements.namedItem(key),decimal=['energyWh','capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
-    this.editor={key,field,draft:field.value,fresh:true,decimal,signed};
+    const field=this.form.elements.namedItem(key),decimal=['energyWh','capacityAh','voltageMin','voltageMax','performanceSeconds'].includes(key),signed=key.startsWith('temp'),digits=key==='performanceSeconds'?1:2;
+    this.editor={key,field,draft:field.value,fresh:true,decimal,signed,digits};
     document.getElementById('keypadTitle').textContent=names[key];
     const unit=key.endsWith('Pct')?'%':key==='energyWh'?'Wh':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
     document.getElementById('keypadUnit').textContent=unit;
-    const minimum=decimal?Number(field.min).toFixed(2):field.min,maximum=decimal?Number(field.max).toFixed(2):field.max;
+    const minimum=decimal?Number(field.min).toFixed(digits):field.min,maximum=decimal?Number(field.max).toFixed(digits):field.max;
     document.getElementById('keypadRange').textContent=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
     this.keypad.querySelector('[data-key=dot]').disabled=!decimal;
     this.keypad.querySelector('[data-key=sign]').disabled=!signed;
@@ -178,7 +178,7 @@ export class SettingsPanel{
     else if(key==='dot'&&e.decimal){if(e.fresh)e.draft='0.';else if(!e.draft.includes('.'))e.draft=(e.draft===''?'0':e.draft==='-'?'-0':e.draft)+'.';e.fresh=false;}
     else if(/^(?:[0-9]|00)$/.test(key)){
       if(e.fresh){e.draft='';e.fresh=false;}
-      for(const digit of key){const fraction=e.draft.split('.')[1];if(e.draft.length<8&&!(fraction!==undefined&&fraction.length>=2))e.draft+=digit;}
+      for(const digit of key){const fraction=e.draft.split('.')[1];if(e.draft.length<8&&!(fraction!==undefined&&fraction.length>=(e.digits??2)))e.draft+=digit;}
     }
     this.drawEditor();
   }
@@ -199,7 +199,7 @@ export class SettingsPanel{
         value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);
         // Publish the confirmed value before joining the shared save loop, so a
         // later checkbox change cannot send an older interval back to the daemon.
-        e.field.value=String(value[e.key]);this.dirty=true;
+        e.field.value=e.key==='performanceSeconds'?value[e.key].toFixed(1):String(value[e.key]);this.dirty=true;
         if(!await this.flush())throw Error('设置未能保存，请重试。');
         if(this.editor===e)this.dismissEditor();
       }catch(error){this.editorError(error.message);}
@@ -266,7 +266,7 @@ export class SettingsPanel{
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key),v=value[key];
       if(['capacityAuto','fastAutoOff'].includes(key))field.checked=v;
-      else field.value=v===null||v===undefined?'':['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
+      else field.value=v===null||v===undefined?'':key==='performanceSeconds'?v.toFixed(1):['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
       field.removeAttribute('aria-invalid');
     }
   }

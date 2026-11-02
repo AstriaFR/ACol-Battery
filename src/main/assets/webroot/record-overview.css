@@ -1,0 +1,69 @@
+/* Record identity and live telemetry share a palette; charts remain full width. */
+#detail{--detail-accent:#b75f57;--detail-wash:color-mix(in srgb,var(--detail-accent) 8%,var(--plot-bg));--telemetry-blue:color-mix(in srgb,#5495cb 9%,var(--plot-bg));--telemetry-warm:color-mix(in srgb,#dfa54b 11%,var(--plot-bg));--telemetry-neutral:color-mix(in srgb,var(--text) 4%,var(--plot-bg))}
+#detail:has(.record-detail-head[data-kind=charge]){--detail-accent:var(--charge)}
+#detail:has(.record-detail-head[data-kind=game]){--detail-accent:#528ab8}
+:root[data-theme=dark] #detail{--detail-accent:#e49b92}
+:root[data-theme=dark] #detail:has(.record-detail-head[data-kind=charge]){--detail-accent:var(--charge)}
+:root[data-theme=dark] #detail:has(.record-detail-head[data-kind=game]){--detail-accent:#93bfe4}
+#detailScroll>.record-detail-head{padding-top:12px;padding-bottom:8px;background:linear-gradient(180deg,var(--detail-wash),var(--plot-bg))}
+#detail .record-detail-heading{gap:9px}
+#detailScroll .record-detail-heading h2{display:flex;align-items:center;gap:7px;font-size:21px;letter-spacing:-.3px}
+#detail .record-detail-heading h2::before{content:'';width:4px;height:18px;flex:none;border-radius:3px;background:var(--detail-accent);opacity:.75}
+#detailScroll .record-detail-heading button{border-radius:8px;padding:5px 5px 5px 0}
+#detail .record-detail-state{padding:4px 7px;border-radius:8px;font-size:10px;background:var(--telemetry-neutral);color:var(--muted)}
+#detail .record-detail-head[data-active="1"] .record-detail-state{color:var(--detail-accent);background:var(--detail-wash)}
+#detail .record-detail-dates{gap:8px;margin-top:10px;background:color-mix(in srgb,var(--detail-accent) 5%,var(--plot-bg));border-radius:10px}
+#detail .record-detail-dates>div{padding:8px 10px}
+#detailScroll .record-detail-dates small{display:flex;align-items:center;gap:5px;margin-bottom:3px;font-size:9px;line-height:13px}
+#detail .record-detail-dates small::before{content:'';width:5px;height:5px;flex:none;border-radius:50%;background:var(--detail-accent);opacity:.65}
+#detail .record-detail-dates>div+div small::before{background:transparent;box-shadow:inset 0 0 0 1px var(--detail-accent)}
+#detail .record-detail-dates time{font-size:11px;line-height:17px;font-weight:600;letter-spacing:-.15px}
+
+#detail .record-detail-overview{padding-top:3px;padding-bottom:10px}
+#detail .summary-grid{row-gap:6px;column-gap:0}
+#detail .summary .summary-metric{--metric-bg:var(--telemetry-neutral);--row-radius:0}
+#detail .summary .summary-metric,#detail .summary[data-mode=live] .summary-metric:nth-child(n){margin:0;padding:10px 9px 9px;border:0;border-radius:var(--row-radius);background:var(--metric-bg);min-width:0}
+#detail .summary .summary-metric:nth-child(-n+3){--metric-bg:var(--detail-wash)}
+#detail .summary .summary-metric:nth-child(1){--row-radius:11px 0 0 11px}
+#detail .summary .summary-metric:nth-child(3){--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live] .summary-metric:nth-child(n+4):nth-child(-n+6){--metric-bg:var(--telemetry-blue)}
+#detail .summary[data-mode=live][data-voltage-count="2"][data-flow=discharge] .summary-metric:nth-child(3n+1){--row-radius:11px 0 0 11px}
+#detail .summary[data-mode=live][data-voltage-count="2"][data-flow=discharge] .summary-metric:nth-child(3n){--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live][data-voltage-count="2"][data-flow=charge] .summary-metric:nth-child(n+4){--metric-bg:var(--telemetry-blue)}
+#detail .summary[data-mode=live][data-voltage-count="2"][data-flow=charge] .summary-metric:nth-child(4){--row-radius:11px 0 0 11px}
+#detail .summary[data-mode=live][data-voltage-count="2"][data-flow=charge] .summary-metric:nth-child(7){--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live][data-voltage-count="1"] .summary-metric:nth-child(4){--row-radius:11px 0 0 11px}
+#detail .summary[data-mode=live][data-voltage-count="1"] .summary-metric:nth-child(5){--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live][data-voltage-count="1"] .summary-metric:nth-child(6){--metric-bg:var(--telemetry-neutral);--row-radius:11px 0 0 11px}
+#detail .summary[data-mode=live][data-voltage-count="1"] .summary-metric:nth-child(8){--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live][data-voltage-count="1"][data-flow=charge] .summary-metric:nth-child(5){--row-radius:0}
+#detail .summary[data-mode=live][data-voltage-count="1"][data-flow=charge] .summary-metric:nth-child(6){--metric-bg:var(--telemetry-blue);--row-radius:0 11px 11px 0}
+#detail .summary[data-mode=live][data-voltage-count="1"][data-flow=charge] .summary-metric:is([data-metric=voltage],[data-metric=temp],[data-metric=power]){grid-column:span 4}
+#detail .summary .summary-metric[data-metric=pct]>strong{color:var(--text)}
+#detail .summary[data-mode=live] .summary-metric:is([data-metric=cell1],[data-metric=cell2],[data-metric=voltage],[data-metric=temp])>strong{font-size:20px}
+#detail .summary .summary-meta{border-top:0;margin-top:6px;padding-top:4px}
+#detail .summary-metric>strong{min-height:23px;line-height:1.2;letter-spacing:-.4px;gap:2px}
+#detail .summary-metric small{margin-top:6px;font-size:9px;line-height:1.4}
+#detail .summary .summary-metric:is([data-metric=remainingWh],[data-metric=remainingTime])>strong{color:var(--text)}
+#detail .summary .remaining-info{width:13px;height:13px;flex-basis:13px;margin-left:1px;font-size:9px;background:transparent;border-color:color-mix(in srgb,var(--muted) 35%,transparent)}
+
+/* A shared invisible text strut aligns differently sized values and their labels. */
+#detail .summary[data-mode=ended]{--ended-number-size:24px}
+#detail .summary[data-mode=ended] .summary-metric>strong{min-height:calc(var(--ended-number-size)*1.2);line-height:1.2;align-items:baseline}
+#detail .summary[data-mode=ended] .summary-metric>strong::before{content:'\200b';flex:none;width:0;margin-right:-2px;font-size:var(--ended-number-size);line-height:1.2}
+
+#detail .summary .summary-remaining{gap:0;margin-top:6px;padding:0;border:0;border-radius:11px;background:var(--telemetry-neutral);grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+#detail .summary-remaining>div{min-width:0;padding:10px 9px}
+#detail .summary-remaining>div+div{padding-left:9px}
+#detail .summary-remaining small{margin-top:6px;font-size:9px;line-height:1.4}
+#detail .summary-frequencies{gap:0;margin-top:6px;padding:0;border:0;border-radius:10px;background:var(--telemetry-blue)}
+#detail .summary-cpu-frequencies{gap:0}
+#detail .summary-frequency-cpu,#detail .summary-frequency-gpu{padding:9px 7px;border:0}
+#detail .summary-frequencies small{margin-top:5px}
+
+@media(max-width:380px){
+  #detail .summary[data-mode=live] .summary-metric:is([data-metric=cell1],[data-metric=cell2],[data-metric=voltage],[data-metric=temp])>strong{font-size:18px}
+  #detail .summary[data-mode=ended]{--ended-number-size:22px}
+  #detail .summary .summary-metric,#detail .summary[data-mode=live] .summary-metric:nth-child(n){padding-left:8px;padding-right:8px}
+  #detailScroll .record-detail-heading h2{font-size:20px}
+}

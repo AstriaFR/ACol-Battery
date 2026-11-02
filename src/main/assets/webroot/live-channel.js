@@ -1,4 +1,4 @@
-import{spawn,exec}from'./root-bridge.js?v=acol-2.1';
+import{spawn,exec}from'./root-bridge.js?v=acol-2.2';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 
 export function compareRecords(a,b){

@@ -1,5 +1,5 @@
-import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.1';
-import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.1';
+import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.2';
+import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.2';
 const yieldUI=()=>new Promise(resolve=>setTimeout(()=>{if('requestIdleCallback'in window)requestIdleCallback(()=>resolve(),{timeout:400});else resolve();},80));
 export class HomeUsagePanel extends DailyUsageChart{
   constructor(api){

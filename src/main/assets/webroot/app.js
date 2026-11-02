@@ -1,30 +1,32 @@
-import{roundedDuration}from'./daily-usage-chart.js?v=acol-2.1';
-import{installPageDepth}from'./page-navigation.js?v=acol-2.1';
-import{installPageMotion}from'./page-motion.js?v=acol-2.1';
-import{exec,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.1';
-import{LiveChannel,compareRecords}from'./live-channel.js?v=acol-2.1';
-import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-2.1';
-import{ScreenOffOverlay}from'./screen-off-overlay.js?v=acol-2.1';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.1';
-import{SettingsPanel}from'./settings-panel.js?v=acol-2.1';
-import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.1';
-import{BatteryHistoryPanel}from'./battery-history.js?v=acol-2.1';
-import{PerformancePanel}from'./performance-panel.js?v=acol-2.1-gamepad-temp';
-import{remainingEstimate,remainingTime,canEstimateRemaining}from'./estimate.js?v=acol-2.1';
-import{loadSelection,saveSelection}from'./preferences.js?v=acol-2.1';
-import{capacityChange,capacityFlow,recordChanges,recordIsLive}from'./record-display.js?v=acol-2.1';
-import{ThemeController}from'./theme.js?v=acol-2.1';
-import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.1';
-import{RecordUsagePanel}from'./record-usage.js?v=acol-2.1';
-import{HomeUsagePanel}from'./home-usage.js?v=acol-2.1';
-import{UsageDetailsPanel}from'./usage-details.js?v=acol-2.1';
-import{usagePages,usageState}from'./usage-navigation.js?v=acol-2.1';
+import{roundedDuration}from'./daily-usage-chart.js?v=acol-2.2';
+import{installPageDepth}from'./page-navigation.js?v=acol-2.2';
+import{installPageMotion}from'./page-motion.js?v=acol-2.2';
+import{installLineFitting}from'./fit-lines.js?v=acol-2.2';
+import{exec,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.2';
+import{LiveChannel,compareRecords}from'./live-channel.js?v=acol-2.2';
+import{Chart,seriesFor,valid,duration,setChartSettings}from'./chart.js?v=acol-2.2';
+import{ScreenOffOverlay}from'./screen-off-overlay.js?v=acol-2.2';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2';
+import{SettingsPanel}from'./settings-panel.js?v=acol-2.2';
+import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2';
+import{BatteryHistoryPanel}from'./battery-history.js?v=acol-2.2';
+import{PerformancePanel}from'./performance-panel.js?v=acol-2.2-gamepad-temp';
+import{remainingEstimate,remainingTime,canEstimateRemaining}from'./estimate.js?v=acol-2.2';
+import{loadSelection,saveSelection}from'./preferences.js?v=acol-2.2';
+import{capacityChange,capacityFlow,recordChanges,recordIsLive,recordEndWall}from'./record-display.js?v=acol-2.2';
+import{ThemeController}from'./theme.js?v=acol-2.2';
+import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.2';
+import{RecordUsagePanel}from'./record-usage.js?v=acol-2.2';
+import{HomeUsagePanel}from'./home-usage.js?v=acol-2.2';
+import{UsageDetailsPanel}from'./usage-details.js?v=acol-2.2';
+import{usagePages,usageState}from'./usage-navigation.js?v=acol-2.2';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 const edgeScrollbar=new EdgeScrollbar();
 const baseUrl=()=>`${location.pathname}${location.search}`;
 const pageUrl=tab=>baseUrl()+(tab==='home'?'':'#'+tab);
 installPageDepth();
 installPageMotion();
+installLineFitting();
 const startTab=location.hash==='#settings'?'settings':location.hash==='#records'?'records':'home';
 history.replaceState({page:'home'},'',baseUrl());
 const tabButtons=[...document.querySelectorAll('[data-tab]')];
@@ -94,10 +96,17 @@ function renderRecordIcon(node,r){
   const type=r?(recordFast(r)?'game':r.kind):'empty';if(node.dataset.type===type)return;
   node.dataset.type=type;node.classList.toggle('game-record-icon',type==='game');
   node.setAttribute('role','img');node.setAttribute('aria-label',type==='game'?'游戏性能统计':type==='charge'?'充电':type==='discharge'?'放电':'暂无记录');
-  if(type!=='game'){node.textContent=type==='charge'?'↗':type==='discharge'?'↘':'—';return;}
+  if(type==='empty'){node.textContent='—';return;}
   const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');
   svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
   const part=(tag,attributes)=>{const shape=document.createElementNS(ns,tag);for(const[key,value]of Object.entries(attributes))shape.setAttribute(key,String(value));svg.append(shape);};
+  if(type==='charge'||type==='discharge'){
+    part('rect',{x:6.5,y:4.5,width:11,height:16,rx:2.8,fill:'currentColor','fill-opacity':'.035',stroke:'currentColor','stroke-width':1.5});
+    part('path',{d:'M10 2h4',fill:'none',stroke:'currentColor','stroke-width':1.8,'stroke-linecap':'round'});
+    if(type==='charge')part('path',{d:'m12.9 7.4-3.8 5.4h2.8l-.8 4.6 4-6h-2.8Z',fill:'currentColor'});
+    else part('path',{d:'M12 8.4v7.3m-2.6-2.6 2.6 2.6 2.6-2.6',fill:'none',stroke:'currentColor','stroke-width':1.6,'stroke-linecap':'round','stroke-linejoin':'round'});
+    node.replaceChildren(svg);return;
+  }
   part('path',{d:'M7.5 6h9c2 0 3.25 1.35 3.72 3.28l1.16 5.11c.57 2.52-2.18 4.16-3.88 2.54l-2.17-2.06H8.67L6.5 16.93c-1.7 1.62-4.45-.02-3.88-2.54l1.16-5.11C4.25 7.35 5.5 6 7.5 6Z',fill:'currentColor','fill-opacity':'.1',stroke:'currentColor','stroke-width':'1.45','stroke-linejoin':'round'});
   part('path',{d:'M7.3 8.8v4.2M5.2 10.9h4.2',fill:'none',stroke:'currentColor','stroke-width':'1.65','stroke-linecap':'round'});
   part('circle',{cx:16.2,cy:9.8,r:1,fill:'currentColor'});
@@ -106,21 +115,42 @@ function renderRecordIcon(node,r){
   node.replaceChildren(svg);
 }
 function updateRecordTitle(title,r){
-  const change=recordChanges(r).secondary,delta=el('span',change.text,'record-pct-change');
-  delta.dataset.flow=change.flow;
-  title.replaceChildren(el('span',`${recordFast(r)?'游戏':r.kind==='charge'?'充电':'放电'} · `),el('span',`${fmt(r.pct_start)}% → ${fmt(r.pct_end)}%`,'record-percentage-range'),delta);
+  title.replaceChildren(el('span',stampList(r.start_wall),'record-start-time record-date'));
 }
 function updateRecordMeta(meta,r){
-  meta.replaceChildren(el('span',stampList(r.start_wall),'record-start-time'),document.createTextNode(` · ${duration(r.end_elapsed-r.start_elapsed)} · ${reasons[r.reason]??r.reason}`));
+  const state=el('span',reasons[r.reason]??(r.active?'记录中':'记录结束'),'record-state');
+  state.dataset.active=r.active?'1':'0';
+  meta.replaceChildren(el('span',duration(r.end_elapsed-r.start_elapsed),'record-duration'),document.createTextNode('\u00a0\u00a0'),state);
+}
+function renderRecordPrimary(value,change,r){
+  value.dataset.flow=change.flow;
+  const known=valid(r?.pct_start)&&valid(r?.pct_end),difference=known?r.pct_end-r.pct_start:0;
+  const start=valid(r?.pct_start)?`${fmt(r.pct_start)}%`:'—',end=valid(r?.pct_end)?`${fmt(r.pct_end)}%`:'—';
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 112 44');svg.setAttribute('role','img');
+  const capacity=recordChanges(r).secondary;
+  svg.setAttribute('aria-label',`起始电量 ${start}，结束电量 ${end}，变化 ${change.text}，容量变化 ${capacity.text}`);
+  const part=(tag,attributes,text)=>{const node=document.createElementNS(svg.namespaceURI,tag);for(const[key,v]of Object.entries(attributes))node.setAttribute(key,String(v));if(text!==undefined)node.textContent=text;svg.append(node);return node;};
+  const rise=known?Math.sign(difference)*6*Math.sqrt(Math.min(100,Math.abs(difference))/100):0;
+  const y1=24+rise,y2=24-rise;
+  part('path',{d:`M7 ${y1}C42 ${y1} 70 ${y2} 105 ${y2}`,class:'record-art-track'});
+  part('circle',{cx:7,cy:y1,r:2.5,class:'record-art-origin'});
+  part('circle',{cx:105,cy:y2,r:3,class:'record-art-destination'});
+  const number=part('text',{x:56,y:18,'text-anchor':'middle',class:'record-art-value'},known?fmt(Math.abs(difference)):'—');
+  if(known){const unit=document.createElementNS(svg.namespaceURI,'tspan');unit.setAttribute('class','record-art-unit');unit.setAttribute('dx','1');unit.textContent='%';number.append(unit);}
+  part('text',{x:2,y:43,class:'record-art-endpoint'},start);
+  part('text',{x:110,y:43,'text-anchor':'end',class:'record-art-endpoint'},end);
+  part('text',{x:56,y:43,'text-anchor':'middle',class:'record-art-capacity','data-flow':capacity.flow},capacity.text);
+  value.replaceChildren(svg);
 }
 function updateRecordDelta(delta,r){
   const change=recordChanges(r).primary,value=delta.querySelector('.delta-value');
-  value.textContent=change.text;value.dataset.flow=change.flow;
+  renderRecordPrimary(value,change,r);
 }
 const pad2=n=>String(n).padStart(2,'0');
 const stamp=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${d.getFullYear()}/${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
 const stampList=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
-const reasons={backup_restored:'恢复备份',recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'系统服务重启',module_stopped:'模块停止',recording_stopped:'记录已停止',app_uninstalled:'卸载前结束',service_updated:'后台更新',fast_started:'切换游戏模式',fast_stopped:'游戏记录结束',fast_idle_timeout:'息屏自动结束'};
+const reasons={backup_restored:'恢复备份',recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'服务重启',module_stopped:'模块停止',recording_stopped:'记录停止',app_uninstalled:'卸载结束',service_updated:'后台更新',fast_started:'切换游戏',fast_stopped:'记录结束',fast_idle_timeout:'息屏结束'};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function remainingInfoButton(){
   const button=el('button','i','remaining-info');button.type='button';
@@ -305,7 +335,7 @@ async function openBatteryHistory(state,push=false){
 }
 
 function syncReversePlot(){
-  const available=['charge','discharge'].includes(detail?.record.kind);
+  const available=detail?.record.kind==='charge'||!!(detail?.record&&recordFast(detail.record));
   const enabled=available&&reversePlot;
   $('reversePlot').hidden=!available;
   $('reversePlot').classList.toggle('selected',reversePlot);
@@ -332,7 +362,7 @@ async function readDetail(id,from,to,budget,cancelled=()=>false){
 }
 function scheduleZoom(){pauseFollowing();clearTimeout(zoomTimer);zoomTimer=setTimeout(()=>loadWindow(),180);}
 function applyChart(data,view,live=false){
-  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,ranges:data.ranges??{},live});screenOffOverlay.update(data.record,data.statsVersion);renderChartInfo();renderFollow();
+  chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,startWall:data.record.start_wall,ranges:data.ranges??{},live});screenOffOverlay.update(data.record,data.statsVersion);renderChartInfo();renderFollow();
 }
 function renderChartInfo(){
   if(!detail)return;const r=detail.record,raw=r.kind==='charge';
@@ -497,13 +527,13 @@ function updateRecordRow(row,r){
 }
 function createRecordRow(r){
     const row=el('div',undefined,'record-row record '+r.kind+(recordFast(r)?' game-record':'')),b=el('button',undefined,'record-open');
-    row.dataset.recordId=r.id;row.dataset.active=r.active?'1':'0';b.type='button';const icon=el('span',undefined,'icon');renderRecordIcon(icon,r);b.append(icon);
+    row.dataset.recordId=r.id;row.dataset.active=r.active?'1':'0';b.type='button';const icon=el('span',undefined,'icon');renderRecordIcon(icon,r);
     const info=el('span',undefined,'info');
     const title=el('strong');updateRecordTitle(title,r);info.append(title);
     const meta=el('small');updateRecordMeta(meta,r);info.append(meta);b.append(info);
     const action=el('span',undefined,'record-action'),delta=el('span',undefined,'delta');
     delta.append(el('span',undefined,'delta-value'));updateRecordDelta(delta,r);
-    action.append(delta);row.append(b,action);
+    action.append(delta);row.append(icon,action,b);
     const remove=el('button','删除','record-delete');remove.type='button';remove.dataset.deleteId=r.id;
     remove.hidden=revealedRecordId!==r.id;action.classList.toggle('delete-revealed',!remove.hidden);
     remove.onclick=e=>{e.stopPropagation();confirmRecordDelete(records.find(item=>item.id===r.id)??r);};
@@ -554,12 +584,12 @@ function renderHomeActive(r){
   const card=$('homeActiveCard');card.className='record-row record'+(r?' '+r.kind+(recordFast(r)?' game-record':''):'');
   if(!r){
     $('homeActiveTitle').textContent='暂无进行中的记录';renderRecordIcon($('homeActiveIcon'),null);
-    $('homeActiveMeta').textContent=lastStatus?.recordingEnabled===false?'记录已停止':'等待下一次记录';
+    $('homeActiveMeta').textContent=lastStatus?.recordingEnabled===false?'记录停止':'等待记录';
     $('homeActivePrimary').textContent='—';$('homeActivePrimary').dataset.flow='';return;
   }
   const changes=recordChanges(r);
   renderRecordIcon($('homeActiveIcon'),r);updateRecordTitle($('homeActiveTitle'),r);
-  $('homeActivePrimary').textContent=changes.primary.text;$('homeActivePrimary').dataset.flow=changes.primary.flow;
+  renderRecordPrimary($('homeActivePrimary'),changes.primary,r);
   updateRecordMeta($('homeActiveMeta'),r);
 }
 $('homeActiveCard').onclick=()=>{if(homeActiveRecord)openDetail(homeActiveRecord.id);};
@@ -581,8 +611,16 @@ function showDetail(data,preserve=false,live=false){
   liveChannel.setMode(recordFast(r)?2:0);
   performancePanel.open(r);
   syncTheme();
-  $('detailScroll').querySelector('.pagehead').classList.toggle('game-detail-header',recordFast(r));
-  $('detailType').textContent=r.kind==='charge'?'充电记录':recordFast(r)?'游戏模式记录':'放电记录';$('detailTitle').textContent=stamp(r.start_wall);$('chartTitle').textContent=r.kind==='charge'?'充电曲线':'放电曲线';
+  const heading=$('detailScroll').querySelector('.record-detail-head');
+  heading.dataset.kind=recordFast(r)?'game':r.kind;heading.dataset.active=r.active?'1':'0';
+  $('detailType').textContent=recordFast(r)?'游戏记录':r.kind==='charge'?'充电记录':'放电记录';
+  $('detailState').textContent=r.active?'记录中':reasons[r.reason]??'记录结束';
+  $('detailTitle').textContent=valid(r.start_wall)?stamp(r.start_wall):'—';
+  const endWall=recordEndWall(r);$('detailEnd').textContent=r.active?'记录中':endWall===null?'—':stamp(endWall);
+  for(const[node,wall]of[[$('detailTitle'),r.start_wall],[$('detailEnd'),endWall]]){
+    if(valid(wall)&&Number.isFinite(new Date(wall).getTime()))node.dateTime=new Date(wall).toISOString();else node.removeAttribute('datetime');
+  }
+  $('chartTitle').textContent=r.kind==='charge'?'充电曲线':'放电曲线';
   renderSummary(r);
   syncRemainingExplanation();
   if(!preserve){streamId=r.id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
@@ -961,7 +999,6 @@ async function applyHistory(state){
 }
 $('back').onclick=()=>window.__acoBack();
 window.addEventListener('popstate',event=>applyHistory(event.state));
-$('delete').onclick=()=>confirmRecordDelete(detail?.record);
 $('cancelDelete').onclick=dismissRecordDelete;
 $('confirm').addEventListener('cancel',e=>{e.preventDefault();dismissRecordDelete();});
 $('confirmDelete').onclick=async()=>{

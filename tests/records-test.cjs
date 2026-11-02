@@ -84,9 +84,15 @@ const liveSource=fs.readFileSync(path.join(root,'live-channel.js'),'utf8').repla
 
 async function recordDisplay(){
 const root=path.join(__dirname,'../src/main/assets/webroot/');
-const{recordChanges,recordIsLive}=await import(pathToFileURL(path.join(root,'record-display.js')).href);
+const{recordChanges,recordIsLive,recordEndWall}=await import(pathToFileURL(path.join(root,'record-display.js')).href);
 const{canEstimateRemaining}=await import(pathToFileURL(path.join(root,'estimate.js')).href);
 const status={session:20,normalSession:10,gameSession:20};
+const started=Date.UTC(2026,11,31,23,50),ended={active:0,start_wall:started,start_elapsed:1000,end_elapsed:1801000};
+assert.equal(recordEndWall(ended),Date.UTC(2027,0,1,0,20));
+assert.equal(recordEndWall({...ended,active:1}),null);
+assert.equal(recordEndWall({...ended,end_elapsed:999}),null);
+assert.equal(recordEndWall({...ended,start_wall:null}),null);
+assert.equal(recordEndWall({...ended,end_elapsed:1000}),started);
 assert.ok(recordIsLive({id:10,active:1},status));assert.ok(recordIsLive({id:20,active:1},status));assert.ok(!recordIsLive({id:20,active:0},status));assert.ok(!recordIsLive({id:30,active:1},status));
 assert.equal(canEstimateRemaining({fast_seconds:3},{online:true,onlineKnown:true}),false);
 assert.equal(canEstimateRemaining({fast_seconds:3},{online:null,onlineKnown:false}),false);

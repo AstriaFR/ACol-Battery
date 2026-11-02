@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <script src="../viewport.js"></script>
   <meta name="color-scheme" content="light dark">
   <script>const systemDark=()=>{try{const d=window.AcoNative?.isSystemDark?.();if(typeof d==='boolean')return d}catch{}return matchMedia('(prefers-color-scheme: dark)').matches};try{const p=JSON.parse(localStorage.getItem('acol.theme.preference'));document.documentElement.dataset.theme=(p?.step==='auto'||!p?.step)?(systemDark()?'dark':'light'):(p.dark?'dark':'light')}catch{document.documentElement.dataset.theme=systemDark()?'dark':'light'}</script>
   <title>截止电压调整</title>
   <script>try{if(window.parent!==window&&new URLSearchParams(location.search).get('embedded')==='1'){const theme=window.parent.document.documentElement.dataset.theme;if(theme)document.documentElement.dataset.theme=theme}}catch{}document.documentElement.style.colorScheme=document.documentElement.dataset.theme==='dark'?'dark':'light';</script>
-  <link rel="stylesheet" href="style.css?v=acol-2.1">
+  <link rel="stylesheet" href="style.css?v=acol-2.2">
 </head>
 <body>
   <main>
@@ -46,6 +47,6 @@
     <p id="cutoffKeypadError" class="keypad-error" role="status" hidden></p>
     <div class="keypad-grid"><button type="button" data-key="sign" aria-label="切换正负号">−</button><button type="button" data-key="clear">清空</button><button type="button" data-key="backspace" aria-label="退格">⌫</button><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="00">00</button><button type="button" data-key="0">0</button><button type="button" data-key="dot">.</button></div>
   </dialog>
-  <script type="module" src="app.js?v=acol-2.1"></script>
+  <script type="module" src="app.js?v=acol-2.2"></script>
 </body>
 </html>

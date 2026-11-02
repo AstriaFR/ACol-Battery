@@ -66,7 +66,7 @@ public final class MainActivity extends Activity {
     TextView stage,detail,errorText,errorTitle;
     Button retry,errorView,errorCopy,rebuild,errorRebuild;
     boolean canRebuild,rebuilding;
-    LinearLayout errorActions;
+    LinearLayout errorActions,initializationContent;
     ProgressBar progress;
     String errorReport="",downgradeReport="";boolean showingFallbackReport;
     JSONObject probeReport;
@@ -146,7 +146,7 @@ public final class MainActivity extends Activity {
     }
     void showInitialization(){
         initialized=false;errorPage=null;errorText=null;errorTitle=null;errorCopy=null;errorRebuild=null;canRebuild=false;showingFallbackReport=false;
-        LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);layout.setGravity(Gravity.CENTER_VERTICAL);layout.setPadding(dp(28),dp(32),dp(28),dp(32));layout.setBackgroundColor(Color.rgb(246,248,251));
+        LinearLayout layout=new LinearLayout(this);initializationContent=layout;layout.setOrientation(LinearLayout.VERTICAL);layout.setGravity(Gravity.CENTER_VERTICAL);layout.setPadding(dp(28),dp(32),dp(28),dp(32));layout.setBackgroundColor(Color.rgb(246,248,251));
         LinearLayout title=new LinearLayout(this);title.setGravity(Gravity.CENTER_VERTICAL);
         ImageView icon=new ImageView(this);try(InputStream in=getAssets().open("webroot/assets/acol-icon.png")){icon.setImageBitmap(BitmapFactory.decodeStream(in));}catch(IOException ignored){}
         title.addView(icon,new LinearLayout.LayoutParams(dp(58),dp(58)));
@@ -160,7 +160,7 @@ public final class MainActivity extends Activity {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.1 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(this);try{version.setText(getPackageManager().getPackageInfo(getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.2 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(this);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,dp(32),0,dp(12));layout.addView(stage);
         detail=new TextView(this);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(dp(5),1);layout.addView(detail);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(4));line.topMargin=dp(24);layout.addView(progress,line);
@@ -171,7 +171,8 @@ public final class MainActivity extends Activity {
         rebuild=new Button(this);rebuild.setText("重建数据库");rebuild.setTextColor(Color.rgb(190,65,65));rebuild.setVisibility(View.GONE);rebuild.setOnClickListener(v->askRebuild());
         errorActions.addView(rebuild,new LinearLayout.LayoutParams(-1,dp(44)));
         LinearLayout.LayoutParams actionLine=new LinearLayout.LayoutParams(-1,-2);actionLine.topMargin=dp(12);layout.addView(errorActions,actionLine);
-        mount(layout);
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setBackgroundColor(Color.rgb(246,248,251));
+        scroll.addView(layout,new ScrollView.LayoutParams(-1,-2));mount(scroll);
     }
     void phase(String name,String text){currentPhase=name;if(destroyed)return;runOnUiThread(()->{stage.setText(name);detail.setText(text);});}
     void connectionPhase(String text){
@@ -528,7 +529,7 @@ public final class MainActivity extends Activity {
     }
     @SuppressLint({"SetJavaScriptEnabled","AddJavascriptInterface"}) void showWeb(){
         pageLoaded=false;
-        initialized=true;web=new WebView(this);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
+        initialized=true;web=new WebView(this);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setUseWideViewPort(true);settings.setSupportZoom(false);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setSupportMultipleWindows(false);settings.setMediaPlaybackRequiresUserGesture(true);web.addJavascriptInterface(new Bridge(),"AcoNative");
         web.setWebViewClient(new WebViewClient(){
             @Override public void onPageFinished(WebView view,String url){if(view==web){pageLoaded=true;openTileSettings();showStartupNotice();}}

@@ -1,6 +1,6 @@
-import{ScreenTimePanel}from'./screen-time.js?v=acol-2.1';
-import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.1';
-import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.1';
+import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2';
+import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.2';
+import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.2';
 export const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 export const dateText=wall=>{const d=new Date(wall);return`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`};
 export function roundedDuration(ms){

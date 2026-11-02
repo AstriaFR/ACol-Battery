@@ -14,10 +14,12 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
  assert.equal(DEFAULT_SETTINGS.fastSeconds,10);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,30);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
  for(const value of [1,30,60,120])assert.equal(encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value})[9],value);
  for(const value of [0,121,1.5])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value}));
- for(const key of ['fastSeconds','performanceSeconds']){
+ for(const key of ['fastSeconds']){
   for(const value of [1,7,60])assert.equal(encodeSettings({...DEFAULT_SETTINGS,[key]:value})[key==='fastSeconds'?10:13],value);
   for(const value of [0,61,1.5,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,[key]:value}));
  }
+ for(const value of [0.5,0.6,1.1,2,19.9,20])assert.equal(encodeSettings({...DEFAULT_SETTINGS,performanceSeconds:value})[13],value);
+ for(const value of [0,0.4,20.1,60,1.05,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,performanceSeconds:value}));
  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
  const names=new Set([...html.matchAll(/<input[^>]*\bname="([^"]+)"/g)].map(m=>m[1]));
  for(const key of settingsKeys)assert.ok(names.has(key),`Missing settings input ${key}`);
@@ -32,7 +34,7 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
   panel.askChange=async(title,text)=>{hint=text;return accepted};panel.flush=async()=>true;
   panel.editorError=text=>{throw Error(text)};panel.dismissEditor=()=>{dismissed=true};
   await panel.commitEditor();assert.equal(panel.editor.field.value,'10');assert.ok(!dismissed);assert.ok(hint.includes('3 秒'));
-  accepted=true;await panel.commitEditor();assert.equal(panel.editor.field.value,'3');assert.ok(dismissed);assert.ok(hint.includes('继续当前记录'));
+  accepted=true;await panel.commitEditor();assert.equal(panel.editor.field.value,key==='performanceSeconds'?'3.0':'3');assert.ok(dismissed);assert.ok(hint.includes('继续当前记录'));
  }
 }
 

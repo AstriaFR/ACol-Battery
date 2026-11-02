@@ -62,7 +62,7 @@ final class DataTransferUi {
     }
     void page(String title,String message){
         app.showInitialization();app.stage.setText(title);app.detail.setText(message);app.retry.setVisibility(View.GONE);app.errorActions.setVisibility(View.GONE);
-        LinearLayout layout=(LinearLayout)app.contentFrame.getChildAt(0);primary=new Button(app);primary.setTextColor(Color.rgb(7,130,103));secondary=new Button(app);secondary.setBackgroundColor(Color.TRANSPARENT);
+        LinearLayout layout=app.initializationContent;primary=new Button(app);primary.setTextColor(Color.rgb(7,130,103));secondary=new Button(app);secondary.setBackgroundColor(Color.TRANSPARENT);
         layout.addView(primary,new LinearLayout.LayoutParams(-1,app.dp(48)));layout.addView(secondary,new LinearLayout.LayoutParams(-1,app.dp(44)));primary.setVisibility(View.GONE);secondary.setVisibility(View.GONE);
     }
     void begin(){

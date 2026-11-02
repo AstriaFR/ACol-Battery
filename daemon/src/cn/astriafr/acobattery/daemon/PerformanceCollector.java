@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** One bounded, asynchronous snapshot per fast sample. No polling loop or child processes. */
 final class PerformanceCollector implements AutoCloseable {
-    interface Sink { void accept(long session,long start,JSONArray row,JSONObject meta) throws Exception; }
+    interface Sink { void accept(long session,long start,long wall,JSONArray row,JSONObject meta) throws Exception; }
     private final Sink sink;
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{
         Thread t=new Thread(r,"curve-performance");t.setDaemon(true);t.setPriority(Thread.MIN_PRIORITY);return t;
@@ -46,7 +46,7 @@ final class PerformanceCollector implements AutoCloseable {
         if(closed||!pending.compareAndSet(false,true))return; // Skip overload; never queue old observations.
         try{worker.execute(()->{
             try{
-                long elapsed=SystemClock.elapsedRealtime();
+                long elapsed=SystemClock.elapsedRealtime(),wall=System.currentTimeMillis();
                 JSONObject frequency=frequencies();
                 Map<Integer,long[]> cpu=cpuTimes();Set<Integer> online=cpuList(read("/sys/devices/system/cpu/online"));
                 double maxTemperature=maximumCpuGpuTemperature();
@@ -66,7 +66,7 @@ final class PerformanceCollector implements AutoCloseable {
                 if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
                 row.put(1,number(fps));
                 previousCpu=cpu;previousAt=elapsed;previousSession=session;previousScreen=screen;
-                if(!closed)sink.accept(session,start,row,metadata());
+                if(!closed)sink.accept(session,start,wall,row,metadata());
             }catch(Throwable e){System.err.println("Performance snapshot skipped: "+e.getClass().getSimpleName());}
             finally{pending.set(false);}
         });}catch(RejectedExecutionException e){pending.set(false);}

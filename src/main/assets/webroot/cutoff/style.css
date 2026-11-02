@@ -101,3 +101,35 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 .page-home svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 .page-home[hidden]{display:none!important}
+
+/* Match the parent reading column and keep controls reachable on short windows. */
+main{max-width:480px;display:flex;flex-direction:column;min-height:0;padding-bottom:12px;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;touch-action:pan-y}
+main>header,main>.card{flex:none}
+main>header .page-heading{flex:1;gap:8px}
+.page-heading h1{font-size:clamp(20px,6vw,26px);white-space:nowrap}
+main>footer{margin:10px 2px 0;font-size:10px;overflow-wrap:anywhere}
+main>#message{margin:6px 2px;max-height:56px;overflow-y:auto;flex-shrink:0;overflow-wrap:anywhere}
+main>#message:empty{display:none}
+dl>div{min-width:0}
+dd{min-width:0}
+dd .voltage-value{display:block}
+dd .voltage-mode{display:block;margin:2px 0 0;font-size:12px}
+dd .voltage-mode::before{content:none}
+.actions{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}
+.actions>button{min-width:0;padding-inline:6px;font-size:14px}
+dialog{max-height:calc(100dvh - 24px);overflow-y:auto;overflow-wrap:anywhere}
+.keypad-heading{flex-wrap:wrap;gap:6px}
+.keypad-heading h3{flex-basis:100%}
+.keypad-heading-actions{width:100%;justify-content:flex-end}
+@media(max-height:740px){
+  main>header{margin-bottom:10px}
+  main>.card{padding:15px 16px;margin-bottom:10px}
+  dl>div{padding-block:7px}
+  label{margin-top:12px}
+  .actions{margin-top:14px}
+}
+@media(max-height:590px){
+  main>footer{padding-bottom:8px}
+  .numeric-keypad .keypad-grid button{min-height:32px;padding:3px}
+  .numeric-keypad .keypad-readout{padding-block:3px;margin-bottom:5px}
+}

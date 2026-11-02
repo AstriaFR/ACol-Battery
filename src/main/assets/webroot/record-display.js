@@ -3,6 +3,11 @@ const fmt=(value,digits=0)=>valid(value)?value.toLocaleString('zh-CN',{maximumFr
 export function recordIsLive(record,status){
   return !!record?.active&&Number.isSafeInteger(record.id)&&[status?.session,status?.normalSession,status?.gameSession].includes(record.id);
 }
+export function recordEndWall(record){
+  if(!record||record.active||![record.start_wall,record.start_elapsed,record.end_elapsed].every(valid)||record.end_elapsed<record.start_elapsed)return null;
+  const wall=record.start_wall+(record.end_elapsed-record.start_elapsed);
+  return Number.isSafeInteger(wall)&&wall>=0?wall:null;
+}
 
 export function capacityChange(record){
   if(!valid(record.rm_start)||!valid(record.rm_end))return'—';

@@ -1,7 +1,7 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-2.1';
-import{fullScreen}from'./root-bridge.js?v=acol-2.1';
-import{curveColor}from'./curve-colors.js?v=acol-2.1';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.1';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-2.2';
+import{fullScreen}from'./root-bridge.js?v=acol-2.2';
+import{curveColor}from'./curve-colors.js?v=acol-2.2';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.2';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
@@ -42,11 +42,11 @@ export class PerformancePanel{
   }
   open(record){
     if(record.kind!=='discharge'||!(record.fast_seconds>0)){this.close();return;}
-    this.active=!!record.active;this.interval=Math.max(1000,(record.performance_seconds||record.fast_seconds)*1000);
+    this.active=!!record.active;this.interval=Math.max(500,Math.round((record.performance_seconds||record.fast_seconds)*1000));
     if(this.id===record.id)return;
-    this.close();this.id=record.id;this.points=[];this.cursor=0;this.follow=true;this.end=1;this.metaText='';
+    this.close();this.id=record.id;this.startWall=record.start_wall;this.points=[];this.cursor=0;this.follow=true;this.end=1;this.metaText='';this.chart.wallByX.clear();
     this.chart.metrics=[];this.chart.maximum.clear();this.chart.frequencyRanges.clear();this.chart.cpuMax=0;this.chart.cpuObservedMax=0;this.chart.axisKey=null;this.chart.enabled.clear();
-    this.chart.set([],1,null,{kind:'performance',fast:true,cellCount:0});
+    this.chart.set([],1,null,{kind:'performance',fast:true,cellCount:0,startWall:this.startWall});
     $('performanceLegend').replaceChildren();$('performanceMethod').hidden=true;
     $('performanceHint').textContent='正在读取性能数据…';$('performancePanel').hidden=false;
     this.poll(this.token);
@@ -65,7 +65,8 @@ export class PerformancePanel{
       do{
         data=await this.api('performance',this.id,this.cursor);
         if(token!==this.token)return;
-        this.active=!!data.active;this.end=Math.max(this.end,data.end??1);if(data.intervalMs>0)this.interval=Math.max(1000,data.intervalMs);
+        this.active=!!data.active;this.end=Math.max(this.end,data.end??1);if(data.intervalMs>0)this.interval=Math.max(500,data.intervalMs);
+        for(const[x,wall]of data.wallTimes??[])if(valid(x)&&valid(wall))this.chart.wallByX.set(x,wall);
         if(data.meta&&JSON.stringify(data.meta)!==this.metaText){this.configure(data.meta);changed=true;}
         const fresh=(data.points??[]).filter(p=>!this.points.length||p[0]>this.points.at(-1)[0]);
         if(fresh.length){this.points.push(...fresh);this.chart.ingest(fresh);changed=true;}
@@ -73,7 +74,7 @@ export class PerformancePanel{
       }while(data.more);
       if(changed||!this.points.length)this.render();
       $('performanceHint').textContent=this.points.length?
-        `每 ${Math.round(this.interval/1000)} 秒采样 · CPU 使用率取相邻区间，GPU 取驱动当前值，温度取 CPU/GPU 最高值 · 长按图例显示实际刻度。`:
+        `每 ${(this.interval/1000).toFixed(1)} 秒采样 · CPU 使用率取相邻区间，GPU 取驱动当前值，温度取 CPU/GPU 最高值 · 长按图例显示实际刻度。`:
         this.active?'等待下一次游戏模式采样；不可用指标留空。':'此记录没有性能采样数据。';
     }catch(e){if(token===this.token)$('performanceHint').textContent=e.message;}
     finally{
@@ -147,7 +148,7 @@ export class PerformancePanel{
     let view=c.window;
     if(reset)view=[0,total];
     else if(this.follow){const span=c.window[1]-c.window[0];view=c.window[0]===0&&c.window[1]>=c.total-1?[0,total]:[Math.max(0,total-span),total];}
-    c.set(this.points,total,view,{kind:'performance',fast:true,cellCount:0,live:true});
+    c.set(this.points,total,view,{kind:'performance',fast:true,cellCount:0,startWall:this.startWall,live:true});
     for(const s of c.metrics){
       const label=$('performanceLegend').querySelector(`[data-series="${s.key}"]`);if(!label)continue;
       label.classList.toggle('axis-active',c.axisKey===s.key);label.querySelector('.legend-scale').textContent=c.scaleFor(s).label;

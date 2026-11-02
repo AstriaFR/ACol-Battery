@@ -1,6 +1,6 @@
-import{installPageDepth}from'../page-navigation.js?v=acol-2.1';
-import { exec as localExec, cancelTopDialog } from '../root-bridge.js?v=acol-2.1';
-import { ThemeController } from '../theme.js?v=acol-2.1';
+import{installPageDepth}from'../page-navigation.js?v=acol-2.2';
+import { exec as localExec, cancelTopDialog } from '../root-bridge.js?v=acol-2.2';
+import { ThemeController } from '../theme.js?v=acol-2.2';
 const embedded=window.parent!==window&&new URLSearchParams(location.search).get('embedded')==='1';
 const cutoffTheme=ThemeController.applyStored({followParent:embedded});
 if(!embedded)installPageDepth();

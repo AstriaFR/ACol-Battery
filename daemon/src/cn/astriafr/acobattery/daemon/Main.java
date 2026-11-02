@@ -127,7 +127,7 @@ public final class Main {
     final PerformanceCollector performance;
     final PowerIndicator powerIndicator;
     long performanceSession=-1,performanceMetaSession=-1;
-    final Core.Cadence performanceCadence=new Core.Cadence(3000);
+    final Core.Cadence performanceCadence=new Core.Cadence(2000);
 
     public static void main(String[] args) {
         boolean recorder=args.length==2&&!args[0].startsWith("--")&&new File(args[1]).getAbsoluteFile().equals(Owner.BASE.getAbsoluteFile());
@@ -177,7 +177,7 @@ public final class Main {
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
         StartupFailure.clear(Owner.BASE,attempt);
 
-        System.err.println("AColBattery App 2.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 2.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect();System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -235,12 +235,12 @@ public final class Main {
         loadCellProfile();
         powerIndicator=new PowerIndicator(ctx,"1".equals(runtimeValue("power_indicator")));
         if(reset)Files.delete(resetFlag.toPath());
-        performance=new PerformanceCollector((id,start,row,meta)->{
+        performance=new PerformanceCollector((id,start,wall,row,meta)->{
             synchronized(mutex){
                 if(stopping||!recordingEnabled||!fastEnabled||gameTrack.session!=id||gameTrack.startElapsed!=start)return;
                 db.beginTransaction();try{
                     if(performanceMetaSession!=id)db.execSQL("INSERT OR IGNORE INTO performance_profiles(session,meta) VALUES(?,?)",new Object[]{id,meta.toString()});
-                    db.execSQL("INSERT OR IGNORE INTO performance_samples(session,x,data) VALUES(?,?,?)",new Object[]{id,row.getLong(0),row.toString()});
+                    db.execSQL("INSERT OR IGNORE INTO performance_samples(session,x,data,wall) VALUES(?,?,?,?)",new Object[]{id,row.getLong(0),row.toString(),wall});
                     db.setTransactionSuccessful();
                 }finally{db.endTransaction();}
                 performanceMetaSession=id;
@@ -324,20 +324,20 @@ public final class Main {
 
     static JSONObject decodeSettings(JSONArray p)throws Exception {
         if(p.length()!=8&&p.length()!=12&&p.length()!=13&&p.length()!=14&&p.length()!=15)throw new IOException("设置项数量无效");
-        long[] v={5,30,560,1,300,450,50,60,2,30,10,1,2,2,10001};for(int i=0;i<p.length();i++)v[i]=p.getLong(i);
+        long[] v={5,30,560,1,300,450,50,60,2,30,10,1,2,2,10001};for(int i=0;i<p.length();i++)if(i!=13)v[i]=p.getLong(i);
         // The old game interval controlled both charts. Keep it for both on upgrade.
-        if(p.length()>=12&&p.length()<14)v[13]=v[10];
+        double performanceSeconds=p.length()>=14?p.getDouble(13):p.length()>=12?Math.min(20,v[10]):2;
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
         if(v[2]<1||v[2]>2000||v[3]<0||v[3]>1)throw new IOException("容量范围 0.01–20.00 Ah");
         if(v[4]<220||v[5]>480||v[4]>=v[5])throw new IOException("电压范围 2.20–4.80 V，下限须小于上限");
         if(v[6]<0||v[7]>80||v[6]>=v[7])throw new IOException("温度范围 −20–60℃，下限须小于上限");
         if(v[8]<1||v[8]>10||v[9]<1||v[9]>120||p.length()>9&&!p.get(9).toString().matches("[0-9]+")||v[10]<1||v[10]>60||v[11]<0||v[11]>1)throw new IOException("亮屏间隔 1–10 分钟，息屏间隔 1–120 分钟，游戏采样间隔 1–60 秒，仅限整数");
         if(v[12]<1||v[12]>10||p.length()>=13&&!p.get(12).toString().matches("[0-9]+"))throw new IOException("充电间隔 1–10 秒，仅限整数");
-        if(v[13]<1||v[13]>60||p.length()>=14&&!p.get(13).toString().matches("[0-9]+"))throw new IOException("性能采样间隔 1–60 秒，仅限整数");
+        if(!Core.finite(performanceSeconds)||performanceSeconds<0.5||performanceSeconds>20||Math.abs(performanceSeconds*10-Math.round(performanceSeconds*10))>1e-7)throw new IOException("性能采样间隔 0.5–20.0 秒，步进 0.1 秒");
         if(v[14]<0||v[14]>10001)throw new IOException("默认能量量程范围 0–100 Wh");
         return new JSONObject().put("energyWh",v[14]==10001?JSONObject.NULL:v[14]/100.0).put("deletePct",v[0]).put("hidePct",v[1]).put("capacityAh",v[2]/100.0)
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
-            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",v[13]);
+            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",performanceSeconds);
     }
     JSONObject defaultSettings()throws Exception {
         JSONObject defaults=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
@@ -351,7 +351,12 @@ public final class Main {
     void loadSettings()throws Exception {
         settings=defaultSettings();
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='module_settings'",null)) {
-            if(c.moveToFirst())try {settings=decodeSettings(new JSONArray(c.getString(0)));}
+            if(c.moveToFirst())try {
+                JSONArray stored=new JSONArray(c.getString(0));
+                // Clamp only previously valid whole-second intervals above the new cap.
+                if(stored.length()>=14){double old=stored.getDouble(13);if(old>20&&old<=60&&old==Math.rint(old))stored.put(13,20);}
+                settings=decodeSettings(stored);
+            }
             catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
         }
     }
@@ -368,7 +373,7 @@ public final class Main {
         if(reschedule&&gameTrack.sampling.fastMs!=gameInterval)gameTrack.sampling.next=Math.max(SystemClock.elapsedRealtime(),(gameTrack.previous==null?0:gameTrack.previous.elapsed)+gameInterval);
         gameTrack.sampling.fastMs=gameInterval;
         if(reschedule)gameTrack.sampling.expected=Math.max(gameTrack.sampling.expected,gameInterval);
-        performanceCadence.configure(settings.optLong("performanceSeconds",2)*1000,reschedule?SystemClock.elapsedRealtime():0);
+        performanceCadence.configure(Math.round(settings.optDouble("performanceSeconds",2)*1000),reschedule?SystemClock.elapsedRealtime():0);
         if(reschedule&&recordingEnabled){
             long now=SystemClock.elapsedRealtime(),nextInterval=interval();
             if(nextInterval!=oldInterval)sampling.next=Math.max(now,(previous==null?now:previous.elapsed)+nextInterval);
@@ -376,7 +381,7 @@ public final class Main {
             // already elapsed old plan when shortening without splitting a record.
             sampling.expected=Math.max(sampling.expected,nextInterval);
             if(fastEnabled&&gameTrack.session>=0){
-                db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{gameInterval/1000,settings.optInt("performanceSeconds",2),gameTrack.session});
+                db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{gameInterval/1000,settings.optDouble("performanceSeconds",2),gameTrack.session});
             }
         }
     }
@@ -430,7 +435,7 @@ public final class Main {
         if((count!=12&&count!=13&&count!=14&&count!=15)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
         JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
         if(count==12)values.put(settings.optLong("chargeSeconds",2));
-        if(values.length()==13)values.put(settings.optLong("performanceSeconds",2));
+        if(values.length()==13)values.put(settings.optDouble("performanceSeconds",2));
         if(values.length()==14)values.put(settings.isNull("energyWh")?10001:Math.round(settings.optDouble("energyWh",0)*100));
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
@@ -462,6 +467,10 @@ public final class Main {
             try(Cursor c=db.rawQuery("PRAGMA table_info(samples)",null)) {while(c.moveToNext())columns.add(c.getString(1));}
             for(String name:new String[]{"cell1","cell2","temp"})if(!columns.contains(name))db.execSQL("ALTER TABLE samples ADD COLUMN "+name+" REAL");
             if(!columns.contains("online"))db.execSQL("ALTER TABLE samples ADD COLUMN online INTEGER");
+            if(!columns.contains("wall"))db.execSQL("ALTER TABLE samples ADD COLUMN wall INTEGER");
+            Set<String> performanceColumns=new HashSet<>();
+            try(Cursor c=db.rawQuery("PRAGMA table_info(performance_samples)",null)){while(c.moveToNext())performanceColumns.add(c.getString(1));}
+            if(!performanceColumns.contains("wall"))db.execSQL("ALTER TABLE performance_samples ADD COLUMN wall INTEGER");
             Set<String> sessionColumns=new HashSet<>();
             try(Cursor c=db.rawQuery("PRAGMA table_info(sessions)",null)){while(c.moveToNext())sessionColumns.add(c.getString(1));}
             if(!sessionColumns.contains("cell_count"))db.execSQL("ALTER TABLE sessions ADD COLUMN cell_count INTEGER NOT NULL DEFAULT 2");
@@ -480,7 +489,7 @@ public final class Main {
                 db.execSQL("ALTER TABLE apps ADD COLUMN mah_ms INTEGER NOT NULL DEFAULT 0");
                 db.execSQL("UPDATE apps SET mah_ms=ms");
             }
-            db.setVersion(13);db.setTransactionSuccessful();
+            db.setVersion(14);db.setTransactionSuccessful();
         } finally {db.endTransaction();}
     }
     static String read(String path) {
@@ -635,6 +644,28 @@ public final class Main {
             .put("serial",jsonValue(optionalText(read(BAT+"battery_sn"))))
             .put("manufactureDate",jsonValue(optionalText(read(BAT+"battery_manu_date"))))
             .put("batteryType",jsonValue(optionalText(type))).put("coefficients",relationships);
+    }
+    JSONObject recordBatteryHistory(JSONObject info,long wall)throws Exception {
+        JSONObject snapshot=BatteryHistorySnapshot.capture(info);
+        boolean available=false;
+        for(String key:new String[]{"cycles","qmax","fcc","soh","cutoffMv"})if(!snapshot.isNull(key)){available=true;break;}
+        if(!available)throw new IOException("当前电池信息暂不可用，请稍后重试。");
+        Integer cycles=integer(snapshot.opt("cycles").toString());long id;
+        db.beginTransaction();try{
+            // Positive source IDs belong to automatic charge-session snapshots.
+            // Negative IDs identify independent manual snapshots without a schema migration.
+            long source;
+            try(Cursor c=db.rawQuery("SELECT COALESCE(MIN(source_session),0) FROM battery_history",null)){
+                c.moveToFirst();source=Math.min(0,c.getLong(0))-1;
+            }
+            try(SQLiteStatement insert=db.compileStatement("INSERT INTO battery_history(source_session,completed_wall,cycles,snapshot) VALUES(?,?,?,?)")){
+                insert.bindLong(1,source);insert.bindLong(2,wall);
+                if(cycles==null)insert.bindNull(3);else insert.bindLong(3,cycles);
+                insert.bindString(4,snapshot.toString());id=insert.executeInsert();
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return new JSONObject().put("id",id).put("completed_wall",wall).put("cycles",jsonValue(cycles)).put("snapshot",snapshot);
     }
     static JSONObject readingJson(Core.Reading r)throws JSONException {
         JSONObject o=new JSONObject();
@@ -971,7 +1002,7 @@ public final class Main {
         if(!gameContext)db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;startWall=r.wall;clockAdjusted=false;
         try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000:0,state==0&&gameContext?settings.optInt("performanceSeconds",2):0,state==0&&gameContext?"rm_minute":"rm"};
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000:0,state==0&&gameContext?settings.optDouble("performanceSeconds",2):0,state==0&&gameContext?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -1028,8 +1059,8 @@ public final class Main {
         double recordedPower=state==1?r.power():fast?-r.power():Core.averagePower(energy,dt);
         db.beginTransaction();
         try {
-            db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),nullable(r.temp),r.online?1:0});
+            db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.voltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),nullable(r.temp),r.online?1:0,r.wall});
             if(state==1&&r.online&&r.vendorLogRead&&!fullGate.vendorLogSeen)
                 db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('charge_log_session',?)",new Object[]{""+session});
             if(powerBoundary){
@@ -1529,6 +1560,10 @@ public final class Main {
         if(action.equals("error_logs"))return new ErrorLogStore(new File(data,"error-logs")).list(p.optInt(0,0),40).put("ok",true);
         if(action.equals("clear_error_logs")){new ErrorLogStore(new File(data,"error-logs")).clear();return o;}
         if(action.equals("error_log"))return o.put("report",new ErrorLogStore(new File(data,"error-logs")).read(p.optString(0)));
+        if(action.equals("battery_history_record")){
+            if(p.length()!=0)throw new IOException("手动记录参数无效");
+            return o.put("item",recordBatteryHistory(batteryInfoSnapshot(),System.currentTimeMillis()));
+        }
         if(action.equals("battery_history")){
             int offset=Math.max(0,Math.min(1_000_000,p.optInt(0,0)));
             JSONArray items=rows("SELECT id,completed_wall,cycles FROM battery_history ORDER BY id DESC LIMIT 20 OFFSET ?",new String[]{""+offset});
@@ -1546,7 +1581,7 @@ public final class Main {
             long historyId=p.optLong(0,0);if(historyId<1)throw new IOException("历史记录 ID 无效");
             db.beginTransaction();try{
                 // Keep only the source ID to prevent legacy backfill from recreating deleted snapshots.
-                db.execSQL("INSERT OR IGNORE INTO battery_history_deleted(source_session) SELECT source_session FROM battery_history WHERE id=?",new Object[]{historyId});
+                db.execSQL("INSERT OR IGNORE INTO battery_history_deleted(source_session) SELECT source_session FROM battery_history WHERE id=? AND source_session>0",new Object[]{historyId});
                 db.execSQL("DELETE FROM battery_history WHERE id=?",new Object[]{historyId});
                 db.setTransactionSuccessful();
             }finally{db.endTransaction();}
@@ -1609,25 +1644,26 @@ public final class Main {
         if(raw)rawPoints(o,id,from,to,p.optLong(4,-1));
         else o.put("points",points(id,from,to,budget));
         signalRanges(o,id,from,to,raw);
-        o.put("columns",new JSONArray(new String[]{"x","rm","pct","current","voltage","power","quality","interval_ms","cell1","cell2","temp"}));
+        o.put("columns",new JSONArray(new String[]{"x","rm","pct","current","voltage","power","quality","interval_ms","cell1","cell2","temp","energy","online","wall"}));
         return o;
     }
     JSONObject performancePoints(long id,long cursor)throws Exception{
         JSONObject out=new JSONObject().put("ok",true);long end;
         try(Cursor c=db.rawQuery("SELECT end_elapsed-start_elapsed,active,performance_seconds FROM sessions WHERE id=?",new String[]{""+id})){
-            if(!c.moveToFirst())throw new IOException("记录不存在或已删除");end=c.getLong(0);out.put("active",c.getInt(1)!=0).put("intervalMs",c.getLong(2)*1000);
+            if(!c.moveToFirst())throw new IOException("记录不存在或已删除");end=c.getLong(0);out.put("active",c.getInt(1)!=0).put("intervalMs",Math.round(c.getDouble(2)*1000));
         }
         try(Cursor c=db.rawQuery("SELECT meta FROM performance_profiles WHERE session=?",new String[]{""+id})){
             out.put("meta",c.moveToFirst()?new JSONObject(c.getString(0)):JSONObject.NULL);
         }
-        JSONArray points=new JSONArray();long after=Math.max(0,cursor)-1;boolean more=false;
-        try(Cursor c=db.rawQuery("SELECT x,data FROM performance_samples WHERE session=? AND x>? ORDER BY x LIMIT 8001",new String[]{""+id,""+after})){
+        JSONArray points=new JSONArray(),walls=new JSONArray();long after=Math.max(0,cursor)-1;boolean more=false;
+        try(Cursor c=db.rawQuery("SELECT x,data,wall FROM performance_samples WHERE session=? AND x>? ORDER BY x LIMIT 8001",new String[]{""+id,""+after})){
             while(c.moveToNext()){
                 if(points.length()==8000){more=true;break;}
                 end=Math.max(end,c.getLong(0));points.put(new JSONArray(c.getString(1)));after=c.getLong(0);
+                if(!c.isNull(2))walls.put(new JSONArray().put(after).put(c.getLong(2)));
             }
         }
-        return out.put("points",points).put("end",end).put("cursor",after+1).put("more",more);
+        return out.put("points",points).put("wallTimes",walls).put("end",end).put("cursor",after+1).put("more",more);
     }
     static boolean cutoffAvailable(){
         boolean available=true;
@@ -1639,7 +1675,7 @@ public final class Main {
         return available;
     }
     JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("version","2.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("version","2.2").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
         o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
@@ -1694,14 +1730,14 @@ public final class Main {
     /** Charging is transmitted without decimation. Pages limit IPC size, not data fidelity. */
     void rawPoints(JSONObject out,long id,long from,long to,long after)throws Exception {
         JSONArray result=new JSONArray();boolean more=false;long last=-1;
-        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online FROM samples WHERE session=? AND x>=? AND x<=? AND x>? ORDER BY x LIMIT 12001",
+        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall FROM samples WHERE session=? AND x>=? AND x<=? AND x>? ORDER BY x LIMIT 12001",
             new String[]{""+id,""+from,""+to,""+after})) {
             while(c.moveToNext()) {
                 if(result.length()==12000){more=true;break;}
                 JSONArray row=new JSONArray();
                 for(int i=0;i<11;i++)row.put(c.isNull(i)?JSONObject.NULL:(i==0||i==6||i==7?c.getLong(i):c.getDouble(i)));
                 // Index 11 is reserved for frontend-derived remaining energy.
-                row.put(JSONObject.NULL).put(c.isNull(11)?JSONObject.NULL:c.getInt(11));
+                row.put(JSONObject.NULL).put(c.isNull(11)?JSONObject.NULL:c.getInt(11)).put(c.isNull(12)?JSONObject.NULL:c.getLong(12));
                 result.put(row);last=c.getLong(0);
             }
         }
@@ -1792,9 +1828,10 @@ public final class Main {
         }
         JSONArray result=new JSONArray();TreeMap<Long,double[]> bucket=new TreeMap<>();
         double[][] lo=new double[6][],hi=new double[6][];long group=-1;double[] first=null,last=null;
-        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp FROM samples WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+queryFrom,""+queryTo})) {
+        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall FROM samples WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+queryFrom,""+queryTo})) {
             while(c.moveToNext()) {
-                double[] point=new double[11];for(int i=0;i<11;i++)point[i]=c.isNull(i)?Double.NaN:c.getDouble(i);
+                double[] point=new double[14];for(int i=0;i<11;i++)point[i]=c.isNull(i)?Double.NaN:c.getDouble(i);
+                point[11]=Double.NaN;point[12]=c.isNull(11)?Double.NaN:c.getDouble(11);point[13]=c.isNull(12)?Double.NaN:c.getLong(12);
                 if(Core.finite(point[7])&&point[7]<20000)continue;
                 if(point[5]>15||point[5]<0)point[5]=Double.NaN;
                 long g=((long)point[0]-from)/width;

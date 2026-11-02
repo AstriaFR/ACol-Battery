@@ -1,0 +1,87 @@
+/* Phone pages share a 360 CSS-pixel composition (see viewport.js). On larger
+   windows use a centred reading column; only expanded plots leave that column. */
+:root{--page-width:480px}
+.app-page,.settings-page,.detail{max-width:var(--page-width)}
+.bottom-nav{max-width:460px}
+.page-scroll,.record-scroll,.home-page{overflow-x:hidden}
+.app-page>*,.detail>*,.page-heading,.settings-header-actions{min-width:0}
+.subpage-header{flex:none;gap:8px}
+.subpage-header .page-heading{flex:1;gap:8px}
+.subpage-header h1{font-size:clamp(20px,6vw,26px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subpage-header button,.subpage-header .back{flex-shrink:0}
+.page-head h1{white-space:nowrap}
+
+/* The filter row must reserve height when the two groups cannot fit together. */
+.records-toolbar{height:auto;min-height:47px;row-gap:2px}
+.records-toolbar .tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));flex:1;min-width:0}
+.records-toolbar .tabs button{min-width:0;padding-inline:7px}
+.records-filter{font-size:11px;flex:none}
+.records-toolbar{column-gap:8px}
+.record .record-date{display:block;width:100%;overflow:hidden;white-space:nowrap}
+.record .info>small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Keep the ring within the text block's height; data may extend over its area. */
+#detail .drain-layout{grid-template-columns:minmax(0,1fr) 112px;gap:0}
+#detail .drain-chart{width:100%;justify-self:end}
+#detail .drain-items{position:relative;left:0;z-index:1;padding-left:6px}
+#detail .drain-item-values{position:static;display:flex;width:max-content;max-width:none;margin-left:0;padding-left:15px;font-size:14px;gap:5px}
+#detail .drain-item-head{gap:5px}
+#detail .drain-center strong{font-size:22px}
+#detail .drain-center small{font-size:9px}
+#detail .record-chart-value{min-width:0;padding-left:20px}
+#detail #screenTimeTotal{top:2px}
+#detail #screenTimeHint{padding-left:10px}
+#detail .summary-metric>strong{max-width:100%;min-width:0}
+#detail .summary [data-metric=current] .metric-value{min-width:0}
+#detail .summary[data-mode=live] .summary-metric:is([data-metric=power],[data-metric=remainingWh])>strong{font-size:20px}
+#detail .summary [data-metric=power] .metric-value,#detail .summary #remainingWh{font-size:inherit}
+#detail .summary-frequencies strong{min-width:0}
+.summary-frequency-cpu,.summary-frequency-gpu{overflow:hidden}
+#detail .chartpanel:not(.expanded)>.plotwrap{--plot-height:clamp(320px,calc(min(100vw,480px)*.94),452px)}
+#detail .chartpanel:not(.expanded)>.legend{grid-template-columns:repeat(2,minmax(0,1fr))}
+#detail .chartpanel:not(.expanded)>.legend label{grid-column:auto}
+.legend-short,.performance-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.legend-scale{flex:none}
+.legend label{overflow:hidden}
+.appEnergy{min-width:64px;max-width:38%}
+.appEnergy strong{max-width:100%}
+.discharge-stats .appInfo{overflow:hidden}
+
+/* Keep paired controls aligned even at their maximum input values. */
+.setting-heading{grid-template-columns:minmax(0,1fr) auto;column-gap:10px}
+.setting-heading>label,.setting-heading>span,.setting-title>span{overflow-wrap:anywhere}
+.setting-pair{gap:10px}
+.setting-input.setting-bound-input{grid-template-columns:auto minmax(0,1fr) auto;gap:4px;padding-inline:7px}
+.setting-bound-input input{font-size:16px}
+.setting-bound-input .setting-bound-label{font-size:12px}
+.setting-input>.setting-bound-label+input{min-width:0}
+.battery-info-card small{overflow-wrap:anywhere}
+.battery-history-row>span:first-child{white-space:normal;overflow-wrap:anywhere}
+.settings-maintenance>*{min-width:0}
+.keypad-heading{flex-wrap:wrap;gap:6px}
+.keypad-heading h3{flex-basis:100%}
+.keypad-heading-actions{width:100%;justify-content:flex-end}
+.numeric-keypad{max-height:calc(100dvh - 12px)}
+dialog{max-height:calc(100dvh - 24px);overflow-y:auto;overflow-wrap:anywhere}
+.numeric-keypad .keypad-readout,.numeric-keypad .keypad-grid{flex:none}
+
+/* Long dates and totals may share a second row; the chart never gets pushed
+   sideways. The phone reference width still keeps the usual single row. */
+.home-usage-summary,.usage-detail-summary,.usage-week-summary{flex-wrap:wrap;row-gap:6px}
+.home-usage-summary>.screen-time-total,.usage-detail-summary>.screen-time-total{min-width:0;max-width:100%;flex:1}
+.home-usage-summary>.screen-time-nav,.usage-detail-summary>.screen-time-nav{margin-left:auto}
+.usage-week-average>strong{min-width:0;max-width:100%}
+.usage-week-metrics{max-width:100%}
+.usage-week-nav{margin-left:auto}
+.screen-time-nav{white-space:nowrap}
+.usage-detail .screen-time-nav{font-size:12px}
+.usage-detail .screen-time-nav button{width:24px;flex:none}
+.usage-app-text small{overflow-wrap:anywhere}
+@media(max-width:380px){
+  #detail .summary[data-mode=live] .summary-metric:is([data-metric=power],[data-metric=remainingWh])>strong{font-size:18px}
+}
+@media(max-height:480px){
+  .numeric-keypad .keypad-grid button{min-height:32px;padding:3px}
+  .numeric-keypad .keypad-readout{padding-block:3px;margin-bottom:5px}
+  .numeric-keypad .keypad-heading{margin-bottom:6px}
+}

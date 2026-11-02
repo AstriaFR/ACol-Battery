@@ -20,6 +20,7 @@ export class BatteryHistoryPanel{
     this.deleteDialog=document.getElementById('batteryHistoryDelete');this.deleteApply=document.getElementById('batteryHistoryDeleteApply');this.deleteCancel=document.getElementById('batteryHistoryDeleteCancel');
     this.deleteCancel.onclick=()=>this.deleteDialog.close();this.deleteApply.onclick=()=>this.remove();
     this.detailDelete=document.getElementById('batterySnapshotDelete');this.detailDelete.onclick=()=>this.askDelete(this.state?.id);
+    this.recordButton=document.getElementById('batteryHistoryRecord');this.recordButton.onclick=()=>this.record();
     this.deleteDialog.addEventListener('cancel',event=>{if(this.deleting)event.preventDefault();});
     let timer,start,held=false,moved=false;
     const stop=()=>{clearTimeout(timer);start=null;};this.stopPress=stop;
@@ -35,8 +36,22 @@ export class BatteryHistoryPanel{
     this.scroller.addEventListener('scroll',()=>{if(this.active&&this.state?.page==='battery-history'&&this.scroller.scrollTop>0&&this.scroller.scrollHeight-this.scroller.scrollTop-this.scroller.clientHeight<60)this.load();},{passive:true});
   }
   close(){this.stopPress();if(this.deleteDialog.open)this.deleteDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
+  async record(){
+    if(this.saving||this.deleting||!this.active||this.state?.page!=='battery-history')return;
+    this.saving=true;this.recordButton.disabled=true;this.recordButton.textContent='记录中';this.status.textContent='正在记录当前电池信息…';
+    const token=this.token;
+    try{
+      await this.api('battery_history_record');this.listDirty=true;
+      if(!this.active||this.state?.page!=='battery-history')return;
+      // Invalidate any earlier page load so its offset cannot skip the new row.
+      this.token++;this.loading=false;this.items.clear();this.rows.replaceChildren();this.loaded=false;this.listDirty=false;this.offset=0;this.total=0;this.scrollTop=0;this.scroller.scrollTop=0;
+      const refreshToken=this.token;await this.load();
+      if(refreshToken===this.token&&this.active&&this.state?.page==='battery-history'&&!this.status.textContent)this.status.textContent='已记录当前电池信息';
+    }catch(error){if(token===this.token&&this.active)this.status.textContent='记录失败：'+error.message;}
+    finally{this.saving=false;this.recordButton.disabled=false;this.recordButton.textContent='记录';}
+  }
   askDelete(id){
-    if(this.deleting||this.deleteDialog.open||!this.active||!this.items.has(id)&&!(this.state?.page==='battery-history-detail'&&this.state.id===id&&this.snapshots.has(id)))return;
+    if(this.saving||this.deleting||this.deleteDialog.open||!this.active||!this.items.has(id)&&!(this.state?.page==='battery-history-detail'&&this.state.id===id&&this.snapshots.has(id)))return;
     this.deleteId=id;document.getElementById('batteryHistoryDeleteStatus').textContent='';this.deleteDialog.showModal();this.deleteCancel.focus({preventScroll:true});
   }
   async remove(){
@@ -86,7 +101,7 @@ export class BatteryHistoryPanel{
         const row=document.createElement('button');row.type='button';row.className='battery-history-row';row.dataset.historyId=item.id;
         const text=document.createElement('span'),arrow=document.createElement('span');text.textContent=batteryHistoryDate(item.completed_wall,true)+' · 循环次数：'+number(item.cycles);arrow.textContent='›';arrow.setAttribute('aria-hidden','true');row.append(text,arrow);this.rows.append(row);
       }
-      this.status.textContent=this.items.size?'':'暂无尾充完成的历史记录';this.more.hidden=this.offset>=this.total;
+      this.status.textContent=this.items.size?'':'暂无电池历史记录';this.more.hidden=this.offset>=this.total;
     }catch(error){if(token===this.token){this.status.textContent=error.message;this.more.hidden=false;}}
     finally{if(token===this.token){this.loading=false;this.more.disabled=false;}}
   }
