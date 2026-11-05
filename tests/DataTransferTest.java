@@ -14,11 +14,28 @@ public final class DataTransferTest {
     static void altered(File from,File to,String entryName,byte[] replacement)throws Exception{
         try(ZipFile source=new ZipFile(from);ZipOutputStream out=new ZipOutputStream(new FileOutputStream(to))){Enumeration<? extends ZipEntry> files=source.entries();while(files.hasMoreElements()){ZipEntry file=files.nextElement();out.putNextEntry(new ZipEntry(file.getName()));if(file.getName().equals(entryName))out.write(replacement);else try(InputStream in=source.getInputStream(file)){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}out.closeEntry();}}
     }
+    static final String[] RETIRED={"root/daemon.log","root/daemon.previous.log","app/files/initialization-error.txt","app/files/initialization-fallback.txt"};
+    static void legacyArchive(File from,File to)throws Exception{
+        try(ZipFile source=new ZipFile(from);ZipOutputStream out=new ZipOutputStream(new FileOutputStream(to))){
+            JSONObject meta;try(InputStream in=source.getInputStream(source.getEntry("manifest.json"))){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=in.read(buffer))!=-1)b.write(buffer,0,n);meta=new JSONObject(b.toString("UTF-8"));}
+            Enumeration<? extends ZipEntry> files=source.entries();while(files.hasMoreElements()){
+                ZipEntry file=files.nextElement();if(file.getName().equals("manifest.json"))continue;out.putNextEntry(new ZipEntry(file.getName()));try(InputStream in=source.getInputStream(file)){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}out.closeEntry();
+            }
+            byte[] log="old diagnostic".getBytes(StandardCharsets.UTF_8);String hash=DataArchive.hex(java.security.MessageDigest.getInstance("SHA-256").digest(log));
+            for(String name:RETIRED){out.putNextEntry(new ZipEntry(name));out.write(log);out.closeEntry();meta.getJSONObject("entries").put(name,new JSONObject().put("size",log.length).put("sha256",hash));meta.put("bytes",meta.getLong("bytes")+log.length);}
+            out.putNextEntry(new ZipEntry("manifest.json"));out.write(meta.toString().getBytes(StandardCharsets.UTF_8));out.closeEntry();
+        }
+    }
     public static void main(String[] args)throws Exception{
         Path parent=Paths.get(args[0]).toAbsolutePath().normalize();Files.createDirectories(parent);Path test=Files.createTempDirectory(parent,"transfer-");check(test.toRealPath().startsWith(parent.toRealPath()),"Test escaped build output");
         try{
             Path snap=test.resolve("snapshot");put(snap.resolve("root/records.db"),"backup-records");put(snap.resolve("root/error-logs/log.txt"),"后台错误");put(snap.resolve("app/files/error-logs/example.txt"),"完整报告");put(snap.resolve("app/app_webview/Default/IndexedDB/day.bin"),"逐小时使用时间");put(snap.resolve("app/shared_prefs/user.xml"),"theme and choices");
+            for(String name:RETIRED)put(snap.resolve(name),"obsolete diagnostic");
             File archive=test.resolve("backup.acoldata").toFile();JSONObject manifest=DataArchive.pack(snap.toFile(),archive,"test",()->{});check(DataArchive.inspect(archive,null,()->{}).getLong("bytes")==manifest.getLong("bytes"),"Archive round trip failed");
+            for(String name:RETIRED)check(!manifest.getJSONObject("entries").has(name),"Retired diagnostic included in new backup");
+            File legacy=test.resolve("legacy.acoldata").toFile();legacyArchive(archive,legacy);Path legacyOut=test.resolve("legacy-output");DataArchive.inspect(legacy,legacyOut.toFile(),()->{});
+            for(String name:RETIRED)check(!Files.exists(legacyOut.resolve(name)),"Retired diagnostic was restored from old backup");
+            check(text(legacyOut.resolve("root/records.db")).equals("backup-records")&&text(legacyOut.resolve("app/files/error-logs/example.txt")).equals("完整报告"),"Old backup filtering changed records or structured logs");
             File broken=test.resolve("broken.zip").toFile();altered(archive,broken,"root/records.db","modified".getBytes(StandardCharsets.UTF_8));try{DataArchive.inspect(broken,null,()->{});throw new AssertionError("Corruption accepted");}catch(IOException expected){}
             for(String forbidden:new String[]{"root/../runtime/service.sh","root/runtime/evil","root/owner.cert","app/shared_prefs/maintenance.xml","app/../files/evil","app/code_cache/evil"})try{DataArchive.validName(forbidden);throw new AssertionError("Unsafe archive path accepted: "+forbidden);}catch(IOException expected){}
             Path root=test.resolve("root"),app=test.resolve("app");put(root.resolve("records.db"),"original-records");put(root.resolve("runtime/program"),"protected-program");put(root.resolve("recording.disabled"),"old setting");put(app.resolve("files/old.txt"),"original-app");put(app.resolve("app_webview/old.bin"),"original-hours");put(app.resolve("no_backup/acol-transfer.pending"),"operation-marker");

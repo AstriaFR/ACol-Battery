@@ -1,4 +1,5 @@
-import{ScreenTimeCache}from'./screen-time-cache.js?v=acol-2.2';
+import{ScreenTimeCache}from'./screen-time-cache.js?v=acol-2.2s';
+import{openDatabase}from'./indexed-db.js?v=acol-2.2s';
 
 export const roundedWh=value=>Math.round((Math.max(0,Number(value)||0)+Number.EPSILON)*100)/100;
 export const formatWh=value=>`${roundedWh(value).toFixed(2)} Wh`;
@@ -28,17 +29,9 @@ export class RecordEnergyCache extends ScreenTimeCache{
   constructor(){super();this.reads=new Map();this.gcKey='acol.record-energy.cache.gc';}
   key(record,day){return`${record.id}:${record.start_wall}:${day}:${Intl.DateTimeFormat().resolvedOptions().timeZone}:${new Date(day).getTimezoneOffset()}`;}
   open(){
-    if(this.ready)return this.ready;
-    this.ready=new Promise((resolve,reject)=>{
-      let finished=false,request;const timer=setTimeout(()=>finish(Error('缓存打开超时')),10000);
-      const finish=(error,db)=>{if(finished){db?.close();return;}finished=true;clearTimeout(timer);error?reject(error):resolve(db);};
-      try{
-        request=indexedDB.open('acol.record-energy.cache',1);
-        request.onupgradeneeded=()=>{const store=request.result.createObjectStore('records',{keyPath:'key'});store.createIndex('recordId','recordId');};
-        request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this.ready=null;};finish(null,db);};
-        request.onerror=()=>finish(request.error||Error('缓存打开失败'));request.onblocked=()=>finish(Error('缓存正在被占用'));
-      }catch(error){finish(error);}
-    });return this.ready;
+    return openDatabase(this,'acol.record-energy.cache',1,db=>{
+      const store=db.createObjectStore('records',{keyPath:'key'});store.createIndex('recordId','recordId');
+    });
   }
   async get(record,day){
     const key=this.key(record,day);if(this.entries.has(key))return this.entries.get(key);if(this.pending.has(key))return this.pending.get(key);

@@ -3,7 +3,8 @@ const{pathToFileURL}=require('node:url');
 const{runCases}=require('./helpers.cjs');
 
 async function scales(){
-const {Chart,series,signalScale,setChartSettings,plotPoints,plotAxisMinimum}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+globalThis.document={documentElement:{dataset:{}}};
+const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMinimum,gameSampleText}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
  const signedScale={base:0,full:20,min:-15};
  for(const kind of ['charge','discharge']){
   assert.equal(plotAxisMinimum(kind,[signedScale],false),0);
@@ -89,6 +90,29 @@ const {Chart,series,signalScale,setChartSettings,plotPoints,plotAxisMinimum}=awa
  const points=[[0,5000,50,5000,4000,50,0,null,4000,4000,30]];
  const copy=JSON.stringify(points);assert.equal(plotPoints(points,'charge',2)[0][3],10000);assert.equal(JSON.stringify(points),copy);
  assert.equal(plotPoints([[0,5000,50,null,4000,-12,0,null]],'discharge',2,true)[0][5],-12);
+ assert.ok(seriesFor('discharge',2,true).some(s=>s.key==='current'&&s.name==='电流'));
+ assert.ok(!seriesFor('discharge',2,false).some(s=>s.key==='current'));
+ const ram=seriesFor('discharge',2,false).find(s=>s.key==='ram');assert.equal(ram.index,14);assert.equal(ram.unit,'GB');
+ assert.ok(!seriesFor('charge',2,false).some(s=>s.key==='ram'));
+ assert.ok(!seriesFor('discharge',2,true).some(s=>s.key==='ram'),'game RAM remains in the performance chart');
+ const ramChart={ranges:{ram:[5,7],ramTotal:[11.665641472,11.665641472]},points:[],scaleCache:new Map()};
+ assert.equal(Chart.prototype.scaleFor.call(ramChart,ram).full,11.665641472,'full-record total fixes RAM scale while zooming');
+ ramChart.ranges={};ramChart.points=[Array(16).fill(null)];ramChart.points[0][14]=6;ramChart.points[0][15]=11.665641472;
+ assert.equal(Chart.prototype.scaleFor.call(ramChart,ram).full,11.665641472,'raw live samples retain total');
+ ramChart.points=[];assert.equal(Chart.prototype.scaleFor.call(ramChart,ram).label,'暂无数据');
+ const gameRows=[[0,5000,80,5000,4000,-40,0,3000,null,null,30,null,1],[3000,4999,80,-1000,4000,8,0,3000,null,null,30,null,0]];
+ for(const cells of [1,2]){
+  const plotted=plotPoints(gameRows,'discharge',cells,true),factor=cells===2?2:1;
+  assert.equal(plotted[0][3],-5000*factor);assert.equal(plotted[1][3],1000*factor);
+  assert.equal(gameRows[0][3],5000,'plotting never mutates stored charging-positive current');
+  assert.equal(gameSampleText(plotted[0][3],'current',0),'+'+(5000*factor));assert.equal(gameSampleText(plotted[0][5],'power'),'+40.00');
+  assert.equal(gameSampleText(plotted[1][3],'current',0),'−'+1000*factor);assert.equal(gameSampleText(plotted[1][5],'power'),'−8.00');
+  const fake={cellCount:cells,kind:'discharge',fast:true,ranges:{current:[-1000,5000]},points:[],scaleCache:new Map()};
+  const actual=Chart.prototype.scaleFor.call(fake,current);assert.equal(actual.min,-5000*factor);
+  assert.equal(actual.full,signalScale(current,[-5000*factor,1000*factor],'charge').full);
+ }
+ assert.equal(signalScale(current,[-10999.9],'discharge',true).full,10000);
+ assert.equal(signalScale(current,[-11000],'discharge',true).full,12000);
  const shortIntervals=[null,9999,10000,19999,20000].map((dt,i)=>[i,5000,50,null,4000,2,0,dt]);
  assert.deepEqual(plotPoints(shortIntervals,'discharge',2,false).map(row=>row[0]),[0,4]);
  assert.equal(plotPoints(shortIntervals,'discharge',2,true).length,5);
@@ -205,6 +229,7 @@ async function percentageInterpolation(){
   for(let i=1;i<=100;i++){const t=i/100,u=1-t,value=u*u*u*start[1]+3*u*u*t*y1+3*u*t*t*y2+t*t*t*y;assert.ok(value<=previous+1e-9&&value>=97-1e-9,'no new wiggles or overshoot');previous=value;}
   start=[x,y];curves++;
  }},raw,true);assert.equal(curves,anchors.length-1);
+
 }
 
 async function batteryTemperature(){
@@ -277,4 +302,42 @@ const{ScreenOffOverlay}=await import(pathToFileURL(path.join(root,'screen-off-ov
  assert.ok(!loadSelection('discharge',['temp','screenOff']).has('screenOff'),'charge/discharge/game preferences stay independent');
 }
 
-runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection]).then(()=>console.log('Charts: scales, system time and elapsed time, hit geometry, temperature and screen-off projection passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function performanceMemory(){
+ globalThis.window={};globalThis.document={documentElement:{dataset:{}},getElementById:()=>({})};globalThis.localStorage={getItem:()=>null};
+ const{PerformancePanel,PerformanceChart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/performance-panel.js')).href);
+ const fake={points:[[0,null,500,0,null,null,1,0,1200,0,2200,0,35]],chart:{maximum:new Map(),frequencyRanges:new Map(),ingest(){}},legend(){}};
+ const meta={clusters:[{label:'CPU 0–5',maxMHz:2400},{label:'CPU 6–7',maxMHz:3200}],temperatureIndex:12};
+ PerformancePanel.prototype.configure.call(fake,meta);assert.ok(!fake.chart.metrics.some(s=>s.key==='ram'));
+ PerformancePanel.prototype.configure.call(fake,{...meta,memoryIndex:13,memoryTotalGB:11.665641472});
+ const ram=fake.chart.metrics.find(s=>s.key==='ram');assert.equal(ram.index,13);assert.equal(ram.unit,'GB');
+ assert.equal(fake.points[0][ram.index],undefined,'old samples retain missing RAM instead of zero');
+ PerformanceChart.prototype.ingest.call({...fake.chart,metrics:[ram]},[[1,...Array(12).fill(null),6.91429376]]);
+ assert.equal(PerformanceChart.prototype.scaleFor.call(fake.chart,ram).full,11.665641472,'RAM uses MemTotal, not observed peak');
+ globalThis.localStorage={getItem:()=>JSON.stringify(['ram'])};PerformancePanel.prototype.configure.call(fake,{...meta,memoryIndex:13,memoryTotalGB:11.665641472});assert.ok(fake.chart.enabled.has('ram'));
+ PerformancePanel.prototype.configure.call(fake,{...meta,memoryIndex:13,memoryTotalGB:null});assert.ok(!fake.chart.metrics.some(s=>s.key==='ram'),'invalid total does not create a fake scale');
+}
+async function intervalApplications(){
+ globalThis.document={hidden:false};const{IntervalAppDetails}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/interval-app-details.js')).href);
+ let record={id:3,start_wall:1000,start_elapsed:0,end_elapsed:240000,kind:'discharge',fast_seconds:0},calls=0;
+ const disk=new Map(),cache={read:async r=>disk.get(r.id)??null,save:async(r,state)=>disk.set(r.id,{names:[...state.names],cursor:state.cursor,end:state.loadedEnd,complete:state.complete,retryCursor:state.retryCursor,retryAt:state.retryAt}),remove:async id=>disk.delete(id)};
+ const chart={recordId:3,marker:120000,tooltip:{textContent:'采样详情',hidden:false},positionTooltip(){}};
+ const api=async(action,id,after)=>{calls++;assert.equal(action,'interval_apps');assert.equal(id,3);return after===0?{apps:[[0,null,'none'],[120000,'a','app']],labels:{a:'示例应用'},cursor:120001,more:true}:{apps:[[240000,'b','app']],labels:{b:'另一应用'},cursor:240001,more:false};};
+ const helper=new IntervalAppDetails(chart,api,()=>record,cache);
+ await Promise.all([helper.preload(record),helper.preload(record)]);assert.equal(calls,2,'all result pages preload once');
+ const row=[120000,null,null,null,null,null,0,120000];helper.inspect(row);assert.equal(chart.tooltip.textContent,'采样详情\n示例应用');assert.equal(calls,2,'inspection performs no IPC');
+ chart.tooltip.textContent='另一点';chart.marker=240000;helper.inspect([240000]);assert.equal(chart.tooltip.textContent,'另一点\n另一应用');assert.equal(calls,2);
+ const fresh=new IntervalAppDetails(chart,async()=>{throw Error('persistent cache should avoid IPC')},()=>record,cache);await fresh.preload(record);chart.tooltip.textContent='重新进入';fresh.inspect([240000]);assert.equal(chart.tooltip.textContent,'重新进入\n另一应用');
+ await fresh.remove(3);assert.equal(disk.has(3),false);await fresh.preload(record);assert.equal(fresh.records.size,0,'deleted records cannot recreate persistent cache');
+ let release;const late=new IntervalAppDetails(chart,()=>new Promise(resolve=>release=resolve),()=>record,{...cache,read:async()=>null});const loading=late.preload(record);await new Promise(resolve=>setImmediate(resolve));chart.tooltip.textContent='已关闭';late.inspect(null);chart.tooltip.hidden=true;release({apps:[[240000,'late','app']],labels:{late:'迟到结果'},cursor:240001,more:false});await loading;assert.equal(chart.tooltip.textContent,'已关闭');
+ record={...record,fast_seconds:10};await helper.preload(record);assert.equal(calls,2,'game charts are excluded');
+ const{IntervalAppCache}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/interval-app-cache.js')).href);const persistent=new IntervalAppCache();let saved;
+ persistent.run=async(mode,action)=>action({put:value=>{saved=value;return value},get:()=>saved});record={...record,fast_seconds:0};
+ await persistent.save(record,{names:new Map([[120000,'应用']]),loadedEnd:240000,cursor:240000,complete:true,retryCursor:null,retryAt:0});assert.ok(await persistent.read(record));assert.equal(await persistent.read({...record,app_revision:1}),null,'repaired attribution invalidates old names');
+ assert.equal(await persistent.read({...record,end_elapsed:120000}),null,'restored shorter records invalidate future cache');
+ const waiting=new IntervalAppDetails(chart,async()=>({apps:[],labels:{},cursor:0,more:false,through:-1,complete:false}),()=>record,{...cache,read:async()=>null});
+ await waiting.preload(record);clearTimeout(waiting.retryTimer);assert.equal(waiting.records.get(waiting.key(record)).loadedEnd,-1,'uncaptured events are not finalized as empty application data');
+ const{DailyUsageChart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/daily-usage-chart.js')).href);
+ let day=null;const daily={previousDay:100,nextDay:300,onDate:value=>day=value};DailyUsageChart.prototype.changeDay.call(daily,-1);assert.equal(day,100);DailyUsageChart.prototype.changeDay.call(daily,1);assert.equal(day,300);daily.nextDay=null;day=null;DailyUsageChart.prototype.changeDay.call(daily,1);assert.equal(day,null);
+}
+
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications]).then(()=>console.log('Charts: scales, time axes, hit geometry, temperature, RAM, interval apps and day navigation passed')).catch(error=>{console.error(error);process.exitCode=1;});

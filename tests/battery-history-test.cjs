@@ -15,6 +15,10 @@ const path=require('node:path'),assert=require('node:assert/strict');const{pathT
  let returned=false;panel.state={page:'battery-history-detail',id:14};panel.deleteId=14;panel.detailDelete={disabled:false};panel.api=async()=>{};panel.back=()=>{returned=true};await panel.remove();assert.ok(returned);assert.equal(panel.detailDelete.disabled,true);assert.equal(reloaded,false);assert.equal(panel.listDirty,true);
  let finish,calls=0;
  Object.assign(panel,{state:{page:'battery-history'},active:true,deleting:false,recordButton:{},status:{textContent:''},api:async action=>{assert.equal(action,'battery_history_record');calls++;await new Promise(resolve=>{finish=resolve})},load:async function(){assert.equal(this.offset,0);assert.equal(this.items.size,0);this.status.textContent='';reloaded=true}});
+ let prompts=0;panel.recordDialog={open:false,showModal(){this.open=true;prompts++},close(){this.open=false}};panel.recordCancel={focus(){}};
+ panel.askRecord();panel.askRecord();assert.equal(prompts,1);assert.equal(calls,0,'opening confirmation never records data');
+ panel.recordDialog.close();assert.equal(calls,0,'cancel leaves data unchanged');
+ panel.state={page:'battery-history-detail'};panel.askRecord();assert.equal(prompts,1,'cannot prompt from a stale history page');panel.state={page:'battery-history'};
  reloaded=false;const saving=panel.record();await panel.record();assert.equal(calls,1);assert.equal(panel.recordButton.disabled,true);finish();await saving;
  assert.ok(reloaded);assert.equal(panel.status.textContent,'已记录当前电池信息');assert.equal(panel.recordButton.disabled,false);assert.equal(panel.recordButton.textContent,'记录');
  panel.api=async()=>{throw Error('读取失败')};await panel.record();assert.equal(panel.status.textContent,'记录失败：读取失败');assert.equal(panel.saving,false);assert.equal(panel.recordButton.disabled,false);

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 
 /** Runs real Main recovery/append SQL against an isolated SQLite database. */
 public final class RecoveryDatabaseTest {
+    static android.content.Context context;
     static void check(boolean value){if(!value)throw new AssertionError();}
     static void close(double actual,double expected){if(Math.abs(actual-expected)>1e-9)throw new AssertionError(actual+" != "+expected);}
     static Core.Reading reading(long elapsed,double rm,boolean online){
@@ -14,7 +15,7 @@ public final class RecoveryDatabaseTest {
         r.cellCount=2;r.cell1=r.vmin=3900;r.cell2=r.vmax=4000;r.current=online?-1000:300;r.online=online;return r;
     }
     static Main open(File directory,String boot)throws Exception {
-        Main m=new Main(null,new File(directory,"runtime"),directory);
+        Main m=new Main(context,new File(directory,"runtime"),directory);
         Field id=Main.class.getDeclaredField("boot");id.setAccessible(true);id.set(m,boot);
         m.performance.close();return m;
     }
@@ -31,10 +32,11 @@ public final class RecoveryDatabaseTest {
         check(value(next,"SELECT start_elapsed FROM sessions")==10000);check(value(next,"SELECT rm_start FROM sessions")==5000);
         check(value(next,"SELECT quality FROM samples ORDER BY x DESC LIMIT 1")==9);
         check(value(next,"SELECT COUNT(*) FROM samples WHERE x=3000 AND power IS NULL")==1);
-        close(amount(next,"mah","example.app"),30);close(amount(next,"mah",Core.OTHER),3);close(amount(next,"energy_mwh",Core.OTHER),0);
+        close(amount(next,"mah","example.app"),30);close(amount(next,"mah",Core.OTHER),0);close(amount(next,"energy_mwh",Core.OTHER),0);
+        check(next.deferred.pending(id)); // Recovery preserves raw intervals; viewing settles them later.
         release(next);
         Main twice=open(dir,"boot-a");twice.recover(reading(16000,4994,false));check(twice.session==id);
-        close(amount(twice,"mah","example.app"),30);close(amount(twice,"mah",Core.OTHER),6);
+        close(amount(twice,"mah","example.app"),30);close(amount(twice,"mah",Core.OTHER),0);check(twice.deferred.pending(id));
         check(value(twice,"SELECT COUNT(*) FROM samples")==3);check(value(twice,"SELECT COUNT(*) FROM sessions")==1);
         release(twice);
     }
@@ -53,7 +55,7 @@ public final class RecoveryDatabaseTest {
         release(next);
         Main twice=open(dir,"boot-a");twice.gameContext=true;twice.fastEnabled=true;twice.sampling.fastMs=1000;
         twice.recover(reading(50000,4991,false));check(twice.session==id);check(twice.fastStatsNext==70000);
-        close(amount(twice,"mah",Core.OTHER),3);close(amount(twice,"energy_mwh",Core.OTHER),0);release(twice);
+        close(amount(twice,"mah",Core.OTHER),0);close(amount(twice,"energy_mwh",Core.OTHER),0);check(twice.deferred.pending(id));release(twice);
     }
     static void splitAndTail()throws Exception {
         for(boolean reboot:new boolean[]{false,true}){
@@ -82,7 +84,7 @@ public final class RecoveryDatabaseTest {
         check(value(failed,"SELECT COUNT(*) FROM samples")==1);check(value(failed,"SELECT active FROM sessions")==1);
         close(amount(failed,"mah",Core.OTHER),0);failed.db.execSQL("DROP TRIGGER fail_update");release(failed);
         Main retry=open(dir,"boot-a");retry.recover(reading(13000,4997,false));check(retry.session==id);
-        check(value(retry,"SELECT COUNT(*) FROM samples")==2);close(amount(retry,"mah",Core.OTHER),3);release(retry);
+        check(value(retry,"SELECT COUNT(*) FROM samples")==2);close(amount(retry,"mah",Core.OTHER),0);check(retry.deferred.pending(id));release(retry);
         File chargeDir=Files.createTempDirectory("acol-recovery-charge-").toFile();Main charge=open(chargeDir,"boot-a");
         charge.state=1;charge.begin(reading(10000,5000,true));long chargeId=charge.session;release(charge);
         Main charging=open(chargeDir,"boot-a");charging.recover(reading(11000,5001,true));check(charging.session==chargeId);
@@ -103,7 +105,7 @@ public final class RecoveryDatabaseTest {
         try{m.saveSettings(request);}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.session==id);check(m.sampling.interval(1)==10000);check(value(m,"SELECT active FROM sessions")==1);
         check(value(m,"SELECT COUNT(*) FROM samples")==1);check(value(m,"SELECT COUNT(*) FROM sessions")==1);
-        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==14);
+        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==15);
         try{m.saveSettings(new org.json.JSONArray(old.toString()).put(0));}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.settings.getInt("chargeSeconds")==10); // Old frontend saves cannot erase the new setting.
         String command=AppBridge.ROOT+"bin/curve-client set_settings 5 30 560 1 300 450 50 60 2 15 10 1 2 0";
@@ -112,7 +114,12 @@ public final class RecoveryDatabaseTest {
         check(next.session==id);check(next.sampling.interval(1)==10000);release(next);
     }
     public static void main(String[] args)throws Exception {
+        android.os.Looper.prepareMainLooper();
+        Class<?> activityThread=Class.forName("android.app.ActivityThread");
+        Object thread=activityThread.getMethod("systemMain").invoke(null);
+        context=(android.content.Context)activityThread.getMethod("getSystemContext").invoke(thread);
         sameBootAndLegacy();fastMinuteAnchor();splitAndTail();damagedCheckpointAndRollback();samplingSettings();
         System.out.println("SQLite recovery: legacy upgrade, repeated resume, game minute accounting, power transition, kernel reboot, completed tail, charging, corrupt checkpoint and transaction rollback passed");
+        System.exit(0);
     }
 }

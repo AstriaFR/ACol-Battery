@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script src="viewport.js"></script><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#ffffff"><script>const systemDark=()=>{try{const d=window.AcoNative?.isSystemDark?.();if(typeof d==='boolean')return d}catch{}return matchMedia('(prefers-color-scheme: dark)').matches};try{const p=JSON.parse(localStorage.getItem('acol.theme.preference'));document.documentElement.dataset.theme=(p?.step==='auto'||!p?.step)?(systemDark()?'dark':'light'):(p.dark?'dark':'light')}catch{document.documentElement.dataset.theme=systemDark()?'dark':'light'}window.addEventListener('error',e=>{const n=document.getElementById('warning');if(n&&!window.__acoPageReady){n.dataset.startupError='1';n.textContent='页面启动失败，请重新打开 App。';}});window.addEventListener('unhandledrejection',e=>{const n=document.getElementById('warning');if(n&&!window.__acoPageReady){n.dataset.startupError='1';n.textContent=e.reason?.message||'页面连接初始化失败。';}});</script><title>ACol 电池</title><link rel="stylesheet" href="style.css?v=acol-2.2-recordblack"><link rel="stylesheet" href="layout.css?v=acol-2.2"><link rel="stylesheet" href="record-overview.css?v=acol-2.2"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script src="viewport.js"></script><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#ffffff"><script>const systemDark=()=>{try{const d=window.AcoNative?.isSystemDark?.();if(typeof d==='boolean')return d}catch{}return matchMedia('(prefers-color-scheme: dark)').matches};try{const p=JSON.parse(localStorage.getItem('acol.theme.preference'));document.documentElement.dataset.theme=(p?.step==='auto'||!p?.step)?(systemDark()?'dark':'light'):(p.dark?'dark':'light')}catch{document.documentElement.dataset.theme=systemDark()?'dark':'light'}window.addEventListener('error',e=>{const n=document.getElementById('warning');if(n&&!window.__acoPageReady){n.dataset.startupError='1';n.textContent='页面启动失败，请重新打开 App。';}});window.addEventListener('unhandledrejection',e=>{const n=document.getElementById('warning');if(n&&!window.__acoPageReady){n.dataset.startupError='1';n.textContent=e.reason?.message||'页面连接初始化失败。';}});</script><title>ACol 电池</title><link rel="stylesheet" href="style.css?v=acol-2.2s-recordblack"><link rel="stylesheet" href="layout.css?v=acol-2.2s"><link rel="stylesheet" href="record-overview.css?v=acol-2.2s"></head>
 <body>
 <main id="appShell" class="app-shell">
   <section id="homePage" class="app-page home-page" aria-label="首页">
@@ -50,14 +50,14 @@
   <header class="record-detail-head"><div class="record-detail-heading"><button id="back" type="button" aria-label="返回上一页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg><span>返回</span></button><h2 id="detailType">记录</h2><span id="detailState" class="record-detail-state"></span></div><div class="record-detail-dates"><div><small>开始时间</small><time id="detailTitle">—</time></div><div><small>结束时间</small><time id="detailEnd">—</time></div></div></header>
   <section id="summary" class="summary record-detail-overview" aria-label="记录数据概览"></section>
   <section id="chartPanel" class="chartpanel record-detail-section" aria-label="电池曲线">
-    <div class="chartbar"><strong id="chartTitle">电量曲线</strong><div><button id="followLatest" aria-pressed="false" hidden>回到实时</button><button id="reversePlot" aria-pressed="false" aria-controls="plot" hidden>反向</button><button id="resetZoom">复位</button><button id="fullscreen">横屏全屏</button><button id="closeFullscreen" hidden>退出</button></div></div>
+    <div class="chartbar"><strong id="chartTitle">电量曲线</strong><div><button id="followLatest" aria-pressed="false" hidden>回到实时</button><span class="chart-secondary"><button id="reversePlot" aria-pressed="false" aria-controls="plot" hidden>反向</button><button id="chartExport" type="button">导出</button></span><button id="resetZoom">复位</button><button id="fullscreen">横屏全屏</button><button id="closeFullscreen" hidden>退出</button></div></div>
     <div id="legend" class="legend"></div>
     <div id="chartInfo" class="chartinfo" role="status"></div>
     <div class="plotwrap"><canvas id="plot" aria-label="可缩放的充放电曲线" role="img"></canvas><div id="tooltip" class="tooltip" hidden></div></div>
     <p id="chartHint" class="small">长按图例切换实际刻度；双指缩放、横向拖图、上下滑动页面。</p>
   </section>
   <section id="performancePanel" class="chartpanel performance-panel record-detail-section" aria-label="性能曲线" hidden>
-    <div class="chartbar"><strong>性能曲线</strong><div><button id="performanceFollow" hidden>实时跟随</button><button id="performanceReset">复位</button><button id="performanceFullscreen">横屏全屏</button><button id="performanceExit" hidden>退出</button></div></div>
+    <div class="chartbar"><strong>性能曲线</strong><div><button id="performanceFollow" hidden>实时跟随</button><button id="performanceExport" type="button">导出</button><button id="performanceReset">复位</button><button id="performanceFullscreen">横屏全屏</button><button id="performanceExit" hidden>退出</button></div></div>
     <div id="performanceLegend" class="legend performance-legend"></div>
     <div class="plotwrap"><canvas id="performancePlot" aria-label="游戏模式的帧率、CPU 和 GPU 性能曲线" role="img"></canvas><div id="performanceTooltip" class="tooltip" hidden></div></div>
     <div class="performance-notes"><p id="performanceHint" class="small"></p><button id="performanceSources" type="button">读取方式</button></div>
@@ -157,8 +157,14 @@
   </div>
 </section>
 <section id="batteryHistoryPanel" class="detail battery-info-panel" hidden>
-  <header class="subpage-header"><div class="page-heading"><button id="batteryHistoryBack" class="back" type="button">返回</button><h1>历史记录</h1></div><div class="settings-header-actions"><button id="batteryHistoryRecord" class="battery-history-button" type="button">记录</button><button class="page-home" type="button" aria-label="返回主页" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg></button></div></header>
+  <header class="subpage-header"><div class="page-heading"><button id="batteryHistoryBack" class="back" type="button">返回</button><h1>历史记录</h1></div><div class="settings-header-actions"><button id="batteryHistoryTrend" class="battery-history-button" type="button">趋势</button><button id="batteryHistoryRecord" class="battery-history-button" type="button">记录</button><button class="page-home" type="button" aria-label="返回主页" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg></button></div></header>
   <div id="batteryHistoryScroll" class="page-scroll"><div id="batteryHistoryRows" class="battery-history-rows"></div><p id="batteryHistoryStatus" class="small"></p><button id="batteryHistoryMore" class="wide" type="button" hidden>加载更多</button></div>
+</section>
+<section id="batteryTrendPanel" class="detail battery-info-panel" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="batteryTrendBack" class="back" type="button">返回</button><h1>电池健康趋势</h1></div><button class="page-home" type="button" aria-label="返回主页" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg></button></header>
+  <div class="page-scroll"><section class="chartpanel record-detail-section health-trend-chart"><div class="chartbar"><strong>健康趋势</strong><div><button id="batteryTrendExport" type="button" disabled>导出</button><button id="batteryTrendReset" type="button">复位</button></div></div>
+    <div class="plotwrap"><canvas id="batteryTrendPlot" aria-label="循环次数、Qmax 和满充容量趋势" role="img"></canvas><div id="batteryTrendTooltip" class="tooltip" hidden></div></div><div id="batteryTrendLegend" class="legend"></div><p id="batteryTrendStatus" class="small" role="status"></p>
+  </section></div>
 </section>
 <section id="batteryHistoryDetail" class="detail battery-info-panel" hidden>
   <header class="subpage-header"><div class="page-heading"><button id="batterySnapshotBack" class="back" type="button">返回</button><h1>电池快照</h1></div><div class="settings-header-actions"><button id="batterySnapshotDelete" class="battery-history-button battery-history-delete" type="button" disabled>删除</button><button class="page-home" type="button" aria-label="返回主页" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg></button></div></header>
@@ -207,10 +213,11 @@
   <p>亮屏时长：用剩余能量，除以本条记录的亮屏平均功耗。后续使用强度变化，实际时长也会变化。</p>
   <div class="remaining-explanation-actions"><button id="closeRemainingExplanation" type="button">知道了</button></div>
 </dialog>
+<dialog id="batteryHistoryRecordConfirm" class="recording-confirm" aria-labelledby="batteryHistoryRecordTitle" aria-describedby="batteryHistoryRecordHint"><h3 id="batteryHistoryRecordTitle">是否手动记录电池信息？</h3><p id="batteryHistoryRecordHint">尾充完成时会自动记录较精确的数值。</p><div class="recording-confirm-actions"><button id="batteryHistoryRecordCancel" type="button">取消</button><button id="batteryHistoryRecordApply" type="button">确认</button></div></dialog>
 <dialog id="batteryHistoryDelete"><h3>删除此历史记录？</h3><p>将删除这条电池快照，充放电记录不受影响。删除后无法恢复。</p><p id="batteryHistoryDeleteStatus" role="status"></p><div class="dialogbuttons"><button id="batteryHistoryDeleteCancel" type="button">取消</button><button id="batteryHistoryDeleteApply" type="button">删除</button></div></dialog>
 <dialog id="usageDeleteConfirm"><h3>删除当天使用时间数据？</h3><p>将删除这一天的使用时间和应用明细，并从周、月统计中移除。删除后不再自动采集该日数据，充放电记录不受影响。</p><div class="dialogbuttons"><button id="usageDeleteCancel" type="button">取消</button><button id="usageDeleteApply" class="danger" type="button">删除</button></div></dialog>
 <dialog id="confirm"><h3>删除此记录？</h3><p id="confirmText">曲线和应用统计将删除，无法恢复。</p><div class="dialogbuttons"><button id="cancelDelete">取消</button><button id="confirmDelete" class="danger">删除</button></div></dialog>
 <div id="appEnergyTip" class="app-energy-tip" role="status" hidden></div>
 <div id="toast" role="status" hidden></div>
-<script type="module" src="app.js?v=acol-2.2-gamepad-detail"></script>
+<script type="module" src="app.js?v=acol-2.2s-gamepad-detail"></script>
 </body></html>

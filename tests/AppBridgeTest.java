@@ -12,6 +12,10 @@ public final class AppBridgeTest {
         String[] defaults=AppBridge.parse(client+"default_settings");
         check(defaults.length==2&&defaults[0].equals("api")&&defaults[1].equals("default_settings"));
         check(AppBridge.parse(client+"battery_history_record")[1].equals("battery_history_record"));
+        check(AppBridge.parse(client+"battery_history_trend 0 0")[1].equals("battery_history_trend"));
+        check(AppBridge.parse(client+"export_points 1 0 0")[1].equals("export_points"));
+        check(AppBridge.parse(client+"interval_apps 1 0")[1].equals("interval_apps"));
+        check(AppBridge.parse(client+"settle_usage 1")[1].equals("settle_usage"));
         rejected(client+"battery_history_record; id");
         check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 2 10001 0").length==18);
         check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 0.5 10001 0").length==18);

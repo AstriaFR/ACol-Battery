@@ -1,9 +1,10 @@
-import{Chart,valid,sampleText}from'./chart.js?v=acol-2.2';
-import{fullScreen}from'./root-bridge.js?v=acol-2.2';
-import{curveColor}from'./curve-colors.js?v=acol-2.2';
-import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.2';
+import{Chart,valid,sampleText}from'./chart.js?v=acol-2.2s';
+import{fullScreen}from'./root-bridge.js?v=acol-2.2s';
+import{curveColor}from'./curve-colors.js?v=acol-2.2s';
+import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.2s';
+import{bindExport,performanceCsv}from'./chart-export.js?v=acol-2.2s';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
-class PerformanceChart extends Chart{
+export class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
   signals(){return this.metrics??[];}
   axisMaximum(){return 110;}
@@ -11,7 +12,7 @@ class PerformanceChart extends Chart{
   scaleFor(s){
     const full=s.key==='temperature'?100:s.unit==='%'?100:s.cpuFrequency?(this.cpuMax||Math.max(1,this.cpuObservedMax)):
       s.key==='fps'?fpsLimit(this.maximum.get(s.key)??0):this.frequencyRanges.get(s.key)??s.limit??1;
-    return{base:0,full,min:0,label:`${sampleText(full,1)} ${s.unit}`};
+    return{base:0,full,min:0,label:`${sampleText(full,s.key==='ram'?2:1)} ${s.unit}`};
   }
   ingest(points){
     for(const p of points)for(const s of this.metrics){
@@ -25,6 +26,7 @@ class PerformanceChart extends Chart{
 export class PerformancePanel{
   constructor(api){
     this.api=api;this.id=null;this.token=0;this.points=[];this.cursor=0;this.follow=true;this.busy=false;this.expanded=false;
+    bindExport($('performanceExport'),()=>`性能曲线-${this.id}.csv`,()=>performanceCsv(api,this.id));
     this.chart=new PerformanceChart($('performancePlot'),$('performanceTooltip'),()=>{this.follow=false;this.renderFollow();});
     this.chart.onInteract=()=>{this.follow=false;this.renderFollow();};
     $('performanceReset').onclick=()=>{this.follow=true;this.render(true);};
@@ -95,6 +97,7 @@ export class PerformancePanel{
       metrics.push({key:`cpu${i}Usage`,index:9+i*2,name:`${c.label} 使用率`,axis:`${c.label} 使用率`,unit:'%',color:curveColor(4+i*2),digits:1,limit:100});
     });
     if(Number.isInteger(meta.temperatureIndex))metrics.push({key:'temperature',index:meta.temperatureIndex,name:'最高温度',axis:'最高温度',unit:'℃',color:curveColor(3+(meta.clusters??[]).length*2),digits:1,limit:100});
+    if(Number.isInteger(meta.memoryIndex)&&valid(meta.memoryTotalGB)&&meta.memoryTotalGB>0)metrics.push({key:'ram',index:meta.memoryIndex,name:'RAM 已用',axis:'RAM 已用',unit:'GB',color:curveColor(metrics.length),digits:2,limit:meta.memoryTotalGB});
     this.chart.metrics=metrics;this.chart.maximum.clear();this.chart.frequencyRanges.clear();this.chart.cpuObservedMax=0;this.chart.ingest(this.points);
     let saved;try{saved=JSON.parse(localStorage.getItem(selectionKey));}catch{}
     this.chart.enabled=new Set(Array.isArray(saved)?saved:metrics.filter(s=>s.key.endsWith('Freq')).map(s=>s.key));
@@ -102,6 +105,7 @@ export class PerformancePanel{
     const sources=[meta.method,'CPU 频率：'+(meta.clusters??[]).map(c=>c.frequencySource||'不可用').join('；'),
       'GPU 频率：'+(meta.gpuFrequencySource||'不可用'),'GPU 负载：'+(meta.gpuUsageSource||'不可用'),
       'CPU/GPU 温度：'+((meta.temperatureSources??[]).map(s=>`${s.label}（${s.path}）`).join('；')||'未发现可读取的温度节点'),
+      ...(Number.isInteger(meta.memoryIndex)?['RAM：/proc/meminfo，已用 = MemTotal − MemAvailable；量程 = MemTotal；1 GB = 1,000,000,000 字节。']:[]),
       '帧率：SurfaceFlinger 前台图层实际呈现时间；静止画面可为 0，不代表屏幕刷新率。'];
     $('performanceMethod').textContent=sources.join('\n');
   }

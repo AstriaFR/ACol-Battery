@@ -1,3 +1,4 @@
+import{openDatabase}from'./indexed-db.js?v=acol-2.2s';
 const finite=value=>Number.isFinite(value)&&value>=0;
 export const midnight=wall=>{const date=new Date(wall);date.setHours(0,0,0,0);return date.getTime()};
 export const nextDate=(day,amount=1)=>{const date=new Date(day);date.setDate(date.getDate()+amount);return date.getTime()};
@@ -40,22 +41,12 @@ export class DailyUsageCache{
   constructor(){this.zone=localZone();this.memory=new Map();this.migrations=new Map();this.totalIndexing=new Map();this.available=true;}
   remember(store,key,value){const id=store+JSON.stringify(key);this.memory.delete(id);this.memory.set(id,value);while(this.memory.size>64)this.memory.delete(this.memory.keys().next().value);return value;}
   open(){
-    if(this.ready)return this.ready;
-    this.ready=new Promise((resolve,reject)=>{
-      let finished=false;const finish=(error,db)=>{if(finished){db?.close();return;}finished=true;clearTimeout(timer);error?reject(error):resolve(db)},timer=setTimeout(()=>finish(Error('缓存打开超时')),10000);
-      try{
-        const request=indexedDB.open('acol.daily-usage.cache',4);
-        request.onupgradeneeded=()=>{
-          const db=request.result;
-          for(const name of stores)if(!db.objectStoreNames.contains(name))db.createObjectStore(name,{keyPath:name==='app_totals'?['zone','pkg','dayStart']:name==='app_hours'?['zone','dayStart','pkg']:name==='hour_apps'?['zone','dayStart','hour']:['zone','dayStart']});
-          const totals=request.transaction.objectStore('app_totals');if(!totals.indexNames.contains('zoneDay'))totals.createIndex('zoneDay',['zone','dayStart']);
-          // Legacy days are converted only when that date is requested.
-          if(db.objectStoreNames.contains('days')){const old=request.transaction.objectStore('days');if(!old.indexNames.contains('zoneDay'))old.createIndex('zoneDay',['zone','dayStart']);}
-        };
-        request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this.ready=null;};finish(null,db);};
-        request.onerror=()=>finish(request.error||Error('缓存打开失败'));request.onblocked=()=>finish(Error('缓存正在被占用'));
-      }catch(error){finish(error);}
-    });return this.ready;
+    return openDatabase(this,'acol.daily-usage.cache',4,(db,transaction)=>{
+      for(const name of stores)if(!db.objectStoreNames.contains(name))db.createObjectStore(name,{keyPath:name==='app_totals'?['zone','pkg','dayStart']:name==='app_hours'?['zone','dayStart','pkg']:name==='hour_apps'?['zone','dayStart','hour']:['zone','dayStart']});
+      const totals=transaction.objectStore('app_totals');if(!totals.indexNames.contains('zoneDay'))totals.createIndex('zoneDay',['zone','dayStart']);
+      // Legacy days are converted only when that date is requested.
+      if(db.objectStoreNames.contains('days')){const old=transaction.objectStore('days');if(!old.indexNames.contains('zoneDay'))old.createIndex('zoneDay',['zone','dayStart']);}
+    });
   }
   async transaction(names,mode,work){
     const db=await this.open();

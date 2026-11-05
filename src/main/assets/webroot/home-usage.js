@@ -1,9 +1,9 @@
-import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.2';
-import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.2';
+import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.2s';
+import{DailyUsageCache,midnight,nextDate,localZone}from'./daily-usage-cache.js?v=acol-2.2s';
 const yieldUI=()=>new Promise(resolve=>setTimeout(()=>{if('requestIdleCallback'in window)requestIdleCallback(()=>resolve(),{timeout:400});else resolve();},80));
 export class HomeUsagePanel extends DailyUsageChart{
   constructor(api){
-    const initial=new DailyUsageCache();super(api,{prefix:'homeUsage',getCache:()=>initial,onDate:day=>this.display(day),formatDate:day=>{const date=new Date(day);return`${String(date.getMonth()+1).padStart(2,'0')}/${String(date.getDate()).padStart(2,'0')}`},formatDuration:ms=>roundedDuration(ms).replaceAll(' ','').replace('小时','时').replace('分钟','分')});
+    const initial=new DailyUsageCache();super(api,{prefix:'homeUsage',getCache:()=>initial,onDate:day=>this.display(day),onSwipe:direction=>this.changeDay(direction),formatDate:day=>{const date=new Date(day);return`${String(date.getMonth()+1).padStart(2,'0')}/${String(date.getDate()).padStart(2,'0')}`},formatDuration:ms=>roundedDuration(ms).replaceAll(' ','').replace('小时','时').replace('分钟','分')});
     this.getCache=()=>this.cache;this.generation=0;this.ready=false;this.host.hidden=false;
     this.warm=this.display(this.day);
     this.watch=new MutationObserver(()=>{if(this.visible())this.resume();else this.pause();});

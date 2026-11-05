@@ -5,6 +5,11 @@ import org.json.*;
 /** Freeze measured/calculated values and their trust markings when a snapshot is taken. */
 public final class BatteryHistorySnapshot {
     private BatteryHistorySnapshot(){}
+    public static Double trustedFcc(JSONObject snapshot){
+        JSONArray marked=snapshot.optJSONArray("nearActual");if(marked==null)return null;
+        for(String key:new String[]{"rawFcc","fcc"})for(int i=0;i<marked.length();i++)if(key.equals(marked.optString(i))&&positive(snapshot,key))return snapshot.optDouble(key);
+        return null;
+    }
     static boolean positive(JSONObject info,String key){double v=info.optDouble(key,Double.NaN);return Double.isFinite(v)&&v>0;}
     public static JSONObject capture(JSONObject info)throws JSONException {
         JSONObject out=new JSONObject();

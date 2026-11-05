@@ -25,7 +25,7 @@ public final class RootSessionStartupTest {
                                 out.println(new JSONObject().put("id",id).put("event","startup_phase").put("message","正在连接后台…"));
                                 out.println(fail?new JSONObject().put("id",id).put("event","result").put("message","后台无法启动。").put("diagnostics","full technical cause")
                                     :new JSONObject().put("id",id).put("event","startup_ready").put("status",new JSONObject().put("ok",true).put("frameworkHealthy",true)));
-                            }else out.println(new JSONObject().put("id",id).put("event","result"));
+                            }else out.println(new JSONObject().put("id",id).put("event","result").put("errno",0).put("stdout",new JSONObject().put("ok",true).toString()));
                         }
                     }
                 }catch(Exception ignored){}finally{exited=true;}
@@ -47,11 +47,17 @@ public final class RootSessionStartupTest {
             check(shell.received.get(0).startsWith("exec env "),"A second helper process was started");
             JSONObject request=new JSONObject(shell.received.get(1));check(request.getBoolean("commit"),"Update was not committed through the handshake");
             root.request(new JSONObject().put("id","regular"));check(delivered.await(2,TimeUnit.SECONDS),"Frontend messages were not delivered after startup");
+            check(root.api("settings").getBoolean("ok"),"Native API response was lost to the WebView callback");
         }
         try(RootSession root=new RootSession(new Shell(true))){
             try{root.connect(message->{},text->{},false);throw new AssertionError("Failure accepted as ready");}
             catch(RootSession.CommandFailure failure){check(failure.getMessage().equals("后台无法启动。"),"Human cause lost");check(failure.diagnostics.equals("full technical cause"),"Technical report lost");}
         }
-        System.out.println("Root startup: one bridge, health handshake, phase feedback, request routing and full failure diagnostics passed");
+        Set<String> bridge=new HashSet<>();
+        for(java.lang.reflect.Method method:WebViewHost.Bridge.class.getDeclaredMethods())if(method.isAnnotationPresent(android.webkit.JavascriptInterface.class)){
+            check(java.lang.reflect.Modifier.isPublic(method.getModifiers()),"Native bridge method is not public");bridge.add(method.getName());
+        }
+        check(bridge.equals(new HashSet<>(Arrays.asList("backupAllData","restoreAllData","openErrorLogs","clearAllData","post","beginChartExport","appendChartExport","finishChartExport","cancelChartExport","appIcons","fullScreen","setDarkTheme","isSystemDark","connectionStatus","repair"))),"WebView bridge contract changed during the split");
+        System.out.println("Root startup: one bridge, health handshake, phase feedback, native/WebView routing, failure diagnostics and bridge contract passed");
     }
 }

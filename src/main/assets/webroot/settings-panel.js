@@ -1,4 +1,4 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.2';
+import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.2s';
 export class SettingsPanel{
   constructor(api,onSaved){
     this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');

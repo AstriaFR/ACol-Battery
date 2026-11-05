@@ -113,6 +113,7 @@ input[type=checkbox]{accent-color:var(--accent);vertical-align:middle;margin-rig
 .chartbar strong{font-size:14px;font-weight:650;flex-shrink:0}
 .chartbar>div{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
 .chartbar button{padding:7px 11px;min-height:34px;font-size:11px;border-radius:8px}
+.chart-secondary{display:contents}
 .legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:0 6px 7px}
 .legend label{font-size:11px;white-space:nowrap;display:flex;align-items:center;gap:4px;min-width:0;min-height:32px;background:#f8fafc;border:1px solid #e7ecf3;border-radius:7px;padding:5px 7px;cursor:pointer}
 .legend input{accent-color:var(--series);margin:0;width:13px;height:13px;flex-shrink:0}
@@ -338,6 +339,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .settings-panel,.numeric-keypad,.settings-delete-confirm,.recording-confirm{--accent:var(--charge);--theme-soft:#eaf7f2;--theme-line:#c7e8dc}
 .recording-confirm-actions{display:flex;justify-content:space-between;gap:24px;margin-top:20px}
 #confirmRecording{background:var(--charge);border-color:var(--charge);color:#fff}
+#batteryHistoryRecordApply{background:var(--charge);border-color:var(--charge);color:#fff}
 .dialogbuttons button,.settings-delete-actions button{color:#fff;font-weight:600;transition:none;appearance:none}
 #settingsDeleteYes,#confirmDelete{background:#c4443f;border-color:#c4443f}
 #settingsDeleteNo,#cancelDelete{background:#078267;border-color:#078267}
@@ -454,6 +456,9 @@ body:has(main:not([hidden])){overflow:hidden}
 :root[data-theme=dark] .theme-toggle:active{background:#102319}
 
 @media(orientation:portrait){
+  #chartPanel:not(.expanded):has(#reversePlot:not([hidden]))>.chartbar{position:relative}
+  #chartPanel:not(.expanded):has(#reversePlot:not([hidden])) .chart-secondary{position:absolute;right:18px;top:calc(100% - 6px);display:flex;gap:6px;z-index:2}
+  #chartPanel:not(.expanded):has(#reversePlot:not([hidden]))>.chartinfo{padding-right:124px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .chartpanel:not(.expanded){display:flex;flex-direction:column}
   .chartpanel:not(.expanded)>.chartbar{order:0}
   .chartpanel:not(.expanded)>.chartinfo{order:1}
@@ -598,7 +603,7 @@ main.app-shell{--accent:inherit;--theme-soft:inherit;--theme-line:inherit;displa
 .drain-ring-off{stroke:var(--drain-off)}
 .drain-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
 .drain-center>div{display:flex;align-items:baseline;gap:2px}
-.drain-center strong{font-size:22px;font-weight:650;line-height:1.1;letter-spacing:-.5px;color:var(--text)}
+.drain-center strong{font-size:20px;font-weight:650;line-height:1.1;letter-spacing:-.5px;color:var(--text)}
 .drain-center-unit{font-size:10px;font-weight:500;color:var(--muted)}
 .drain-center small{margin-top:2px;font-size:9px;line-height:1.2;color:var(--muted)}
 .drain-item{min-width:0;--drain-color:var(--drain-on)}

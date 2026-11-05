@@ -27,6 +27,8 @@
 - 数据与运行文件：`DatabaseRebuildTest`、`SafeDatabaseDeviceTest`、`DataTransferTest`、`MaintenanceTest`、`RuntimePayloadTest`、`RuntimeTransactionTest`。
 - 独立功耗显示：`PowerDisplayStateTest`。
 
+`DeferredStatsTest` 在真实 Android 的独立临时数据库中验证事件批量留存、打开页面后增量结算、缓存幂等性、迟到事件修复、游戏充电边界和进行中旧记录的累计值衔接，不接触正式数据。
+
 纯规则测试和 Android 集成测试处于不同层级，不能仅因覆盖同一个功能就互相替代。数据库事务、真实 SQLite 损坏保护和 Root 会话测试应继续保留。
 
 ## 运行环境

@@ -1,6 +1,6 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2';
-import{remainingEstimate}from'./estimate.js?v=acol-2.2';
-import{batteryColor}from'./curve-colors.js?v=acol-2.2';
+import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
+import{remainingEstimate}from'./estimate.js?v=acol-2.2s';
+import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
@@ -14,11 +14,13 @@ export const series=[
   {key:'voltage',index:4,name:'电芯均压',axis:'电压',unit:'mV',digits:1},
   {key:'power',index:5,name:'实时功率',axis:'功率',unit:'W',digits:6},
   {key:'temp',index:10,name:'电池温度',axis:'温度',unit:'℃',digits:1},
-  {key:'energy',index:11,name:'剩余能量(估算)',axis:'剩余能量(估算)',unit:'Wh',digits:2}
+  {key:'energy',index:11,name:'剩余能量(估算)',axis:'剩余能量(估算)',unit:'Wh',digits:2},
+  {key:'ram',index:14,name:'RAM 已用',axis:'RAM 已用',unit:'GB',digits:2}
 ];
 export const valid=v=>typeof v==='number'&&Number.isFinite(v);
-export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>kind==='charge'?s.key!=='energy':s.key!=='current').map(s=>{
+export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>s.key==='ram'?kind==='discharge'&&!fast:kind==='charge'?s.key!=='energy':fast||s.key!=='current').map(s=>{
   let item={...s,color:batteryColor(s.key)};
+  if(kind==='discharge'&&s.key==='current')item={...item,name:'电流'};
   if(kind==='discharge'&&s.key==='power')item={...item,name:fast?'实时功率':'平均功耗',axis:fast?'功率':'功耗',digits:2};
   if(kind==='discharge'&&s.key==='temp')item={...item,axis:'电池温度'};
   if(s.key==='voltage'&&cellCount!==2)item={...item,name:'电池电压'};
@@ -28,6 +30,7 @@ export function plotPoints(points,kind,cellCount=2,fast=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3]))return p;const row=[...p];row[3]*=cellCount===2?2:1;return row;});
   const withEnergy=p=>{
     const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
+    if(fast&&valid(row[3]))row[3]*=-(cellCount===2?2:1);
     row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4]},null)?.wh??null;return row;
   };
   if(fast)return points.map(withEnergy);
@@ -47,6 +50,12 @@ export function niceBounds(values,key){
 }
 export function sampleText(value,digits=6){
   return valid(value)?value.toLocaleString('zh-CN',{maximumFractionDigits:digits,useGrouping:false}):'缺失';
+}
+// Game plot polarity is discharge-positive; details retain charge-positive units.
+export function gameSampleText(value,key,digits=2){
+  if(!valid(value))return'缺失';
+  const display=(key==='current'||key==='power')?-value:value;
+  return`${display>0?'+':display<0?'−':''}${Math.abs(display).toFixed(digits)}`;
 }
 export function signalScale(s,values,kind='charge',fast=false,previous=null){
   const known=values.filter(valid);
@@ -287,17 +296,27 @@ export class Chart{
   }
   local(e){const r=this.canvas.getBoundingClientRect();if(this.canvas.closest('.rotate'))return[e.clientY-r.top,r.right-e.clientX];return[e.clientX-r.left,e.clientY-r.top];}
   signals(){return seriesFor(this.kind,this.cellCount,this.fast);}
+  timeAxis(width){
+    const wall=this.kind==='discharge'||this.kind==='performance';
+    const label=x=>wall?systemTimeLabel(chartSystemWall(this.points,this.startWall,x,this.kind,this.wallByX)):elapsedMinuteLabel(x);
+    return{label,ticks:(wall?wallTimeTicks(this.points,this.startWall,this.window,width,this.kind,this.wallByX):elapsedTimeTicks(this.window,width)).map(t=>({...t,text:wall?systemTimeLabel(t.wall):elapsedMinuteLabel(t.x)}))};
+  }
   axisMaximum(){return 110;}
   preparePoints(points){return plotPoints(points,this.kind,this.cellCount,this.fast);}
   scaleFor(s){
     const settings=scaleSettingsKey();if(settings!==this.scaleSettings){this.scaleCache.clear();this.scaleSettings=settings;}
-    const range=this.ranges[s.key],values=range?(s.key==='current'?range.map(v=>valid(v)?v*(this.cellCount===2?2:1):v):range):this.points.map(p=>p[s.index]).filter(valid);
+    if(s.key==='ram'){
+      const totals=this.ranges.ramTotal??this.points.map(p=>p[15]);let full=0;for(const total of totals)if(valid(total)&&total>0)full=Math.max(full,total);
+      return{base:0,full:full||1,min:0,label:full?`${full.toFixed(2)} GB`:'暂无数据'};
+    }
+    const range=this.ranges[s.key],factor=(this.cellCount===2?2:1)*(this.kind==='discharge'&&this.fast?-1:1);
+    const values=range?(s.key==='current'?range.map(v=>valid(v)?v*factor:v):range):this.points.map(p=>p[s.index]).filter(valid);
     const scale=signalScale(s,values,this.kind,this.fast,this.scaleCache.get(s.key));
     if(values.some(valid))this.scaleCache.set(s.key,scale);
     return scale;
   }
   markerX(){return this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right);}
-  clearInspect(){this.cancelInspectionHold();this.dragMarker=null;if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.draw();}
+  clearInspect(){this.cancelInspectionHold();this.dragMarker=null;if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
   positionTooltip(){
     if(this.marker===null||this.tooltip.hidden)return;
     const w=this.canvas.clientWidth,h=this.canvas.clientHeight,tw=this.tooltip.offsetWidth,th=this.tooltip.offsetHeight,x=this.markerX();
@@ -311,9 +330,9 @@ export class Chart{
     if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
     this.startWall=valid(options.startWall)?options.startWall:null;
     this.kind=kind;this.fast=fast;this.cellCount=cells;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
-    if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;}this.draw();
+    if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);}this.draw();
   }
-  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.marker=null;this.tooltip.hidden=true;this.draw();}
+  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
   zoom(factor,anchor=.5){anchor=Math.max(0,Math.min(1,anchor));const[a,b]=this.window,span=(b-a)*factor;this.setWindow(a+(b-a)*anchor-span*anchor,a+(b-a)*anchor+span*(1-anchor));}
   move(e){
     if(!this.pointers.has(e.pointerId))return;this.pointers.set(e.pointerId,this.local(e));
@@ -365,9 +384,10 @@ export class Chart{
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
+        if(this.kind==='discharge'&&this.fast&&(s.key==='current'||s.key==='power'))return`${s.name}  ${gameSampleText(value,s.key,s.key==='current'?0:2)} ${s.unit}`;
         return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+
-      (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.draw();
+      (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.onInspect?.(row);this.draw();
   }
   drawScreenOff(ctx,top,height,width){
     if(document.hidden||this.kind!=='discharge'||!this.enabled.has('screenOff'))return;
@@ -410,16 +430,14 @@ export class Chart{
       ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(this.left-3,y);ctx.lineTo(this.left,y);ctx.stroke();
     }
     ctx.font='10px system-ui';ctx.lineWidth=.65;
-    const wallAxis=this.kind==='discharge'||this.kind==='performance';
     {
-      const label=x=>wallAxis?systemTimeLabel(chartSystemWall(this.points,this.startWall,x,this.kind,this.wallByX)):elapsedMinuteLabel(x);
-      const ticks=wallAxis?wallTimeTicks(this.points,this.startWall,this.window,pw,this.kind,this.wallByX):elapsedTimeTicks(this.window,pw);
+      const{label,ticks}=this.timeAxis(pw);
       const gridLabels=[];
       for(const tick of ticks){
         const x=this.left+pw*(tick.x-this.window[0])/(this.window[1]-this.window[0]);
         ctx.strokeStyle=cssColor('--plot-timegrid','#edf0f4');ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();
         ctx.strokeStyle=cssColor('--plot-border','#95a2b1');ctx.beginPath();ctx.moveTo(x,bottom);ctx.lineTo(x,bottom+4);ctx.stroke();
-        gridLabels.push({x,text:wallAxis?systemTimeLabel(tick.wall):elapsedMinuteLabel(tick.x)});
+        gridLabels.push({x,text:tick.text});
       }
       ctx.fillStyle=cssColor('--plot-label','#526172');
       for(const text of timeAxisLabels(label(this.window[0]),label(this.window[1]),gridLabels,w,this.right,value=>ctx.measureText(value).width,this.kind==='charge'?this.left:3)){

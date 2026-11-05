@@ -26,7 +26,7 @@
 #detail .drain-items{position:relative;left:0;z-index:1;padding-left:6px}
 #detail .drain-item-values{position:static;display:flex;width:max-content;max-width:none;margin-left:0;padding-left:15px;font-size:14px;gap:5px}
 #detail .drain-item-head{gap:5px}
-#detail .drain-center strong{font-size:22px}
+#detail .drain-center strong{font-size:20px}
 #detail .drain-center small{font-size:9px}
 #detail .record-chart-value{min-width:0;padding-left:20px}
 #detail #screenTimeTotal{top:2px}

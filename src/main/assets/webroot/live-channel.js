@@ -1,4 +1,4 @@
-import{spawn,exec}from'./root-bridge.js?v=acol-2.2';
+import{spawn,exec}from'./root-bridge.js?v=acol-2.2s';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 
 export function compareRecords(a,b){
@@ -56,10 +56,20 @@ export class LiveChannel{
     if(this.deleted.has(id))return;
     if(packet.record===null){this.rows.set(id,{record:null,points:[]});return;}
     const old=this.rows.get(id),points=old?.points??[];
+    // A queued watch packet must not restore empty totals after foreground
+    // settlement. A new recorder epoch permits its version counter to restart.
+    if(old?.statsEpoch&&packet.statsEpoch===old.statsEpoch&&Number.isFinite(old.statsVersion)&&Number.isFinite(packet.statsVersion)&&packet.statsVersion<old.statsVersion){
+      packet={...packet,record:packet.record?{...packet.record,app_revision:old.record?.app_revision??packet.record.app_revision}:packet.record};
+      for(const key of ['apps','drainSummary','statsVersion','usagePending'])delete packet[key];
+    }
     for(const point of packet.points??[])if(!points.length||point[0]>points.at(-1)[0])points.push(point);
     if(points.length>24000)points.splice(0,points.length-24000);
     this.rows.set(id,{...old,...packet,points});
     while(this.rows.size>3)this.rows.delete(this.rows.keys().next().value);
+  }
+  settle(record,result){
+    const row=this.rows.get(record.id);if(!row?.record||row.record.start_wall!==record.start_wall)return;
+    this.merge({...result,record:{...row.record,app_revision:result.appRevision??row.record.app_revision},points:[]});
   }
   accept(packet){
     if(packet.batteryInfo)this.infoSnapshot=packet.batteryInfo;
@@ -139,7 +149,7 @@ export class LiveChannel{
     const result={ok:true,status:packet.status,activeRecord:packet.activeRecord,batteryInfo:this.infoSnapshot,frequencies:packet.frequencies};
     if(id>0&&this.rows.has(id)){
       const row=this.rows.get(id);
-      Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter:null,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,apps:row.apps,drainSummary:row.drainSummary});
+      Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter:null,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,statsEpoch:row.statsEpoch,usagePending:row.usagePending,apps:row.apps,drainSummary:row.drainSummary});
     }
     const list=this.cachedList(small);
     if(list&&(wantList||this.sentList!==this.listSequence)){

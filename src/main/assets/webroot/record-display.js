@@ -34,3 +34,13 @@ export function recordChanges(record){
     secondary:{text:capacityChange(record),flow:capacityFlow(record)}
   };
 }
+
+export{fmt};
+export const recordCells=r=>[0,1,2].includes(r?.cell_count)?r.cell_count:2;
+export const recordFast=r=>Number(r?.fast_seconds)>0;
+export const pad2=n=>String(n).padStart(2,'0');
+export const stamp=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${d.getFullYear()}/${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
+export const stampList=t=>{const d=new Date(t);return Number.isNaN(d.getTime())?'—':`${pad2(d.getMonth()+1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;};
+export const reasons={backup_restored:'恢复备份',recording:'记录中',full_tail_confirmed:'尾充完成',plugged:'接入充电',unplugged:'拔出充电',reboot:'重启中断',collector_restart:'服务中断',framework_restarted:'服务重启',module_stopped:'模块停止',recording_stopped:'记录停止',app_uninstalled:'卸载结束',service_updated:'后台更新',fast_started:'切换游戏',fast_stopped:'记录结束',fast_idle_timeout:'息屏结束'};
+export function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
+export function longPressFeedback(){try{navigator.vibrate?.(10);}catch{}}

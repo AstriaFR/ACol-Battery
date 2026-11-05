@@ -85,6 +85,28 @@ final class DataTransfer {
             }else DataArchive.copyTree(source,target,()->{});
         }
     }
+    /** Caller has stopped the recorder and holds daemon.lock; compact the live DB, not its copy. */
+    static void compactDatabase(File base)throws Exception{
+        File file=new File(base,"records.db");
+        if(Files.isSymbolicLink(file.toPath()))throw new IOException("记录数据库路径异常，未进行整理。");
+        if(!file.exists())return;
+        SafeDatabase.inspectExisting(file);
+        try(SQLiteDatabase db=SafeDatabase.open(file)){
+            checkpoint(db);
+            long required=Math.multiplyExact(file.length(),2L);
+            if(base.getUsableSpace()<required)throw new IOException("存储空间不足，无法整理数据库并继续备份。");
+            db.execSQL("VACUUM");
+            try(android.database.Cursor check=db.rawQuery("PRAGMA quick_check",null)){
+                if(!check.moveToFirst()||!"ok".equalsIgnoreCase(check.getString(0))||check.moveToNext())throw new IOException("整理后的数据库校验未通过，已停止备份。");
+            }
+            checkpoint(db);
+        }
+    }
+    private static void checkpoint(SQLiteDatabase db)throws IOException{
+        try(android.database.Cursor result=db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)",null)){
+            if(!result.moveToFirst()||result.getInt(0)!=0)throw new IOException("数据库仍被占用，未能完成整理与备份。");
+        }
+    }
     static void validateDatabase(File incoming)throws Exception{
         File file=new File(incoming,"root/records.db");SafeDatabase.inspectExisting(file);
         try(SQLiteDatabase db=SafeDatabase.open(file)){
@@ -118,6 +140,7 @@ final class DataTransfer {
                 try(RandomAccessFile databaseLock=new RandomAccessFile(new File(Owner.BASE,"daemon.lock"),"rw");FileLock exclusive=databaseLock.getChannel().tryLock()){
                     if(exclusive==null)throw new IOException("后台尚未释放数据文件。");
                     if(mode.equals("backup")){
+                        state(dir,data,"compacting","正在整理数据库并释放空闲空间");compactDatabase(Owner.BASE);
                         state(dir,data,"snapshot","正在建立完整数据快照");File snap=new File(dir,"snapshot");snapshot(app,snap);
                     }else{
                         state(dir,data,"restoring","正在覆盖恢复数据");restore.prepare(()->{});restore.apply(()->{});fixApp(app,info.applicationInfo.uid);restore.commit();data.put("restored",true);safe=true;

@@ -39,6 +39,7 @@ final class PerformanceCollector implements AutoCloseable {
     private final Object hardwareLock=new Object();
     private JSONObject frequencySnapshot;
     private long frequencyAt=-1000;
+    private long memoryTotalBytes;
 
     PerformanceCollector(Sink sink){this.sink=sink;}
     void sample(long session,long start,boolean screen){sample(session,start,screen,60000);}
@@ -50,6 +51,8 @@ final class PerformanceCollector implements AutoCloseable {
                 JSONObject frequency=frequencies();
                 Map<Integer,long[]> cpu=cpuTimes();Set<Integer> online=cpuList(read("/sys/devices/system/cpu/online"));
                 double maxTemperature=maximumCpuGpuTemperature();
+                MemoryStats memory=MemoryStats.parse(read("/proc/meminfo"));
+                if(memory!=null&&memory.totalBytes!=memoryTotalBytes){memoryTotalBytes=memory.totalBytes;meta=null;}
                 boolean same=previousSession==session;
                 JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(JSONObject.NULL)
                     .put(frequency.opt("gpuMHz")).put(number(gpu.utilization())).put(JSONObject.NULL).put(JSONObject.NULL)
@@ -61,6 +64,7 @@ final class PerformanceCollector implements AutoCloseable {
                     row.put(number(same?cpuUsage(c.cpus,online,previousCpu,cpu):Double.NaN));
                 }
                 row.put(number(maxTemperature));
+                row.put(memory==null?JSONObject.NULL:memory.usedGB());
                 // CPU/GPU are captured before Binder calls, so slow rendering services cannot delay them.
                 double fps=screen?fps():Double.NaN;
                 if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
@@ -94,6 +98,7 @@ final class PerformanceCollector implements AutoCloseable {
             .put("gpuFrequencySource",gpu.freq).put("gpuUsageSource",gpu.load.isEmpty()?gpu.busy:gpu.load)
             .put("fpsSource","SurfaceFlinger / actualPresentTime").put("cpuUsageSource","/proc/stat")
             .put("temperatureIndex",8+clusters.size()*2).put("temperatureSources",thermal)
+            .put("memoryIndex",9+clusters.size()*2).put("memoryTotalGB",memoryTotalBytes>0?memoryTotalBytes/1e9:JSONObject.NULL)
             .put("method","频率为采样时读数；CPU 使用率为相邻采样的忙闲计数差，GPU 使用率为驱动当前负载；CPU/GPU 温度取识别到的温度节点最大值；帧率按前台画面最近的实际呈现帧计算。缺失数据留空。");
         return meta;
     }

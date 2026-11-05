@@ -1,4 +1,4 @@
-import{ScreenTimeCache,normalizeSpans,missingSpans,hourlyTotals,normalizeAppSpans,hourAppRows}from'./screen-time-cache.js?v=acol-2.2';
+import{ScreenTimeCache,resetScreenEntry,normalizeSpans,missingSpans,hourlyTotals,normalizeAppSpans,hourAppRows}from'./screen-time-cache.js?v=acol-2.2s';
 const ns='http://www.w3.org/2000/svg';
 const startOfDay=wall=>{const d=new Date(wall);d.setHours(0,0,0,0);return d.getTime()};
 const moveDay=(wall,amount)=>{const d=new Date(wall);d.setDate(d.getDate()+amount);return d.getTime()};
@@ -72,8 +72,9 @@ export class ScreenTimePanel{
     if(record.kind!=='discharge'){this.close();return;}
     const first=startOfDay(record.start_wall),end=record.start_wall+Math.max(0,record.end_elapsed-record.start_elapsed),last=startOfDay(Math.max(record.start_wall,end-1));
     if(!Number.isFinite(first)||!Number.isFinite(last)){this.close();return;}
-    const changed=this.record?.id!==record.id||this.record?.start_wall!==record.start_wall,settled=!changed&&(this.statsStamp!==statsStamp||Boolean(this.record?.active)!==Boolean(record.active));this.record=record;this.statsStamp=statsStamp;this.first=first;this.last=last;
+    const changed=this.record?.id!==record.id||this.record?.start_wall!==record.start_wall,revised=!changed&&this.revision!==(record.app_revision??0),settled=!changed&&(this.statsStamp!==statsStamp||Boolean(this.record?.active)!==Boolean(record.active)||revised);this.record=record;this.revision=record.app_revision??0;this.statsStamp=statsStamp;this.first=first;this.last=last;
     if(changed){this.hourDetails=null;this.hideTip();this.autoDay=true;this.day=last;this.selected=null;this.data=null;this.key=null;this.busyKey=null;this.force=false;this.token++;}
+    if(revised){this.hourDetails=null;this.hideTip();this.key=null;this.busyKey=null;this.force=true;this.token++;}
     if(this.autoDay&&this.day!==last){this.hourDetails=null;this.hideTip();this.day=last;this.selected=null;this.data=null;this.key=null;}
     if(settled&&this.day===last){this.key=null;this.force=true;if(this.busyKey)this.dirty=true;}
     this.host.hidden=false;this.navigation();this.load();
@@ -104,6 +105,8 @@ export class ScreenTimePanel{
           if(token!==this.token)break;
           let seed=0;for(let i=entry.spans.length-1;i>=0;i--)if(entry.spans[i][1]<=start){if(entry.spans[i][1]===start)seed=entry.spans[i][2]?2:1;break;}
           const result=await this.api('screen_usage',record.id,day,start,stop,seed);
+          if(token!==this.token)return;
+          if(await this.adoptRevision(entry,record,result.appRevision))return;
           entry.spans=normalizeSpans([...entry.spans,...(result.segments??[])]);entry.settledEnd=Math.max(entry.settledEnd,result.settledEnd??from);
         }
         entry.attempts[day]=Date.now();await this.cache.save(entry);
@@ -113,6 +116,8 @@ export class ScreenTimePanel{
       if(appMissing.length&&entry.appFinal[day]!==appEnd&&(force||appAttempt>now||now-appAttempt>=60000)){
         try{
           const result=await this.api('hour_apps',record.id,appMissing[0][0],appMissing.at(-1)[1]);
+          if(token!==this.token)return;
+          if(await this.adoptRevision(entry,record,result.appRevision))return;
           entry.appSpans=normalizeAppSpans([...entry.appSpans,...(result.segments??[])]);Object.assign(entry.appLabels,result.labels??{});
           if(result.complete!==false&&!missingSpans(entry.appSpans,from,appEnd).length&&(!record.active||appEnd>=moveDay(day,1)))entry.appFinal[day]=appEnd;
           else delete entry.appFinal[day];
@@ -136,6 +141,11 @@ export class ScreenTimePanel{
     }finally{
       if(token===this.token){this.busyKey=null;if(this.dirty){this.dirty=false;this.key=null;this.load();}else this.scheduleRetry();}
     }
+  }
+  async adoptRevision(entry,record,revision){
+    if(!Number.isSafeInteger(revision)||revision<0||revision===entry.revision)return false;
+    resetScreenEntry(entry,record,revision);record.app_revision=revision;this.revision=revision;
+    this.key=null;this.force=true;this.dirty=true;await this.cache.save(entry);return true;
   }
   drawEmpty(){this.plot.replaceChildren();this.node('screenTimeEmpty').hidden=true;this.draw({hours:Array(24).fill(0),covered:Array(24).fill(0),coveredMs:0,totalMs:0,unknownMs:1,rangeStart:0,rangeEnd:1},true);}
   draw(data,loading=false){

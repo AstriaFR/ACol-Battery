@@ -9,7 +9,7 @@ public final class TimelineTest {
         long actual=split.getOrDefault(owner,0L);
         if(actual!=expected)throw new AssertionError(owner+": "+actual+" != "+expected);
     }
-    public static void main(String[] args){
+    public static void main(String[] args)throws Exception{
         Core.Timeline timeline=new Core.Timeline();timeline.seed(true,false);
         timeline.apply(event(0,1,"first"));
         duration(timeline.split(0,60000,Collections.emptyList()),"first",60000);
@@ -34,6 +34,10 @@ public final class TimelineTest {
         timeline.split(0,20000,Collections.emptyList());timeline.apply(event(20000,16,null));
         duration(timeline.split(20000,80000,Collections.emptyList()),Core.OFF,60000);
         timeline.seed(false,false);duration(timeline.split(0,60000,Collections.emptyList()),Core.OFF,60000);
-        System.out.println("Timeline boundary and partial settlement checks passed");
+        timeline.seed(true,false);timeline.apply(event(0,1,"z-first"));timeline.apply(event(1,1,"a-second"));
+        Core.Timeline restored=new Core.Timeline();DeferredStats.decode(restored,DeferredStats.encode(timeline));
+        duration(restored.split(2,1002,Collections.emptyList()),"a-second",1000);
+        restored.apply(event(1002,2,"a-second"));duration(restored.split(1002,2002,Collections.emptyList()),"z-first",1000);
+        System.out.println("Timeline boundary, partial settlement and persistent activity-order checks passed");
     }
 }

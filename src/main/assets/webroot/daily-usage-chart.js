@@ -1,6 +1,6 @@
-import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2';
-import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.2';
-import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.2';
+import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2s';
+import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.2s';
+import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.2s';
 export const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 export const dateText=wall=>{const d=new Date(wall);return`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`};
 export function roundedDuration(ms){
@@ -10,9 +10,9 @@ export function roundedDuration(ms){
 }
 export class DailyUsageChart extends ScreenTimePanel{
   constructor(api,options){
-    super(api,{prefix:options.prefix,hint:'每日亮屏时长 · 长按小时查看应用',inspect:options.inspect,tipHost:options.tipHost,minuteUnit:'分'});
+    super(api,{prefix:options.prefix,hint:'每日亮屏时长 · 长按小时查看应用',inspect:options.inspect,tipHost:options.tipHost,minuteUnit:'分',onSwipe:options.onSwipe});
     this.formatDate=options.formatDate??dateText;this.formatDuration=options.formatDuration??roundedDuration;
-    if(['homeUsage','usageDay'].includes(options.prefix)){
+    if(options.prefix==='usageDay'){
       this.deleteButton=document.createElement('button');this.deleteButton.type='button';this.deleteButton.className='usage-day-delete';this.deleteButton.textContent='删除当天数据';this.deleteButton.hidden=true;
       const hint=this.node('screenTimeHint'),footer=document.createElement('div');footer.className='usage-day-footer';hint.before(footer);footer.append(hint,this.deleteButton);
       this.deleteButton.onclick=()=>this.onDeleteDay?.(this.day);

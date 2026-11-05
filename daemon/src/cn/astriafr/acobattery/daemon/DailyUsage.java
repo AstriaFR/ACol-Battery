@@ -40,7 +40,7 @@ final class DailyUsage {
             // screen/keyguard/app state before counting a midnight or cold start.
             // A valid continuous checkpoint avoids rereading that history.
             long queryFrom=restored&&timeline.screenKnown()?from:Math.max(0,from-86400000L);
-            List<Core.Event> events=Main.queryUsage(context,queryFrom,to);long cursor=from;
+            List<Core.Event> events=DeferredStats.queryUsage(context,queryFrom,to);long cursor=from;
             for(Core.Event event:events){
                 if(event.time<=from){timeline.apply(event);continue;}
                 if(event.time>to)break;

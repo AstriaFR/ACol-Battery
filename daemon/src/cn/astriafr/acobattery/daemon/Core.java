@@ -9,6 +9,7 @@ public final class Core {
         public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
         public double vmax = Double.NaN, vmin = Double.NaN, fv = Double.NaN, temp = Double.NaN;
         public double cell1 = Double.NaN, cell2 = Double.NaN;
+        public double memoryUsedGB=Double.NaN,memoryTotalGB=Double.NaN;
         public int cellCount=2;
         public String voltageSource="",currentSource="",rmSource="",onlineSource="";
         public boolean online, full, enabled;

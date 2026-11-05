@@ -16,6 +16,9 @@ public final class DataArchive {
     public static final Set<String> ROOT_KEEP=new HashSet<>(Arrays.asList("runtime","runtime.version","owner.cert","owner.user","daemon.lock","daemon.pid","supervisor.pid","initialized","startup.attempt","update.lock","update.pending","update.installed","update.transaction","runtime.rollback","all-data-clear.pending","database.rebuild.pending","screen.event","screen.event.next","cleanup.request","transfer","transfer.pending"));
     public interface Guard{void check()throws Exception;}
     private DataArchive(){}
+    static boolean obsoleteDiagnostic(String name){
+        return name.equals("root/daemon.log")||name.equals("root/daemon.previous.log")||name.equals("app/files/initialization-error.txt")||name.equals("app/files/initialization-fallback.txt");
+    }
     static void validName(String name)throws IOException{
         if(name.isEmpty()||name.startsWith("/")||name.indexOf('\\')>=0||name.indexOf(':')>=0||name.indexOf('\0')>=0)throw new IOException("数据包包含无效路径。");
         String[] parts=name.split("/",-1);for(String part:parts)if(part.isEmpty()||part.equals(".")||part.equals(".."))throw new IOException("数据包包含越界路径。");
@@ -56,7 +59,7 @@ public final class DataArchive {
         for(File file:files){
             guard.check();if(Files.isSymbolicLink(file.toPath()))throw new IOException("备份快照包含异常链接。");
             if(file.isDirectory()){packDirectory(base,file,zip,entries,total,guard);continue;}if(!file.isFile())continue;
-            String name=base.toPath().relativize(file.toPath()).toString().replace(File.separatorChar,'/');validName(name);if(entries.length()>=100000)throw new IOException("备份文件数量过多。");
+            String name=base.toPath().relativize(file.toPath()).toString().replace(File.separatorChar,'/');validName(name);if(obsoleteDiagnostic(name))continue;if(entries.length()>=100000)throw new IOException("备份文件数量过多。");
             MessageDigest hash=MessageDigest.getInstance("SHA-256");long size=0;byte[] buffer=new byte[65536];zip.putNextEntry(new ZipEntry(name));
             try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(buffer))!=-1){guard.check();size+=n;total[0]+=n;if(total[0]>MAX_BYTES)throw new IOException("备份数据超过支持的大小。");hash.update(buffer,0,n);zip.write(buffer,0,n);}}
             zip.closeEntry();entries.put(name,new JSONObject().put("size",size).put("sha256",hex(hash.digest())));
@@ -75,7 +78,8 @@ public final class DataArchive {
                 guard.check();ZipEntry entry=files.nextElement();String name=entry.getName();if(name.equals("manifest.json")){if(++headers>1)throw new IOException("数据包清单重复。");continue;}
                 validName(name);if(entry.isDirectory()||!found.add(name)||!entries.has(name))throw new IOException("数据包包含重复或未登记的文件。");
                 JSONObject expected=entries.getJSONObject(name);long wanted=expected.getLong("size");if(wanted<0||wanted>MAX_BYTES||!expected.getString("sha256").matches("[0-9a-f]{64}"))throw new IOException("数据包校验信息无效。");
-                File target=extract==null?null:new File(extract,name);if(target!=null){if(!target.getCanonicalPath().startsWith(extract.getCanonicalPath()+File.separator))throw new IOException("数据包解压路径无效。");Files.createDirectories(target.getParentFile().toPath());if(Files.isSymbolicLink(target.toPath()))throw new IOException("数据包目标路径异常。");}
+                // Older archives remain valid, but retired diagnostic copies are not restored.
+                File target=extract==null||obsoleteDiagnostic(name)?null:new File(extract,name);if(target!=null){if(!target.getCanonicalPath().startsWith(extract.getCanonicalPath()+File.separator))throw new IOException("数据包解压路径无效。");Files.createDirectories(target.getParentFile().toPath());if(Files.isSymbolicLink(target.toPath()))throw new IOException("数据包目标路径异常。");}
                 MessageDigest hash=MessageDigest.getInstance("SHA-256");long size=0;byte[] bytes=new byte[65536];
                 try(InputStream in=zip.getInputStream(entry);OutputStream out=target==null?new OutputStream(){public void write(int b){}public void write(byte[] b,int off,int len){}}:new FileOutputStream(target)){
                     int n;while((n=in.read(bytes))!=-1){guard.check();size+=n;total+=n;if(size>wanted||total>MAX_BYTES)throw new IOException("数据包展开大小异常。");hash.update(bytes,0,n);out.write(bytes,0,n);}

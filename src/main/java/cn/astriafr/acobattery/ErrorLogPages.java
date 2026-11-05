@@ -27,7 +27,7 @@ final class ErrorLogPages {
         if(app.destroyed||app.contentFrame==null||app.clearingData)return;
         generation++;active=true;busy=false;localOffset=rootOffset=0;localDone=rootDone=false;localQueue.clear();rootQueue.clear();displayed.clear();
         if(page!=null&&page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
-        boolean dark=app.activeDarkTheme==null?app.systemDark():app.activeDarkTheme;
+        boolean dark=app.browser.activeDarkTheme==null?app.systemDark():app.browser.activeDarkTheme;
         int background=dark?Color.BLACK:Color.rgb(246,248,251),text=dark?Color.rgb(230,237,232):Color.rgb(24,38,56),muted=dark?Color.rgb(165,183,172):Color.rgb(96,113,103);
         LinearLayout layout=new LinearLayout(app);layout.setOrientation(LinearLayout.VERTICAL);layout.setPadding(app.dp(20),app.dp(16),app.dp(20),app.dp(12));layout.setBackgroundColor(background);
         LinearLayout header=new LinearLayout(app);header.setGravity(Gravity.CENTER_VERTICAL);
@@ -52,7 +52,7 @@ final class ErrorLogPages {
         if(busy||!active)return;busy=true;int token=generation;status.setText("正在清理日志…");more.setEnabled(false);
         app.worker.execute(()->{
             String failure="";
-            try{RootSession session=app.root;if(session==null||!app.rootReady)throw new java.io.IOException("后台未连接");JSONObject result=session.api("clear_error_logs");if(!result.optBoolean("ok"))throw new java.io.IOException(result.optString("error","后台清理失败"));}
+            try{RootSession session=app.startup.root;if(session==null||!app.startup.rootReady)throw new java.io.IOException("后台未连接");JSONObject result=session.api("clear_error_logs");if(!result.optBoolean("ok"))throw new java.io.IOException(result.optString("error","后台清理失败"));}
             catch(Exception e){failure="后台日志清理失败："+e.getMessage();}
             try{local.clear();}catch(Exception e){failure+=(failure.isEmpty()?"":"；")+"应用日志清理失败："+e.getMessage();}
             String message=failure;app.runOnUiThread(()->{if(!active||token!=generation||app.destroyed)return;busy=false;open();if(!message.isEmpty())Toast.makeText(app,message,Toast.LENGTH_LONG).show();else Toast.makeText(app,"错误日志已清理",Toast.LENGTH_SHORT).show();});
@@ -62,7 +62,7 @@ final class ErrorLogPages {
         int offset;
         synchronized(this){if(token!=generation||!(root?rootQueue:localQueue).isEmpty()||(root?rootDone:localDone))return;offset=root?rootOffset:localOffset;}
         JSONObject page;
-        if(root){RootSession session=app.root;if(session==null||!app.rootReady)throw new java.io.IOException("后台未连接，暂时只能显示应用内日志。");page=session.api("error_logs "+offset);}
+        if(root){RootSession session=app.startup.root;if(session==null||!app.startup.rootReady)throw new java.io.IOException("后台未连接，暂时只能显示应用内日志。");page=session.api("error_logs "+offset);}
         else page=local.list(offset,40);
         synchronized(this){
             if(token!=generation)return;ArrayDeque<JSONObject> queue=root?rootQueue:localQueue;
@@ -95,7 +95,7 @@ final class ErrorLogPages {
         });
     }
     void add(JSONObject item){
-        boolean dark=app.activeDarkTheme==null?app.systemDark():app.activeDarkTheme;
+        boolean dark=app.browser.activeDarkTheme==null?app.systemDark():app.browser.activeDarkTheme;
         LinearLayout row=new LinearLayout(app);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(app.dp(12),app.dp(13),app.dp(12),app.dp(13));
         android.graphics.drawable.GradientDrawable box=new android.graphics.drawable.GradientDrawable();box.setColor(dark?Color.rgb(15,23,18):Color.WHITE);box.setCornerRadius(app.dp(12));box.setStroke(app.dp(1),dark?Color.rgb(35,54,42):Color.rgb(225,231,239));row.setBackground(box);
         TextView title=new TextView(app);title.setText(item.optString("title","错误报告"));title.setTextSize(16);title.setTypeface(null,Typeface.BOLD);title.setTextColor(dark?Color.rgb(230,237,232):Color.rgb(24,38,56));title.setSingleLine(true);title.setEllipsize(TextUtils.TruncateAt.END);row.addView(title);
@@ -105,9 +105,9 @@ final class ErrorLogPages {
     void detail(JSONObject item){
         if(busy)return;busy=true;int token=generation;status.setText("正在读取报告…");app.worker.execute(()->{
             String report;
-            try{report=item.optString("origin").equals("root")?app.root.api("error_log "+item.getString("id")).getString("report"):local.read(item.getString("id"));}
+            try{report=item.optString("origin").equals("root")?app.startup.root.api("error_log "+item.getString("id")).getString("report"):local.read(item.getString("id"));}
             catch(Exception error){report="报告读取失败："+error.getMessage();}
-            String text=report;app.runOnUiThread(()->{if(!active||token!=generation||app.destroyed)return;busy=false;status.setText("");app.openReport(text,true);app.errorTitle.setText("错误日志详情");});
+            String text=report;app.runOnUiThread(()->{if(!active||token!=generation||app.destroyed)return;busy=false;status.setText("");app.startup.openReport(text,true);app.startup.errorTitle.setText("错误日志详情");});
         });
     }
 }

@@ -174,6 +174,11 @@ public final class SamplingTest {
         reader.invalidate();value=reader.read(1002,()->null,()->{throw new java.io.IOException("timeout");});check(!value.known&&value.diagnostics.contains("timeout"));
     }
     public static void main(String[] args)throws Exception{
+        MemoryStats memory=MemoryStats.parse("MemTotal: 11392228 kB\nMemFree: 824840 kB\nMemAvailable: 4639988 kB\n");
+        check(memory!=null&&memory.totalBytes==11665641472L&&memory.usedBytes==6914293760L);
+        check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
+        check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
+        for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
         chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();
         System.out.println("Sampling: independent tail rules, exact boundaries, optional charging-only logs, screen and power input fallback passed");
     }

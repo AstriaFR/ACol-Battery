@@ -9,7 +9,7 @@ const source=fs.readFileSync(path.join(root,'app.js'),'utf8'),html=fs.readFileSy
 const events=new Map(),warning={dataset:{},textContent:'正在连接…'};let status='等待 root 授权…';
 const window={AcoNative:{connectionStatus:()=>status},addEventListener:(event,handler)=>events.set(event,handler)};
 const context={window,$:()=>warning};vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('function connectionMessage('),source.indexOf('let listSelection=')),context);
+vm.runInContext(source.slice(source.indexOf('function connectionMessage('),source.indexOf('let uiSettings=')),context);
 assert.equal(warning.textContent,status);status='正在启动后台…';events.get('aco-connection')({detail:status});assert.equal(warning.textContent,status);
 assert.equal(context.connectionMessage('连接超时'),status,'native progress must remain visible during authorization/startup');
 warning.dataset.startupError='1';warning.textContent='页面启动失败';events.get('aco-connection')({detail:''});assert.equal(warning.textContent,'页面启动失败');
