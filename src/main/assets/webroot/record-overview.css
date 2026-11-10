@@ -52,14 +52,6 @@
 #detail .summary[data-mode=ended] .summary-metric>strong{min-height:calc(var(--ended-number-size)*1.2);line-height:1.2;align-items:baseline}
 #detail .summary[data-mode=ended] .summary-metric>strong::before{content:'\200b';flex:none;width:0;margin-right:-2px;font-size:var(--ended-number-size);line-height:1.2}
 
-#detail .summary .summary-remaining{gap:0;margin-top:6px;padding:0;border:0;border-radius:11px;background:var(--telemetry-neutral);grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-#detail .summary-remaining>div{min-width:0;padding:10px 9px}
-#detail .summary-remaining>div+div{padding-left:9px}
-#detail .summary-remaining small{margin-top:6px;font-size:9px;line-height:1.4}
-#detail .summary-frequencies{gap:0;margin-top:6px;padding:0;border:0;border-radius:10px;background:var(--telemetry-blue)}
-#detail .summary-cpu-frequencies{gap:0}
-#detail .summary-frequency-cpu,#detail .summary-frequency-gpu{padding:9px 7px;border:0}
-#detail .summary-frequencies small{margin-top:5px}
 
 @media(max-width:380px){
   #detail .summary[data-mode=live] .summary-metric:is([data-metric=cell1],[data-metric=cell2],[data-metric=voltage],[data-metric=temp])>strong{font-size:18px}

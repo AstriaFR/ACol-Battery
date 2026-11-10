@@ -27,7 +27,7 @@ export function createRecordDetail(options){
   let detail=null,activeId=null,request=0,detailBusy=0,zoomTimer,expanded=false,fullscreenAnchor=null;
   let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],streamPreview=false,reversePlot=false;
   let followRedrawPending=false;
-  let remainingTimer,remainingGeneration=0,remainingRecordId=null,gameFrequencies=null,lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
+  let remainingTimer,remainingGeneration=0,remainingRecordId=null,lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
   const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
   const intervalAppDetails=new IntervalAppDetails(chart,api,()=>detail?.record);
   const screenOffOverlay=new ScreenOffOverlay(chart,api,()=>!document.hidden&&!$('detail').hidden,message=>toast(message));
@@ -42,7 +42,8 @@ export function createRecordDetail(options){
   const readDetail=(...args)=>readRecordDetail(api,...args);
   const schedulePoll=()=>onRefresh();
   const renderApps=data=>drain.render(data),hideAppEnergyTip=()=>drain.hideTip();
-  function remainingEligible(){return !document.hidden&&!$('detail').hidden&&!$('confirm').open&&detail?.record.kind==='discharge'&&activeId!==null&&canEstimateRemaining(detail.record,lastStatus?.reading);}
+  function hasRemainingMetrics(){return !!detail?.record.active&&detail.record.kind==='discharge';}
+  function remainingEligible(){return !document.hidden&&!$('detail').hidden&&!$('confirm').open&&hasRemainingMetrics()&&activeId!==null&&canEstimateRemaining(detail.record,lastStatus?.reading);}
   function clearRemaining(){
     if($('remainingWh'))$('remainingWh').textContent='—';if($('remainingTime'))$('remainingTime').textContent='—';
   }
@@ -76,7 +77,7 @@ export function createRecordDetail(options){
     const button=el('button','i','remaining-info');button.type='button';
     button.setAttribute('aria-label','查看剩余能量和亮屏时长的估算说明');button.setAttribute('aria-haspopup','dialog');
     button.onclick=()=>{
-      if(detail?.record.kind!=='discharge')return;
+      if(!hasRemainingMetrics())return;
       history.pushState({page:'record',id:activeId,remainingExplanation:true},'',location.href);
       syncRemainingExplanation();
     };
@@ -84,7 +85,7 @@ export function createRecordDetail(options){
   }
   function syncRemainingExplanation(){
     const dialog=$('remainingExplanation'),state=history.state;
-    const show=state?.page==='record'&&state.id===activeId&&state.remainingExplanation&&detail?.record.kind==='discharge';
+    const show=state?.page==='record'&&state.id===activeId&&state.remainingExplanation&&hasRemainingMetrics();
     if(show&&!dialog.open)dialog.showModal();else if(!show&&dialog.open)dialog.close();
   }
   function dismissRemainingExplanation(){
@@ -129,7 +130,10 @@ export function createRecordDetail(options){
   }
   async function loadWindow(){
     if(activeId===null)return;const token=++request,id=activeId,[a,b]=chart.window;detailBusy++;
-    try{await loadCurve(id,Math.floor(a),Math.ceil(b),token,data=>{detail=data;applyChart(data,[a,b]);});}
+    try{await loadCurve(id,Math.floor(a),Math.ceil(b),token,data=>{
+      if(data.record.active!==detail.record.active){showDetail(data,true);return;}
+      detail=data;applyChart(data,[a,b]);
+    });}
     catch(e){if(current(token,id))toast(e.message);}
     finally{detailBusy--;schedulePoll(0);}
   }
@@ -153,7 +157,6 @@ export function createRecordDetail(options){
     beforeOpen();
     drain.close();
     performancePanel?.close();
-    gameFrequencies=null;
     stopRemaining();hideAppEnergyTip();
     clearTimeout(zoomTimer);
     const token=++request;activeId=id;detail=null;streamId=null;streamPoints=[];streamAfter=0;streamPreview=false;followLive=false;followRedrawPending=false;reversePlot=false;detailBusy++;
@@ -173,7 +176,7 @@ export function createRecordDetail(options){
   function showDetail(data,preserve=false,live=false){
     followRedrawPending=false;
     detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
-    if(!data.loading)liveChannel.setMode(r.active?(recordFast(r)?2:0):3);
+    if(!data.loading)liveChannel.setMode(r.active?0:3);
     if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
     if(data.loading)$('apps').hidden=true;
     $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
@@ -198,27 +201,9 @@ export function createRecordDetail(options){
     renderDetailNote(data);
     if(!preserve&&(history.state?.page!=='record'||history.state.id!==r.id))history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);
   }
-  function frequencyCell(label,kind){
-    const cell=el('div',undefined,kind),value=el('strong');
-    value.append(el('span','—','frequency-value'),el('span','MHz','metric-unit'));
-    cell.append(value,el('small',label));return cell;
-  }
-  function renderGameFrequencies(data=gameFrequencies){
-    const row=$('summary').querySelector('.summary-frequencies');if(!row)return;
-    gameFrequencies=data;
-    const clusters=Array.isArray(data?.clusters)&&data.clusters.length?data.clusters:[{label:'CPU',mhz:null}];
-    const profile=JSON.stringify(clusters.map(c=>c.label)),cpu=row.querySelector('.summary-cpu-frequencies');
-    if(row.dataset.profile!==profile){
-      row.dataset.profile=profile;cpu.replaceChildren(...clusters.map(c=>frequencyCell(c.label,'summary-frequency-cpu')));
-      row.style.gridTemplateColumns=`minmax(0,${clusters.length}fr) minmax(0,1fr)`;
-      cpu.style.gridTemplateColumns=`repeat(${clusters.length},minmax(0,1fr))`;
-      row.classList.toggle('many-clusters',clusters.length>3);
-    }
-    for(let i=0;i<clusters.length;i++)cpu.children[i].querySelector('.frequency-value').textContent=fmt(clusters[i].mhz);
-    row.querySelector('.summary-frequency-gpu .frequency-value').textContent=fmt(data?.gpuMHz);
-  }
   function renderSummary(r,failed=false){
     const summary=$('summary'),active=!!r.active,live=!failed&&recordIsLive(r,lastStatus);
+    if(!active&&remainingRecordId!==null)stopRemaining();
     const reading=live?lastStatus.reading??{}:{},flow=valid(reading.power)&&reading.power!==0?(reading.power>0?'charge':'discharge'):r.kind;
     const cells=live?(reading.cellCount??recordCells(r)):recordCells(r);
     const displayCurrent=valid(reading.displayCurrent)?reading.displayCurrent:valid(reading.current)?reading.current*(cells===2?2:1):null;
@@ -239,7 +224,7 @@ export function createRecordDetail(options){
       ['temp',number(reading.temp,1),'温度','°C',null],
       ['power',signed(reading.power),r.kind==='discharge'?'实时功率':'功率','W',flow]
     ];
-    if(r.kind==='discharge')primary.push(
+    if(active&&r.kind==='discharge')primary.push(
       ['remainingWh',null,'估算剩余能量','Wh',null],
       ['remainingTime',null,'估算亮屏时长','',null]
     );
@@ -264,17 +249,6 @@ export function createRecordDetail(options){
       const meta=el('div',undefined,'summary-meta');
       meta.append(el('span','','summary-state'),el('span','','summary-capacity'),el('span','','summary-change'),el('time','','summary-time'));
       summary.append(grid);
-      if(r.kind==='discharge'&&!active){
-        const remaining=el('div',undefined,'summary-remaining');
-        const energy=el('div'),energyValue=el('strong'),energyText=el('span',wh??'—');energyText.id='remainingWh';
-        energyValue.append(energyText,el('span','Wh','metric-unit'),remainingInfoButton());energy.append(energyValue,el('small','估算剩余能量'));
-        const runtime=el('div'),runtimeValue=el('strong',timeLeft??'—');runtimeValue.id='remainingTime';runtime.append(runtimeValue,el('small','估算亮屏时长'));
-        remaining.append(energy,runtime);summary.append(remaining);
-      }
-      if(recordFast(r)){
-        const frequencies=el('div',undefined,'summary-frequencies');frequencies.setAttribute('aria-label','当前 CPU 与 GPU 频率');
-        frequencies.append(el('div',undefined,'summary-cpu-frequencies'),frequencyCell('GPU','summary-frequency-gpu'));summary.append(frequencies);
-      }
       summary.append(meta);
     }
     for(const [key,value,label,,color]of values){
@@ -295,7 +269,6 @@ export function createRecordDetail(options){
     time.textContent=live&&valid(reading.wall)?new Date(reading.wall).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
     time.dateTime=live&&valid(reading.wall)?new Date(reading.wall).toISOString():'';
     time.setAttribute('aria-label',`读数时间 ${time.textContent}`);
-    if(recordFast(r))renderGameFrequencies();
   }
   function renderDetailNote(data){
     const r=data.record;
@@ -381,16 +354,17 @@ export function createRecordDetail(options){
       if(packet.record){
         for(const point of points)if(point[0]>streamAfter){streamPoints.push(point);streamAfter=point[0];}
         const pendingChanged=typeof packet.usagePending==='boolean'&&packet.usagePending!==detail.usagePending;
-        const changed=points.length>0||packet.record.active!==detail.record.active||pendingChanged||valid(packet.statsVersion)&&packet.statsVersion!==detail.statsVersion;
+        const activeChanged=packet.record.active!==detail.record.active;
+        const changed=points.length>0||activeChanged||pendingChanged||valid(packet.statsVersion)&&packet.statsVersion!==detail.statsVersion;
         detail={...detail,record:packet.record,ranges:packet.ranges??detail.ranges,rawCount:packet.rawCount??detail.rawCount,statsVersion:packet.statsVersion??detail.statsVersion,statsEpoch:packet.statsEpoch??detail.statsEpoch,usagePending:packet.usagePending??detail.usagePending,apps:packet.apps??detail.apps,drainSummary:packet.drainSummary??detail.drainSummary};
         if(changed){
           if(followLive&&!chart.pointers.size)showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);
           else{followRedrawPending=followLive;chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}renderDetailNote(detail);renderFollow();renderChartInfo();}
         }
         renderSummary(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
+        if(activeChanged){liveChannel.setMode(detail.record.active?0:3);syncRemainingExplanation();}
       }
     }
-    if(current(token)&&recordFast(detail?.record))renderGameFrequencies(packet.frequencies??null);
     if(current(token))startRemaining();
   }
   function bind(){
@@ -424,10 +398,10 @@ export function createRecordDetail(options){
     theme(){if(activeId!==null&&detail)buildLegend(detail.record.kind);chart.draw();performancePanel?.refreshTheme();},
     syncHistory:syncRemainingExplanation,
     backFullscreen(){if(performancePanel?.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
-    pause(){stopRemaining();drain.pause();gameFrequencies=null;renderGameFrequencies(null);},
+    pause(){stopRemaining();drain.pause();},
     resume(){startRemaining();drain.resume();},pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
     prune(){drain.prune();intervalAppDetails.prune();},
     removeCaches(id){drain.remove(id);intervalAppDetails.remove(id);if(activeId===id)drain.close();},
-    failure(){gameFrequencies=null;renderGameFrequencies(null);if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}
+    failure(){if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}
   };
 }

@@ -76,8 +76,7 @@ final class PerformanceCollector implements AutoCloseable {
         });}catch(RejectedExecutionException e){pending.set(false);}
     }
     @Override public void close(){closed=true;worker.shutdownNow();}
-    /** Visible game pages read frequencies only; they never trigger FPS/utilization collection or DB writes. */
-    JSONObject frequencies()throws JSONException{
+    private JSONObject frequencies()throws JSONException{
         synchronized(hardwareLock){
             long now=SystemClock.elapsedRealtime();
             if(frequencySnapshot!=null&&now-frequencyAt<250)return frequencySnapshot;

@@ -1,6 +1,6 @@
 // Fit only data lines that cannot wrap. Names and explanatory text keep their
 // normal ellipsis/wrapping rules. Batch reads/writes once per frame, never poll.
-const selector='.livegrid strong,.record-date,.summary-metric>strong,.summary-remaining>div>strong,.summary-frequencies strong,.drain-item-values,.appEnergy strong,.home-usage-summary>.screen-time-total,.usage-detail-summary>.screen-time-total,.usage-week-average>strong';
+const selector='.livegrid strong,.record-date,.summary-metric>strong,.drain-item-values,.appEnergy strong,.home-usage-summary>.screen-time-total,.usage-detail-summary>.screen-time-total,.usage-week-average>strong';
 export function installLineFitting(){
   let frame=0;const pending=new Set();
   const recordScroll=document.querySelector('.record-scroll'),observed=new WeakSet(),visible=new WeakSet();

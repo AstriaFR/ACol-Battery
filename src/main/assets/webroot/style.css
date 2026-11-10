@@ -183,18 +183,6 @@ canvas{position:absolute;inset:0;display:block;width:100%;height:100%;touch-acti
 .screen-time-axis span:nth-child(9){left:97.916667%}
 .screen-time-empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;color:var(--muted);font-size:12px}
 .screen-time-hint{margin:9px 0 0;min-height:18px;font-size:10px;line-height:1.6;color:var(--muted)}
-.summary-remaining{display:grid;grid-template-columns:1fr 1.5fr;gap:12px;border-top:1px solid #edf0f5;padding-top:9px;margin-top:10px}
-.summary-remaining>div+div{border-left:1px solid #edf0f5;padding-left:12px}
-.summary .summary-remaining strong{color:var(--text);font-size:18px;line-height:1.4;white-space:normal}
-.summary-frequencies{display:grid;border-top:1px solid #edf0f5;margin-top:8px;padding-top:8px;min-width:0}
-.summary-cpu-frequencies{display:grid;min-width:0}
-.summary-frequency-cpu,.summary-frequency-gpu{min-width:0;padding:0 7px;border-left:1px solid #edf0f5}
-.summary-frequency-cpu:first-child{border-left:0;padding-left:0}
-.summary-frequency-gpu{padding-right:0}
-.summary-frequencies strong{font-size:15px;font-weight:550;letter-spacing:0;gap:2px;color:var(--text)}
-.summary-frequencies .metric-unit{font-size:8px}
-.summary-frequencies small{font-size:9px;white-space:nowrap}
-.summary-frequencies.many-clusters strong{font-size:12px}
 .danger{color:#b03d35;border-color:#ecc5c1;background:#fff9f8}
 dialog{background:#fff;color:var(--text);border:1px solid var(--line);border-radius:16px;width:min(90vw,400px);padding:25px;box-shadow:0 16px 64px #15325829}
 dialog::backdrop{background:#20354c55;backdrop-filter:blur(3px)}
@@ -427,7 +415,7 @@ body:has(main:not([hidden])){overflow:hidden}
 :root[data-theme=dark] .record-duration{color:#83988a}
 :root[data-theme=dark] .empty{background:#070a08;border-color:#34473a}
 :root[data-theme=dark] .record[data-active="1"].charge,:root[data-theme=dark] .record[data-active="1"].discharge{border-color:var(--record-emphasis);box-shadow:inset 0 0 0 .25px var(--record-emphasis)}
-:root[data-theme=dark] .summary-metric,:root[data-theme=dark] .summary-meta,:root[data-theme=dark] .summary-remaining,:root[data-theme=dark] .summary-remaining>div+div,:root[data-theme=dark] .summary-frequencies,:root[data-theme=dark] .summary-frequency-cpu,:root[data-theme=dark] .summary-frequency-gpu{border-color:#1d2a21}
+:root[data-theme=dark] .summary-metric,:root[data-theme=dark] .summary-meta{border-color:#1d2a21}
 :root[data-theme=dark] .summary-time,:root[data-theme=dark] .chartinfo{color:#9aac9f}
 :root[data-theme=dark] .chartpanel,:root[data-theme=dark] .expanded{background:#000}
 :root[data-theme=dark] .plotwrap{background:#000}
@@ -845,11 +833,6 @@ body:has(#detail.record-detail:not([hidden])){background:var(--plot-bg)}
 #detail .summary[data-mode=live] .summary-metric:nth-child(n+4)>strong{font-size:17px}
 #detail .summary[data-mode=live] [data-metric=remainingTime]>strong{font-size:14px}
 #detail .summary [data-metric=power] .metric-value,#detail .summary #remainingWh{font-size:20px}
-#detail .summary-remaining{margin-top:14px;padding-top:12px;border-color:var(--line)}
-#detail .summary-remaining>div+div{border-left:0}
-#detail .summary .summary-remaining strong{font-size:19px;font-weight:550}
-#detail .summary-frequencies{margin-top:12px;padding-top:12px;border-color:var(--line)}
-#detail .summary-frequency-cpu,#detail .summary-frequency-gpu{border-left:0}
 #detail .summary-meta{gap:5px 10px;margin-top:12px;padding-top:8px;border-color:var(--line);font-size:10px;line-height:1.5}
 #detail .summary[data-mode=ended] .summary-meta{border-top:0;padding-top:0}
 #detail .record-detail-section:not(.expanded){margin:0;border:0;border-radius:0;background:transparent;box-shadow:none}

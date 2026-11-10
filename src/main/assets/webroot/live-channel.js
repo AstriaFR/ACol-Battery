@@ -153,7 +153,7 @@ export class LiveChannel{
     this.selectSmall(args[3]);
     await this.wait(this.consumed);this.consumed=this.sequence;
     const [id,after,wantList,small]=args,packet=this.latest;
-    const result={ok:true,status:packet.status,activeRecord:packet.activeRecord,batteryInfo:this.infoSnapshot,frequencies:packet.frequencies};
+    const result={ok:true,status:packet.status,activeRecord:packet.activeRecord,batteryInfo:this.infoSnapshot};
     if(id>0&&this.rows.has(id)){
       const row=this.rows.get(id);
       Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter:null,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,statsEpoch:row.statsEpoch,usagePending:row.usagePending,apps:row.apps,drainSummary:row.drainSummary});

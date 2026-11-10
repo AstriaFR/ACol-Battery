@@ -35,8 +35,6 @@
 #detail .summary [data-metric=current] .metric-value{min-width:0}
 #detail .summary[data-mode=live] .summary-metric:is([data-metric=power],[data-metric=remainingWh])>strong{font-size:20px}
 #detail .summary [data-metric=power] .metric-value,#detail .summary #remainingWh{font-size:inherit}
-#detail .summary-frequencies strong{min-width:0}
-.summary-frequency-cpu,.summary-frequency-gpu{overflow:hidden}
 #detail .chartpanel:not(.expanded)>.plotwrap{--plot-height:clamp(320px,calc(min(100vw,480px)*.94),452px)}
 #detail .chartpanel:not(.expanded)>.legend{grid-template-columns:repeat(2,minmax(0,1fr))}
 #detail .chartpanel:not(.expanded)>.legend label{grid-column:auto}

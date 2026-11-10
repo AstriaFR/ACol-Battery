@@ -1107,7 +1107,6 @@ public final class Main {
     }
     void watchFrontend(LocalSocket socket,JSONArray args)throws Exception {
         if(args!=null&&args.optInt(2,0)==1){watchBatteryInfo(socket,args.optInt(3,1)==1);return;}
-        boolean showFrequencies=args!=null&&args.optInt(2,0)==2;
         boolean summaryOnly=args!=null&&args.optInt(2,0)==3;
         boolean includeList=args==null||args.optInt(5,1)==1;
         long id=args==null?0:Math.max(0,args.optLong(0,0)),after=args==null?0:Math.max(0,args.optLong(1,0));
@@ -1116,8 +1115,6 @@ public final class Main {
         // A bounded lease also closes an orphaned stream if a renderer dies before receiving its PID.
         while(SystemClock.elapsedRealtime()-began<300000) {
             long started=SystemClock.elapsedRealtime();JSONObject packet;boolean more;
-            JSONObject frequencies=null;
-            if(showFrequencies)try{frequencies=performance.frequencies();}catch(Exception ignored){}
             synchronized(mutex) {
                 long preferred=preferredSession();
                 JSONObject previous=null;boolean changed=id!=preferred;
@@ -1150,7 +1147,6 @@ public final class Main {
             }
             omitRepeatedUsage(packet,sentUsage);
             for(String key:new String[]{"previous","parallel","parallelPrevious"})omitRepeatedUsage(packet.optJSONObject(key),sentUsage);
-            if(showFrequencies)packet.put("frequencies",frequencies==null?JSONObject.NULL:frequencies);
             socket.getOutputStream().write((packet.toString()+"\n").getBytes(StandardCharsets.UTF_8));
             if(!more)Thread.sleep(Math.max(100,1000-(SystemClock.elapsedRealtime()-started)));
         }
