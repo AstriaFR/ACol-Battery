@@ -1,5 +1,11 @@
 # 第三方说明
 
+## 项目版权
+
+Copyright 2026 AstriaFR.
+
+项目代码采用 [GNU GPL 第 3 版（GPL-3.0-only）](LICENSE)。
+
 ## 加加电池
 
 电池底层字段、单双电芯识别及 FCC、SOH 补偿反推方法参考 [PlusPlusBattery](https://github.com/dijia1124/PlusPlusBattery)。本项目独立实现界面、记录与后台逻辑，相关参考代码的 MIT 许可及版权声明保留于 [licenses/PlusPlusBattery-MIT.txt](licenses/PlusPlusBattery-MIT.txt)。
