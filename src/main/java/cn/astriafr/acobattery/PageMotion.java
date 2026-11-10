@@ -7,6 +7,7 @@ import android.view.animation.PathInterpolator;
 /** Native overlays follow the same short navigation rhythm as WebView pages. */
 final class PageMotion {
     private static final String CLOSING="aco-page-closing";
+    private static final PathInterpolator EASE=new PathInterpolator(.2f,.65f,.3f,1);
     private PageMotion(){}
     private static void reset(View view){view.setAlpha(1);view.setTranslationX(0);}
     static boolean closing(View view){return CLOSING.equals(view.getTag());}
@@ -14,8 +15,8 @@ final class PageMotion {
         view.animate().withEndAction(null).cancel();view.setTag(null);reset(view);view.setVisibility(View.VISIBLE);
         if(!ValueAnimator.areAnimatorsEnabled())return;
         float density=view.getResources().getDisplayMetrics().density;
-        view.setAlpha(.65f);view.setTranslationX(20*density);
-        view.animate().alpha(1).translationX(0).setDuration(220).setInterpolator(new PathInterpolator(.22f,.8f,.25f,1)).start();
+        view.setAlpha(.9f);view.setTranslationX(10*density);
+        view.animate().alpha(1).translationX(0).setDuration(140).setInterpolator(EASE).start();
     }
     static void hide(View view){
         if(view==null||CLOSING.equals(view.getTag()))return;
@@ -24,7 +25,7 @@ final class PageMotion {
             view.setVisibility(View.GONE);reset(view);return;
         }
         view.setTag(CLOSING);
-        view.animate().alpha(0).translationX(14*view.getResources().getDisplayMetrics().density).setDuration(150)
-            .setInterpolator(new PathInterpolator(.22f,.8f,.25f,1)).withEndAction(()->{view.setVisibility(View.GONE);view.setTag(null);reset(view);}).start();
+        view.animate().alpha(0).translationX(6*view.getResources().getDisplayMetrics().density).setDuration(95)
+            .setInterpolator(EASE).withEndAction(()->{view.setVisibility(View.GONE);view.setTag(null);reset(view);}).start();
     }
 }

@@ -6,6 +6,8 @@ import android.os.Looper;
 import android.os.SystemClock;
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.json.*;
 
@@ -17,7 +19,7 @@ public final class DeferredStatsTest {
     static long count(Main m,String sql){try(Cursor c=m.db.rawQuery(sql,null)){c.moveToFirst();return c.getLong(0);}}
     static double amount(Main m,long id,String field){try(Cursor c=m.db.rawQuery("SELECT SUM("+field+") FROM apps WHERE session=?",new String[]{""+id})){c.moveToFirst();return c.getDouble(0);}}
     static void near(double a,double b,String why){check(Math.abs(a-b)<1e-7,why+": "+a+" != "+b);}
-    static void close(Main m)throws Exception{m.performance.close();m.powerIndicator.close();m.db.close();m.lock.release();m.lockFile.close();}
+    static void close(Main m)throws Exception{m.usageWorker.shutdownNow();m.performance.close();m.powerIndicator.close();m.db.close();m.lock.release();m.lockFile.close();}
     static Main open(Context ctx,File dir)throws Exception{Main m=new Main(ctx,new File(dir,"runtime"),dir);m.performance.close();m.sampling.interactive=true;return m;}
     static void ordinary(Context ctx,File dir)throws Exception{
         Main m=open(ctx,dir);List<Core.Event> events=new ArrayList<>(Arrays.asList(new Core.Event(wall,15,null),new Core.Event(wall,18,null),new Core.Event(wall,1,"a","A",1),new Core.Event(wall+60000,1,"b","B",2)));
@@ -25,20 +27,43 @@ public final class DeferredStatsTest {
         m.append(reading(120000,4990,false));check(count(m,"SELECT COUNT(*) FROM apps")==0,"no background attribution");check(count(m,"SELECT COUNT(*) FROM usage_raw")==2,"normal raw cadence");
         JSONObject initial=m.dispatch(new JSONObject().put("action","detail").put("args",new JSONArray().put(id)));
         check(initial.getBoolean("usagePending")&&initial.getJSONArray("apps").length()==0&&reads.get()==0,"first detail exposes pending accounting without blocking on event queries");
-        m.deferred.capture(false,0);check(reads.get()==1,"initial batch read");m.deferred.capture(false,0);check(reads.get()==1,"no repeated event query before hourly deadline");
+        m.deferred.capture(false,0);check(reads.get()==0,"screen off defers the initial batch");
+        m.deferred.captureSchedule.screen(true,SystemClock.elapsedRealtime());
+        m.deferred.capture(false,0);check(reads.get()==1,"initial batch read");m.deferred.capture(false,0);check(reads.get()==1,"no repeated event query before the two-hour deadline");
         check(count(m,"SELECT COUNT(*) FROM apps")==0,"capture never calculates");m.deferred.capture(true,id);m.deferred.calculate(id);near(amount(m,id,"mah"),10,"first RM interval");near(amount(m,id,"ms"),120000,"usage duration");
         JSONObject settled=m.dispatch(new JSONObject().put("action","settle_usage").put("args",new JSONArray().put(id)));
         check(!settled.getBoolean("usagePending")&&settled.getJSONArray("apps").length()>0,"settlement completion returns ready totals");
         m.deferred.calculate(id);near(amount(m,id,"mah"),10,"cached result is idempotent");
-        m.append(reading(240000,4980,false));m.deferred.capture(true,id);m.deferred.calculate(id);near(amount(m,id,"mah"),20,"incremental result");
+        m.append(reading(240000,4980,false));m.deferred.capture(true,id);
+        DeferredStats.Settlement stale=m.deferred.plan(id);
+        m.db.execSQL("UPDATE usage_deferred SET event_revision=event_revision+1 WHERE session=?",new Object[]{id});
+        m.deferred.commit(stale);near(amount(m,id,"mah"),10,"outdated event snapshot cannot write totals");
+        m.deferred.calculate(id);near(amount(m,id,"mah"),20,"incremental result");
         near(amount(m,id,"energy_mwh"),Core.dischargeEnergyMwh(4000,4000,20),"energy formula preserved");
         check(m.deferred.intervalApps(id,0).getJSONArray("apps").getJSONArray(1).getString(1).equals("a"),"top app tie resolved deterministically");
         long revision=m.deferred.appRevision(id);m.db.execSQL("INSERT INTO usage_events VALUES(?,?,?,?,?,?)",new Object[]{id,wall+30000,1,"c","C",3});m.db.execSQL("UPDATE usage_deferred SET dirty=1 WHERE session=?",new Object[]{id});
         check(m.deferred.pending(id),"late-event repair is pending even without new RM samples");
         m.deferred.calculate(id);near(amount(m,id,"mah"),20,"late-event rebuild does not double count");check(m.deferred.appRevision(id)==revision+1,"repair invalidates frontend cache");
-        close(m);m=open(ctx,dir);m.deferred.calculate(id);near(amount(m,id,"mah"),20,"persistent calculation cache");close(m);
+        check(count(m,"SELECT COUNT(*) FROM usage_events")>0&&count(m,"SELECT finalized FROM usage_deferred")==0,"active result retains inputs for later repair");
+        close(m);m=open(ctx,dir);m.deferred.calculate(id);near(amount(m,id,"mah"),20,"persistent calculation cache");
+        m.db.execSQL("UPDATE sessions SET pct_end=60 WHERE id=?",new Object[]{id});
+        m.session=id;m.state=0;m.finish("plugged");
+        m.deferred.reader=(a,b)->Collections.singletonList(new Core.Event(wall+230000,1,"tail","Tail",4));
+        long end=wall+240000;
+        m.deferred.capture(true,id,end+DeferredStats.TAIL_GRACE_MS-1);m.deferred.calculate(id);
+        check(count(m,"SELECT finalized FROM usage_deferred")==0&&m.deferred.pending(id),"already calculated record awaits a second read");
+        long beforeTail=m.deferred.appRevision(id);
+        m.deferred.capture(true,id,end+DeferredStats.TAIL_GRACE_MS);m.deferred.calculate(id);
+        check(m.deferred.appRevision(id)==beforeTail+1,"late tail event repairs the saved attribution");
+        check(count(m,"SELECT finalized FROM usage_deferred")==1&&!m.deferred.pending(id),"tail recheck allows finalization");
+        check(count(m,"SELECT COUNT(*) FROM usage_events")==0&&count(m,"SELECT COUNT(*) FROM usage_raw")==0,"finalization releases inputs");
+        m.deferred.saveEvents(Collections.singletonList(new DeferredStats.Pending(id,wall,wall+240000)),events);
+        m.deferred.calculate(id);near(amount(m,id,"mah"),20,"stale capture cannot change finalized results");
+        check(count(m,"SELECT COUNT(*) FROM usage_events")==0,"stale capture cannot restore deleted inputs");
+        check(m.deferred.intervalApps(id,0).getJSONArray("apps").length()==3,"finalized intervals remain available");close(m);
     }
     static void game(Context ctx,File dir)throws Exception{
+        wall=System.currentTimeMillis()-600000;
         Main m=open(ctx,dir);m.state=0;m.fastEnabled=true;m.withGame(()->{});final Main owner=m;
         m.withGame(()->{owner.begin(reading(0,5000,false));for(int i=1;i<=6;i++)owner.append(reading(i*10000,5000-i,false));});long id=m.gameTrack.session;
         check(count(m,"SELECT COUNT(*) FROM usage_raw WHERE session="+id)==2,"game stats only minute snapshots");check(count(m,"SELECT COUNT(*) FROM apps WHERE session="+id)==0,"game attribution deferred");
@@ -46,7 +71,11 @@ public final class DeferredStatsTest {
         m.db.execSQL("UPDATE usage_deferred SET event_wall=? WHERE session=?",new Object[]{wall+60000,id});m.deferred.calculate(id);near(amount(m,id,"mah"),6,"game minute RM");
         // A charging endpoint must not suppress the following explicitly discharged interval.
         m.deferred.raw(id,base,reading(120000,5010,true),0,90000,false);m.deferred.raw(id,base,reading(180000,5005,false),0,90000,true);
-        m.db.execSQL("UPDATE usage_deferred SET event_wall=? WHERE session=?",new Object[]{wall+180000,id});m.deferred.calculate(id);near(amount(m,id,"mah"),11,"charge gains excluded; subsequent discharge counted");close(m);
+        m.db.execSQL("UPDATE sessions SET active=0 WHERE id=?",new Object[]{id});
+        DeferredStats backup=new DeferredStats(ctx,m.store,null);backup.reader=(a,b)->Collections.emptyList();backup.settleForBackup();
+        near(amount(m,id,"mah"),11,"backup finishes game stats with charge gains excluded");
+        check(count(m,"SELECT finalized FROM usage_deferred")==1&&count(m,"SELECT COUNT(*) FROM usage_events")==0,"backup marks complete and removes game events");
+        backup.settleForBackup();near(amount(m,id,"mah"),11,"repeated backup does not recalculate finalized records");close(m);
     }
     static void baseline(Context ctx,File dir)throws Exception{
         Main m=open(ctx,dir);m.state=0;m.begin(reading(0,5000,false));long id=m.session;
@@ -73,11 +102,32 @@ public final class DeferredStatsTest {
         JSONObject identities=m.dispatch(new JSONObject().put("action","cache_records").put("args",new JSONArray().put(old).put(999999)));
         check(identities.getJSONArray("records").length()==1&&identities.getJSONArray("records").getJSONArray(0).getLong(0)==old&&identities.getJSONArray("records").getJSONArray(0).getLong(1)==wall,"cache GC returns the full existing record identity");
         m.state=0;m.begin(reading(0,5000,false));long id=m.session;m.append(reading(120000,4990,false));m.deferred.reader=(a,b)->{throw new java.io.IOException("simulated unavailable usage service");};
-        m.deferred.capture(true,id);m.deferred.calculate(id);check(count(m,"SELECT COUNT(*) FROM apps WHERE session="+id)==0,"failed capture stays pending");
+        try{m.deferred.settleForBackup();throw new AssertionError("backup accepted pending usage");}catch(java.io.IOException expected){}
+        check(count(m,"SELECT COUNT(*) FROM apps WHERE session="+id)==0&&count(m,"SELECT COUNT(*) FROM usage_raw WHERE session="+id)==2,"failed capture stays pending with its inputs");
         check(!m.deferred.intervalApps(id,0).getBoolean("complete"),"pending intervals are never cached as final empty results");
         check(m.deferred.pending(id),"failed first event read remains pending for foreground retry");
-        m.deferred.reader=(a,b)->Arrays.asList(new Core.Event(wall,15,null),new Core.Event(wall,18,null),new Core.Event(wall,1,"recovered","Main",1));
-        JSONObject recovered=m.dispatch(new JSONObject().put("action","settle_usage").put("args",new JSONArray().put(id)));
+        CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);AtomicInteger calls=new AtomicInteger();
+        m.deferred.reader=(a,b)->{
+            calls.incrementAndGet();entered.countDown();
+            if(!release.await(5,TimeUnit.SECONDS))throw new IllegalStateException("test event reader did not resume");
+            return Arrays.asList(new Core.Event(wall,15,null),new Core.Event(wall,18,null),new Core.Event(wall,1,"recovered","Main",1));
+        };
+        JSONObject settle=new JSONObject().put("action","settle_usage").put("args",new JSONArray().put(id));
+        synchronized(m.mutex){check(m.dispatch(settle).getBoolean("settling"),"settlement responds before event read");}
+        try{
+            check(entered.await(2,TimeUnit.SECONDS),"background event reader entered");
+            synchronized(m.mutex){
+                check(m.dispatch(settle).getBoolean("usagePending"),"duplicate request returns last committed data");
+                check(m.usageQueued.size()==1&&calls.get()==1,"requests coalesce while the sampler mutex stays available");
+            }
+        }finally{release.countDown();}
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
+        for(;;){
+            synchronized(m.mutex){if(!m.usageQueued.contains(id))break;}
+            check(System.nanoTime()<deadline,"asynchronous settlement finishes");Thread.sleep(20);
+        }
+        JSONObject recovered;
+        synchronized(m.mutex){recovered=m.dispatch(settle);}
         check(!recovered.getBoolean("usagePending")&&recovered.getJSONArray("apps").length()>0,"retry completes without another battery sample");
         m.append(reading(240000,4980,false));
         long beforeLate=m.deferred.appRevision(id);
@@ -96,7 +146,7 @@ public final class DeferredStatsTest {
     public static void main(String[] args)throws Exception{
         File root=new File(args[0]);check(root.getPath().startsWith("/data/local/tmp/acol-deferred-test-")&&!root.exists(),"new isolated directory required");
         Looper.prepareMainLooper();Class<?> at=Class.forName("android.app.ActivityThread");Object thread=at.getMethod("systemMain").invoke(null);Context ctx=(Context)at.getMethod("getSystemContext").invoke(thread);
-        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));
-        System.out.println("PASS: raw-only background, hourly event cadence, foreground incremental/idempotent/persistent accounting, late-event repair, game charge boundaries, active legacy baseline");System.exit(0);
+        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));wall=System.currentTimeMillis();baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));
+        System.out.println("PASS: raw-only background, screen-aware event cadence, foreground incremental/idempotent/persistent accounting, late-event repair, game charge boundaries, active legacy baseline");System.exit(0);
     }
 }

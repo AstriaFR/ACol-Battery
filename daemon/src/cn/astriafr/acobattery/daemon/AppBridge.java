@@ -49,7 +49,7 @@ public final class AppBridge {
         if(words.length<1||words.length>17)throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
-            if(!java.util.Arrays.asList("status","list","detail","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
+            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
             if(action.equals("daily_usage")){
                 if(words.length!=4||!words[1].matches("[0-9]{1,20}")||!words[2].matches("[0-9]{1,20}")||!words[3].matches("[A-Za-z0-9_-]{1,4096}"))throw new IllegalArgumentException("使用情况参数无效");
             }else if(action.equals("error_log")){
@@ -71,30 +71,31 @@ public final class AppBridge {
         try{
             if("initialize".equals(request.optString("action"))){
                 String owner=Admin.ownerToken(android.os.Process.myPid());
-                try{
-                    long deadline=OperationTimeout.deadline();JSONObject current=Admin.status(deadline);
-                    send(new JSONObject().put("id",id).put("event","startup_phase").put("message",Admin.ready(current)?"正在连接后台…":"正在启动后台…"));
-                    JSONObject healthy=Admin.ensure(current,deadline);
-                    if(new File(Owner.BASE,RecordingGate.DISABLED).exists()){
-                        JSONObject paused=api("set_recording",new JSONArray().put(0),OperationTimeout.remaining(deadline));
-                        if(!paused.optBoolean("ok"))throw new IOException(paused.optString("error","无法暂停记录。"));
-                        healthy=Admin.status(deadline);if(!Admin.ready(healthy))throw new IOException("后台连接尚未就绪。");
-                    }
-                    if(request.optBoolean("commit"))Admin.transaction().commit(owner);
-                    java.nio.file.Files.write(new File(Owner.BASE,"initialized").toPath(),new byte[0]);
-                    if(!StartupFeedback.notices(null,healthy).isEmpty()){
-                        try{
-                            int remaining=OperationTimeout.remaining(deadline);
-                            if(remaining>500)healthy.put("fallbackDiagnostics",api("diagnostics",new JSONArray(),Math.min(1000,remaining-250)));
-                            else healthy.put("diagnosticsError","初始化已完成，剩余时间不足，跳过附加后台日志读取。");
-                        }
-                        catch(Exception diagnosticError){healthy.put("diagnosticsError",diagnosticError.toString());}
-                    }
-                    send(new JSONObject().put("id",id).put("event","startup_ready").put("status",healthy));
-                }catch(Exception failure){
-                    try{Admin.transaction().recover(owner,Admin::ownerAlive,Admin.updateControl(true));}catch(Exception recovery){failure.addSuppressed(recovery);}
-                    throw failure;
+                long deadline=OperationTimeout.deadline(request.optInt("timeoutMs",OperationTimeout.MAX_MS));
+                JSONObject current=Admin.status(deadline);
+                send(new JSONObject().put("id",id).put("event","startup_phase").put("message",Admin.ready(current)?"正在连接后台…":"正在启动后台…"));
+                JSONObject healthy=Admin.ensure(current,deadline);
+                if(new File(Owner.BASE,RecordingGate.DISABLED).exists()&&healthy.optBoolean("recordingEnabled")){
+                    JSONObject paused=api("set_recording",new JSONArray().put(0),OperationTimeout.remaining(deadline));
+                    if(!paused.optBoolean("ok"))throw new IOException(paused.optString("error","无法暂停记录。"));
+                    healthy=Admin.status(deadline);if(!Admin.ready(healthy))throw new IOException("后台连接尚未就绪。");
                 }
+                if(request.optBoolean("commit")){
+                    if(!healthy.optBoolean("recorderReady"))throw new IOException("新版记录后台尚未完成启动检查。");
+                    OperationTimeout.remaining(deadline);
+                    Admin.transaction().commit(owner);
+                }else if(!new File(Owner.BASE,"initialized").exists()){
+                    java.nio.file.Files.write(new File(Owner.BASE,"initialized").toPath(),new byte[0]);
+                }
+                if(!StartupFeedback.notices(null,healthy).isEmpty()){
+                    try{
+                        int remaining=OperationTimeout.remaining(deadline);
+                        if(remaining>500)healthy.put("fallbackDiagnostics",api("diagnostics",new JSONArray(),Math.min(1000,remaining-250)));
+                        else healthy.put("diagnosticsError","初始化已完成，剩余时间不足，跳过附加后台日志读取。");
+                    }
+                    catch(Exception diagnosticError){healthy.put("diagnosticsError",diagnosticError.toString());}
+                }
+                send(new JSONObject().put("id",id).put("event","startup_ready").put("status",healthy));
                 return;
             }
             String[] words=parse(request.getString("command"));String action=words[1];JSONArray args=new JSONArray();for(int i=2;i<words.length;i++)args.put(words[i]);

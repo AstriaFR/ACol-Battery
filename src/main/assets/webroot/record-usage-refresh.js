@@ -30,6 +30,11 @@ export class RecordUsageRefresh{
     try{
       const result=await this.api('settle_usage',record.id);
       if(generation!==this.generation||sequence!==this.sequence||!this.visible()||this.recordKey(this.getRecord())!==this.key)return;
+      if(result.settling){
+        delay=750;
+        const signature=`${result.statsEpoch??''}:${result.statsVersion??''}:${result.appRevision??0}:${result.usagePending===true}`;
+        if(signature===this.signature)return;
+      }
       this.apply(result,record.id);
     }catch{delay=5000;}
     finally{

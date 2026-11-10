@@ -76,7 +76,7 @@ export class ScreenTimePanel{
     if(changed){this.hourDetails=null;this.hideTip();this.autoDay=true;this.day=last;this.selected=null;this.data=null;this.key=null;this.busyKey=null;this.force=false;this.token++;}
     if(revised){this.hourDetails=null;this.hideTip();this.key=null;this.busyKey=null;this.force=true;this.token++;}
     if(this.autoDay&&this.day!==last){this.hourDetails=null;this.hideTip();this.day=last;this.selected=null;this.data=null;this.key=null;}
-    if(settled&&this.day===last){this.key=null;this.force=true;if(this.busyKey)this.dirty=true;}
+    if(settled&&(this.day===last||this.busyKey||Number.isFinite(this.refreshAt))){this.key=null;this.force=true;if(this.busyKey)this.dirty=true;}
     this.host.hidden=false;this.navigation();this.load();
   }
   navigation(){

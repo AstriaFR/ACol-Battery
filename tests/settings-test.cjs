@@ -95,7 +95,8 @@ async function resetSettings(){
 async function gameToggle(){
  const {SettingsPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/settings-panel.js')).href);
  const panel=Object.create(SettingsPanel.prototype),calls=[];
- Object.assign(panel,{ready:true,fastValue:false,fastBusy:false,updateFast(){},setStatus(message){if(message)throw Error(message)},flush:async()=>true,onSaved(){},askChange(){throw Error('Game toggle must not request confirmation')},api:async(action,value)=>{calls.push([action,value]);return{fastEnabled:!!value,settings:{}}}});
+ Object.assign(panel,{ready:true,recordingValue:false,fastValue:false,fastBusy:false,fastButton:{},panel:{querySelector:()=>({classList:{toggle(){}}})},setStatus(message){if(message)throw Error(message)},flush:async()=>true,onSaved(){},askChange(){throw Error('Game toggle must not request confirmation')},api:async(action,value)=>{calls.push([action,value]);return{fastEnabled:!!value,settings:{}}}});
+ panel.updateFast();assert.equal(panel.fastButton.disabled,false,'game toggle remains available while ordinary recording is off');
  await panel.toggleFast();assert.equal(panel.fastValue,true);await panel.toggleFast();assert.equal(panel.fastValue,false);assert.deepEqual(calls,[['set_fast',1],['set_fast',0]]);assert.equal(panel.fastBusy,false);
 }
 runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});

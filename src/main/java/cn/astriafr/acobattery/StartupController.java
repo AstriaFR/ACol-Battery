@@ -5,7 +5,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.BitmapFactory;
@@ -21,7 +20,6 @@ import android.view.View;
 import android.widget.*;
 import cn.astriafr.acobattery.common.FriendlyError;
 import cn.astriafr.acobattery.common.RuntimePayload;
-import cn.astriafr.acobattery.common.RecordingGate;
 import cn.astriafr.acobattery.common.StartupFeedback;
 import cn.astriafr.acobattery.common.ErrorLogStore;
 import org.json.*;
@@ -118,7 +116,7 @@ final class StartupController {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.3 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.4 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(app);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,app.dp(32),0,app.dp(12));layout.addView(stage);
         detail=new TextView(app);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(app.dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(app.dp(5),1);layout.addView(detail);
         progress=new ProgressBar(app,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,app.dp(4));line.topMargin=app.dp(24);layout.addView(progress,line);
@@ -288,6 +286,7 @@ final class StartupController {
                 }
                 if(savedSize!=size||!hexDigest(saved.digest()).equals(expected))throw new IOException("保存的数据库备份校验失败。");
                 app.runOnUiThread(()->{if(!app.destroyed)phase("重建数据库","备份已保存，正在重建数据库。");});
+                app.recordListCache.clear();
                 JSONObject reset=new JSONObject(root.command(admin("rebuild-database-external "+token),10));
                 if(!reset.optBoolean("ok"))throw new IOException("数据库重建未完成，请重试。");committed=true;
                 RootSession authorized=root;
@@ -320,11 +319,12 @@ final class StartupController {
         if(errorText!=null)errorText.setText("");
         closeErrorPage();
         app.worker.execute(()->{
+            boolean updateAttempted=false;
             try{
                 discardOldReports();
                 if(root!=authorized)disconnect();
                 phase("识别系统","已识别 Android "+Build.VERSION.RELEASE+"（API "+Build.VERSION.SDK_INT+"），自动选择兼容接口。");
-                if(Build.VERSION.SDK_INT<35)throw new InitFailure("需要 Android 15 或更新系统。");
+                if(Build.VERSION.SDK_INT<app.getApplicationInfo().minSdkVersion)throw new InitFailure("需要 Android 13 或更新系统。");
                 if(!java.util.Arrays.asList(Build.SUPPORTED_64_BIT_ABIS).contains("arm64-v8a"))throw new InitFailure("当前设备不支持 ARM64。");
                 if(authorized==null)phase("等待 root 授权","已识别 Android "+Build.VERSION.RELEASE+"。请在 root 管理器中允许 ACol电池获取 root 权限。");
                 else phase("root 权限已就绪","正在复用当前连接，准备运行环境。");
@@ -335,13 +335,7 @@ final class StartupController {
                 catch(RootSession.CommandFailure failure){throw new InitFailure("系统缺少 app_process、cp、chmod 或 mv，无法部署独立后台。",failure.diagnostics);}
                 phase("准备独立运行环境","程序与记录保存在独立的 root 目录。");
                 File archive=payload();String version=assetText("payload.sha256");
-                String cert=digest(app.getPackageManager().getPackageInfo(app.getPackageName(),PackageManager.GET_SIGNING_CERTIFICATES).signingInfo.getApkContentsSigners()[0].toByteArray());
-                int user=android.os.Process.myUid()/100000;
-                try{root.command("umask 077; mkdir -p "+BASE+"; chmod 700 "+BASE+"; if [ -f "+BASE+"/owner.cert ] && [ \"$(cat "+BASE+"/owner.cert)\" != "+RootSession.quote(cert)+" ]; then echo '历史目录签名不一致，已停止初始化。'; false; else printf '%s' "+RootSession.quote(cert)+" > "+BASE+"/owner.cert; printf '%s' "+user+" > "+BASE+"/owner.user; fi",10);}
-                catch(RootSession.CommandFailure failure){
-                    if(failure.diagnostics.contains("历史目录签名不一致"))throw new InitFailure("历史 root 目录的签名与当前安装不一致，已停止初始化。请安装同一签名的版本；如需重建目录，请先备份记录。",failure.diagnostics);
-                    throw failure;
-                }
+                verifyOwner(root,true);
                 root.command(RuntimeSetup.recover()+"; /system/bin/rm -f "+BASE+"/cleanup.request",10);
                 String current=root.command("cat "+BASE+"/runtime.version 2>/dev/null || true",10);
                 boolean updating=!version.equals(current);
@@ -354,6 +348,7 @@ final class StartupController {
                         root.command(RuntimeSetup.stage(extracted),10);
                         checkProbe(RuntimeSetup.STAGE);
                         phase("更新独立后台","新环境已检查，正在切换运行文件；失败时恢复原环境。");
+                        updateAttempted=true;
                         root.command(RuntimeSetup.install(version),10);
                     }finally{RuntimePayload.discard(extracted);}
                 }
@@ -371,6 +366,11 @@ final class StartupController {
             }catch(Exception e){
                 disconnect();
                 if(app.clearingData||app.transferringData)return;
+                if(updateAttempted&&!app.destroyed)try(RootSession recovery=new RootSession()){
+                    verifyOwner(recovery,false);
+                    recovery.command(RuntimeSetup.recover(),10);
+                    recovery.command("if [ -f "+BASE+"/initialized ] && [ -f "+RUNTIME+"/bin/daemon.dex.jar ]; then "+admin("ensure")+"; fi",10);
+                }catch(Exception recovery){e.addSuppressed(recovery);}
                 fail(currentPhase,e);
             }
         });
@@ -382,8 +382,6 @@ final class StartupController {
         if(report==null)throw new InitFailure("未能取得电池接口检查结果。",probe.trim().isEmpty()?"探针没有输出。":"探针输出：\n"+probe.trim());
         probeReport=report;
         JSONObject reading=report.getJSONObject("reading");
-        String problem=RecordingGate.problem(reading.optDouble("rm",Double.NaN),reading.optDouble("pct",Double.NaN));
-        if(!problem.isEmpty())root.command("umask 077; touch "+BASE+"/"+RecordingGate.DISABLED+"; printf '%s' "+RootSession.quote(problem)+" > "+BASE+"/"+RecordingGate.PROBLEM,10);
         int cells=reading.optInt("cellCount",0);
         phase("电池接口检查完成",cells==2?"已识别双电芯。":cells==1?"已识别单电芯。":"正在继续准备后台。");
     }
@@ -395,9 +393,10 @@ final class StartupController {
             try{
                 openRoot();if(!root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限。");
                 if(app.destroyed)return;
+                verifyOwner(root,false);
                 connectionPhase("正在连接后台…");root.command(RuntimeSetup.recover(),10);
                 String version=assetText("payload.sha256");
-                String state=root.command("if [ -f "+BASE+"/initialized ] && [ -f "+RUNTIME+"/bin/daemon.dex.jar ] && [ ! -e "+BASE+"/update.pending ] && [ ! -e "+BASE+"/cleanup.request ] && [ \"$(cat "+BASE+"/runtime.version 2>/dev/null)\" = "+RootSession.quote(version)+" ]; then echo READY; else echo SETUP; fi",10);
+                String state=root.command("if "+RuntimeSetup.hasOwner()+" && [ -f "+BASE+"/initialized ] && [ -f "+RUNTIME+"/bin/daemon.dex.jar ] && [ ! -e "+BASE+"/update.pending ] && [ ! -e "+BASE+"/cleanup.request ] && [ \"$(cat "+BASE+"/runtime.version 2>/dev/null)\" = "+RootSession.quote(version)+" ]; then echo READY; else echo SETUP; fi",10);
                 if(!state.equals("READY")){
                     RootSession authorized=root;
                     app.runOnUiThread(()->{if(app.destroyed)return;app.browser.destroy();showInitialization();initialize(authorized);});return;
@@ -420,6 +419,14 @@ final class StartupController {
                 });
             }
         });
+    }
+    void verifyOwner(RootSession session,boolean claim)throws Exception{
+        try{session.command(RuntimeSetup.ownerCheck(app,claim),10);}
+        catch(RootSession.CommandFailure failure){
+            if(failure.diagnostics.contains("历史目录签名不一致"))throw new InitFailure("历史 root 目录的签名与当前安装不一致，已停止初始化。请安装同一签名的版本；如需重建目录，请先备份记录。",failure.diagnostics);
+            if(failure.diagnostics.contains("历史记录属于另一 Android 用户"))throw new InitFailure("历史记录属于另一 Android 用户，请切换回原用户后打开应用。",failure.diagnostics);
+            throw failure;
+        }
     }
     void showStartupNotice(){
         if(app.destroyed||app.isFinishing()||!rootReady||!app.browser.pageLoaded||pendingNotices.isEmpty()||startupNotice!=null)return;

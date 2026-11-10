@@ -7,7 +7,8 @@ import java.util.concurrent.TimeUnit;
 public final class OperationTimeout {
     public static final int MAX_MS=10000,MAX_SECONDS=10;
     private OperationTimeout(){}
-    public static long deadline(){return System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(MAX_MS);}
+    public static long deadline(){return deadline(MAX_MS);}
+    public static long deadline(int milliseconds){return System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(1,Math.min(MAX_MS,milliseconds)));}
     public static int remaining(long deadline)throws SocketTimeoutException{
         long left=deadline-System.nanoTime();if(left<=0)throw new SocketTimeoutException("操作超时，请重试。");
         return (int)Math.min(MAX_MS,Math.max(1,TimeUnit.NANOSECONDS.toMillis(left)));

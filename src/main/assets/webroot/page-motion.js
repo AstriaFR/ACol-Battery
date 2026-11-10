@@ -1,4 +1,5 @@
 // Navigation-only compositor animations. No cloned pages, canvas copies or data reads.
+const motionEase='cubic-bezier(.2,.65,.3,1)';
 export function installPageMotion(){
   const ids=['homePage','recordsPage','settingsPanel','detail','batteryInfoPanel','batteryHistoryPanel','batteryHistoryDetail','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail','cutoffFrame'];
   const nodes=ids.map(id=>document.getElementById(id)).filter(Boolean),tabs=['home','records','settings'];
@@ -10,7 +11,7 @@ export function installPageMotion(){
   const animate=(node,frames,duration)=>{
     stop(node);if(!interactive||document.hidden||reduced.matches||typeof node.animate!=='function')return;
     try{
-      const animation=node.animate(frames,{duration,easing:'cubic-bezier(.22,.8,.25,1)',fill:'none'});running.set(node,animation);
+      const animation=node.animate(frames,{duration,easing:motionEase,fill:'none'});running.set(node,animation);
       const finish=()=>{if(running.get(node)===animation)running.delete(node);};animation.finished.then(finish,finish);
     }catch{ /* Older WebViews keep synchronous navigation. */ }
   };
@@ -21,7 +22,8 @@ export function installPageMotion(){
     if(!next||next===last)return;
     last=next;
     if(document.documentElement.hasAttribute('data-theme-changing'))return;
-    animate(next,tab?[{opacity:.65},{opacity:1}]:[{opacity:.65,transform:`translateX(${back?-18:24}px)`},{opacity:1,transform:'translateX(0)'}],tab?170:220);
+    if(tab)animate(next,[{opacity:.88},{opacity:1}],95);
+    else animate(next,[{opacity:.9,transform:`translateX(${back?-8:10}px)`},{opacity:1,transform:'translateX(0)'}],140);
   };
   const schedule=()=>{if(!queued){queued=true;queueMicrotask(sync);}};
   const direction=next=>{
@@ -43,7 +45,7 @@ export function installPageMotion(){
       for(const {target}of records){
         if(!target.open){dialogs.delete(target);stop(target);continue;}
         if(dialogs.has(target))continue;dialogs.add(target);
-        animate(target,[{opacity:0},{opacity:1}],170);
+        animate(target,[{opacity:.82},{opacity:1}],100);
       }
     });
     for(const dialog of doc.querySelectorAll('dialog'))dialogObserver.observe(dialog,{attributes:true,attributeFilter:['open']});

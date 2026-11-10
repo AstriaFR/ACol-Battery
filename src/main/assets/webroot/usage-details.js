@@ -2,8 +2,8 @@ import{DailyUsageChart,roundedDuration}from'./daily-usage-chart.js?v=acol-2.2s';
 import{UsageWeekPanel}from'./usage-week.js?v=acol-2.2s';
 import{isoWeek}from'./usage-calendar.js?v=acol-2.2s';
 import{readAppIcons}from'./root-bridge.js?v=acol-2.2s';
+import{usageRoots as roots}from'./usage-navigation.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
-const roots={'usage-day':'usageDetail','usage-week':'usageWeekDetail','usage-month':'usageMonthDetail','usage-app':'usageAppDetail','usage-app-week':'usageAppWeekDetail'};
 const scrolls={'usage-day':'usageDayScroll','usage-week':'usageWeekScroll','usage-month':'usageMonthScroll','usage-app':'usageAppScroll','usage-app-week':'usageAppWeekScroll'};
 const lists={day:{page:'usage-day',rows:'usageAppRows',status:'usageAppListStatus',scroll:'usageDayScroll'},week:{page:'usage-week',rows:'usageWeekAppRows',status:'usageWeekAppListStatus',scroll:'usageWeekScroll'}};
 export class UsageDetailsPanel{

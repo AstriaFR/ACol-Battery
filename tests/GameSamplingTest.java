@@ -49,12 +49,12 @@ public final class GameSamplingTest {
             check(count(m,"SELECT COUNT(*) FROM sessions")==2);
             check(count(m,"SELECT fast_seconds FROM sessions WHERE id="+game)==power);
             try(Cursor c=m.db.rawQuery("SELECT performance_seconds FROM sessions WHERE id=?",new String[]{""+game})){check(c.moveToFirst()&&Math.abs(c.getDouble(0)-performance)<1e-9);}
-            check(m.store.performancePoints(game,0).getLong("intervalMs")==Math.round(performance*1000));
+            check(m.store.performancePoints(game,0,8000).getLong("intervalMs")==Math.round(performance*1000));
             JSONObject raw=new JSONObject();m.store.rawPoints(raw,game,0,60000,-1);
             check(raw.getJSONArray("points").getJSONArray(0).getLong(13)==1000000+base);
-            check(m.store.points(ordinary,0,60000,1600).getJSONArray(0).getLong(13)==1000000+base);
+            check(m.store.points(ordinary,0,60000,1600,false).getJSONArray(0).getLong(13)==1000000+base);
             m.db.execSQL("INSERT INTO performance_samples(session,x,data,wall) VALUES(?,?,?,?)",new Object[]{game,0,"[0,60]",1000000+base});
-            check(m.store.performancePoints(game,0).getJSONArray("wallTimes").getJSONArray(0).getLong(1)==1000000+base);
+            check(m.store.performancePoints(game,0,1).getJSONArray("wallTimes").getJSONArray(0).getLong(1)==1000000+base);
             m.stopGame(reading(base+60000),"fast_stopped");m.fastEnabled=false;m.configureSampling(false);
             check(m.session==ordinary&&m.previous.elapsed==base&&m.sampling.next==base+120000);
             check(count(m,"SELECT active FROM sessions WHERE id="+ordinary)==1);

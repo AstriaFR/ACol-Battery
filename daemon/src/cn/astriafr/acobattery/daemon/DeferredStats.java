@@ -14,26 +14,52 @@ import java.util.*;
 import java.util.concurrent.*;
 import cn.astriafr.acobattery.common.FallbackDiagnostics;
 
-/** Raw capture is background work; attribution is run only for an explicitly viewed record. */
+/** Captures raw events and settles attribution on detail reads or before backup. */
 final class DeferredStats {
+    static final long TAIL_GRACE_MS=60000;
     interface Host {
         boolean activeSession(long id);
         Core.Reading settledReading(long id);
         long startWall();boolean clockAdjusted();boolean interactive();double credit();
         void usageError(Throwable error);void observe(Throwable error);void statsChanged();
+        default void eventsReady(){}
     }
     final Context ctx;final RecordStore store;final SQLiteDatabase db;final Host host;
     final LinkedHashMap<String,Long> screenUsageReads=new LinkedHashMap<>(16,.75f,true);
-    final Map<Long,Boolean> modes=new HashMap<>();
+    final Map<Long,Boolean> modes=new ConcurrentHashMap<>();
     interface EventReader{List<Core.Event> read(long from,long to)throws Exception;}
     EventReader reader;
     FutureTask<List<Core.Event>> eventRead;
     List<Pending> eventBatch;
-    long nextRead;
+    final CaptureSchedule captureSchedule=new CaptureSchedule();
+    static final class CaptureSchedule {
+        static final long INTERVAL_MS=2*3600000L;
+        long deadline=Long.MAX_VALUE,remaining=INTERVAL_MS;
+        boolean screen(boolean interactive,long now){
+            if(interactive==(deadline!=Long.MAX_VALUE))return false;
+            if(interactive)deadline=now+remaining;
+            else{remaining=Math.max(0,deadline-now);deadline=Long.MAX_VALUE;}
+            return true;
+        }
+        void schedule(long now,long delay){
+            remaining=delay;
+            if(deadline!=Long.MAX_VALUE)deadline=now+delay;
+        }
+    }
     DeferredStats(Context ctx,RecordStore store,Host host){
         this.ctx=ctx;this.store=store;this.db=store.db;this.host=host;
         reader=(from,to)->queryUsage(ctx,from,to);
-        db.execSQL("CREATE TABLE IF NOT EXISTS usage_deferred(session INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,start_x INTEGER NOT NULL,event_wall INTEGER,event_revision INTEGER NOT NULL DEFAULT 0,computed_x INTEGER NOT NULL DEFAULT -1,computed_wall INTEGER NOT NULL DEFAULT 0,credit REAL NOT NULL DEFAULT 0,timeline TEXT NOT NULL DEFAULT '',dirty INTEGER NOT NULL DEFAULT 0,baseline_credit REAL NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS usage_deferred(session INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,start_x INTEGER NOT NULL,event_wall INTEGER,event_revision INTEGER NOT NULL DEFAULT 0,computed_x INTEGER NOT NULL DEFAULT -1,computed_wall INTEGER NOT NULL DEFAULT 0,credit REAL NOT NULL DEFAULT 0,timeline TEXT NOT NULL DEFAULT '',dirty INTEGER NOT NULL DEFAULT 0,baseline_credit REAL NOT NULL DEFAULT 0,finalized INTEGER NOT NULL DEFAULT 0,tail_checked INTEGER NOT NULL DEFAULT 0)");
+        boolean finalized=false,tailChecked=false;
+        try(Cursor c=db.rawQuery("PRAGMA table_info(usage_deferred)",null)){
+            while(c.moveToNext()){
+                String column=c.getString(1);
+                if("finalized".equals(column))finalized=true;
+                if("tail_checked".equals(column))tailChecked=true;
+            }
+        }
+        if(!finalized)db.execSQL("ALTER TABLE usage_deferred ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0");
+        if(!tailChecked)db.execSQL("ALTER TABLE usage_deferred ADD COLUMN tail_checked INTEGER NOT NULL DEFAULT 0");
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_raw(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,x INTEGER NOT NULL,wall INTEGER NOT NULL,rm REAL,voltage REAL,online INTEGER NOT NULL,screen_on INTEGER NOT NULL,quality INTEGER NOT NULL,max_gap INTEGER NOT NULL,discharge_interval INTEGER NOT NULL,PRIMARY KEY(session,x)) WITHOUT ROWID");
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_events(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,time INTEGER NOT NULL,type INTEGER NOT NULL,pkg TEXT NOT NULL,activity TEXT NOT NULL,instance INTEGER NOT NULL,UNIQUE(session,time,type,pkg,activity,instance))");
         db.execSQL("CREATE INDEX IF NOT EXISTS usage_events_time ON usage_events(session,time)");
@@ -42,12 +68,35 @@ final class DeferredStats {
     boolean owns(long id){
         if(id<1)return false;
         Boolean cached=modes.get(id);if(cached!=null)return cached;
-        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred WHERE session=?",new String[]{""+id})){boolean value=c.moveToFirst();modes.put(id,value);return value;}
+        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred WHERE session=?",new String[]{""+id})){
+            boolean value=c.moveToFirst();Boolean previous=modes.putIfAbsent(id,value);return previous==null?value:previous;
+        }
     }
     boolean pending(long id){
+        if(pendingSamples(id))return true;
+        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND s.active=0 AND d.finalized=0 AND d.tail_checked=0 AND EXISTS(SELECT 1 FROM usage_raw WHERE session=d.session)",new String[]{""+id})){
+            return c.moveToFirst();
+        }
+    }
+    boolean pendingSamples(long id){
         if(!owns(id))return false;
-        try(Cursor c=db.rawQuery("SELECT dirty,computed_x,(SELECT MAX(x) FROM usage_raw WHERE session=?) FROM usage_deferred WHERE session=?",new String[]{""+id,""+id})){
+        try(Cursor c=db.rawQuery("SELECT dirty,computed_x,(SELECT MAX(x) FROM usage_raw WHERE session=d.session) FROM usage_deferred d WHERE session=? AND finalized=0",new String[]{""+id})){
             return c.moveToFirst()&&(c.getInt(0)!=0||!c.isNull(2)&&c.getLong(1)<c.getLong(2));
+        }
+    }
+    boolean hasLegacyIntervals(long id){
+        try(Cursor c=db.rawQuery("SELECT 1 FROM sessions s LEFT JOIN usage_deferred d ON d.session=s.id WHERE s.id=? AND s.kind='discharge' AND s.fast_seconds=0 AND s.clock_adjusted=0 AND (d.session IS NULL OR d.start_x>0)",new String[]{""+id})){
+            return c.moveToFirst();
+        }
+    }
+    boolean readyTail(long id,long wallNow){
+        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0 AND s.active=0 AND (d.tail_checked=1 OR (SELECT MAX(wall) FROM usage_raw WHERE session=d.session)<=?)",new String[]{""+id,""+(wallNow-TAIL_GRACE_MS)})){
+            return c.moveToFirst();
+        }
+    }
+    long confirmedEnd(long id,long start,long end){
+        try(Cursor c=db.rawQuery("SELECT MAX(start_x,computed_x) FROM usage_deferred WHERE session=? AND finalized=0",new String[]{""+id})){
+            return c.moveToFirst()?Math.min(end,start+Math.max(0,c.getLong(0))):end;
         }
     }
     void register(long id,Core.Reading r,long start,boolean baseline){
@@ -68,68 +117,95 @@ final class DeferredStats {
         db.execSQL("INSERT OR IGNORE INTO usage_raw(session,x,wall,rm,voltage,online,screen_on,quality,max_gap,discharge_interval) VALUES(?,?,?,?,?,?,?,?,?,?)",
             new Object[]{id,Math.max(0,r.elapsed-start),r.wall,nullable(r.rm),nullable(r.voltage()),r.online?1:0,host.interactive()?1:0,quality,maxGap,discharge?1:0});
     }
-    void requestCapture(){nextRead=0;}
-    static final class Pending{final long id,from,to;Pending(long id,long from,long to){this.id=id;this.from=from;this.to=to;}}
+    void requestCapture(){captureSchedule.schedule(SystemClock.elapsedRealtime(),0);}
+    static final class Pending{
+        final long id,from,to;
+        final boolean checkTail;
+        Pending(long id,long from,long to){this(id,from,to,false);}
+        Pending(long id,long from,long to,boolean checkTail){this.id=id;this.from=from;this.to=to;this.checkTail=checkTail;}
+    }
     void saveEvents(List<Pending> batch,List<Core.Event> events){
         boolean own=!db.inTransaction();if(own)db.beginTransaction();
         try(SQLiteStatement insert=db.compileStatement("INSERT OR IGNORE INTO usage_events(session,time,type,pkg,activity,instance) VALUES(?,?,?,?,?,?)")){
             for(Pending item:batch){
                 long computed;
-                try(Cursor c=db.rawQuery("SELECT event_wall,computed_wall FROM usage_deferred WHERE session=?",new String[]{""+item.id})){
-                    if(!c.moveToFirst()||!c.isNull(0)&&c.getLong(0)>item.to)continue;
+                try(Cursor c=db.rawQuery("SELECT event_wall,computed_wall FROM usage_deferred WHERE session=? AND finalized=0",new String[]{""+item.id})){
+                    if(!c.moveToFirst()||!item.checkTail&&!c.isNull(0)&&c.getLong(0)>item.to)continue;
                     computed=c.getLong(1);
                 }
                 boolean late=false;
                 for(Core.Event event:events){
                     if(event.time<item.from||event.time>item.to)continue;
                     insert.clearBindings();insert.bindLong(1,item.id);insert.bindLong(2,event.time);insert.bindLong(3,event.type);insert.bindString(4,Objects.toString(event.pkg,""));insert.bindString(5,Objects.toString(event.activity,""));insert.bindLong(6,event.instance);
-                    if(insert.executeInsert()!=-1&&event.time<computed)late=true;
+                    if(insert.executeInsert()!=-1&&event.time<=computed)late=true;
                 }
-                db.execSQL("UPDATE usage_deferred SET event_wall=?,event_revision=event_revision+1,dirty=MAX(dirty,?) WHERE session=?",new Object[]{item.to,late?1:0,item.id});
+                db.execSQL("UPDATE usage_deferred SET event_wall=MAX(COALESCE(event_wall,0),?),event_revision=event_revision+1,dirty=MAX(dirty,?),tail_checked=MAX(tail_checked,?) WHERE session=?",new Object[]{item.to,late?1:0,item.checkTail?1:0,item.id});
             }
             if(own)db.setTransactionSuccessful();
         }finally{if(own)db.endTransaction();}
     }
     void completeRead(List<Core.Event> events){
-        saveEvents(eventBatch,events);eventRead=null;eventBatch=null;host.usageError(null);
+        saveEvents(eventBatch,events);eventRead=null;eventBatch=null;if(host!=null)host.usageError(null);
     }
     static void requireMainUser()throws Exception{
         int user=(Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null);
         if(user!=0)throw new IllegalStateException("当前用户不是主用户，事件留待重试");
     }
     void capture(boolean force,long only){
-        long now=SystemClock.elapsedRealtime();if(!force&&now<nextRead)return;
+        capture(force,only,System.currentTimeMillis());
+    }
+    void capture(boolean force,long only,long wallNow){
+        capture(force,only,wallNow,true);
+    }
+    void captureAsync(boolean force,long only){
+        capture(force,only,System.currentTimeMillis(),false);
+    }
+    private void capture(boolean force,long only,long wallNow,boolean wait){
+        long now=SystemClock.elapsedRealtime();boolean due=force||now>=captureSchedule.deadline;
         try{
             // A timed-out Binder read continues in its worker. Consume it once it
             // finishes instead of replacing a useful result with another query.
             if(eventRead!=null){
+                if(!eventRead.isDone()&&!wait){
+                    if(!force&&due)captureSchedule.schedule(now,60000);
+                    return;
+                }
                 requireMainUser();
                 if(!eventRead.isDone())throw new IllegalStateException("前次事件查询尚未返回，暂不重复发起");
                 completeRead(eventRead.get());
             }
+            if(!due)return;
             List<Pending> pending=new ArrayList<>();long from=Long.MAX_VALUE,to=0;
-            String sql="SELECT d.session,d.event_wall,s.active,(SELECT wall FROM usage_raw WHERE session=d.session ORDER BY x LIMIT 1),(SELECT MAX(wall) FROM usage_raw WHERE session=d.session) FROM usage_deferred d JOIN sessions s ON s.id=d.session"+(only>0?" WHERE d.session=?":"");
+            String sql="SELECT d.session,d.event_wall,s.active,(SELECT wall FROM usage_raw WHERE session=d.session ORDER BY x LIMIT 1),(SELECT MAX(wall) FROM usage_raw WHERE session=d.session),d.tail_checked FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.finalized=0"+(only>0?" AND d.session=?":"");
             try(Cursor c=db.rawQuery(sql,only>0?new String[]{""+only}:null)){
                 while(c.moveToNext()){
                     if(c.isNull(3)||c.isNull(4))continue;
-                    long target=!force&&c.getInt(2)!=0?Math.max(System.currentTimeMillis(),c.getLong(4)):c.getLong(4);
+                    long end=c.getLong(4);
+                    boolean active=c.getInt(2)!=0;
+                    boolean checkTail=!active&&c.getInt(5)==0&&wallNow-end>=TAIL_GRACE_MS;
+                    long target=!force&&active?Math.max(wallNow,end):end;
                     long cursor=c.isNull(1)?Math.max(0,c.getLong(3)-86400000L):c.getLong(1);
-                    if(target<=cursor)continue;
+                    if(target<=cursor&&!checkTail)continue;
                     long begin=c.isNull(1)?cursor:Math.max(0,cursor-5000);
-                    pending.add(new Pending(c.getLong(0),begin,target));from=Math.min(from,begin);to=Math.max(to,target);
+                    // A prior read may cover the timestamp but predate event publication.
+                    if(checkTail)begin=Math.min(begin,Math.max(0,end-TAIL_GRACE_MS));
+                    pending.add(new Pending(c.getLong(0),begin,target,checkTail));from=Math.min(from,begin);to=Math.max(to,target);
                 }
             }
-            if(pending.isEmpty()){if(!force)nextRead=now+3600000;return;}
+            if(pending.isEmpty()){if(!force)captureSchedule.schedule(now,CaptureSchedule.INTERVAL_MS);return;}
             requireMainUser();
             final long queryFrom=from,queryTo=to;
-            eventBatch=pending;eventRead=new FutureTask<>(()->reader.read(queryFrom,queryTo));
+            eventBatch=pending;eventRead=new FutureTask<List<Core.Event>>(() -> reader.read(queryFrom,queryTo)){
+                @Override protected void done(){if(!wait&&host!=null)host.eventsReady();}
+            };
             Thread query=new Thread(eventRead,"aco-usage-batch");query.setDaemon(true);query.start();
-            completeRead(eventRead.get(8,TimeUnit.SECONDS));
-            if(only==0)nextRead=now+3600000;
+            if(wait)completeRead(eventRead.get(8,TimeUnit.SECONDS));
+            if(only==0)captureSchedule.schedule(now,CaptureSchedule.INTERVAL_MS);
         }catch(Throwable error){
             if(error instanceof ExecutionException||error instanceof CancellationException){eventRead=null;eventBatch=null;}
-            nextRead=now+60000;host.usageError(error);
-            FallbackDiagnostics.record("应用事件批量读取",error);host.observe(error);
+            if(only==0)captureSchedule.schedule(now,60000);
+            if(host!=null){host.usageError(error);host.observe(error);}
+            FallbackDiagnostics.record("应用事件批量读取",error);
         }
     }
     static String encode(Core.Timeline timeline)throws JSONException{
@@ -147,31 +223,70 @@ final class DeferredStats {
             while(c.moveToNext())list.add(new Core.Event(c.getLong(0),c.getInt(1),c.getString(2).isEmpty()?null:c.getString(2),c.getString(3).isEmpty()?null:c.getString(3),c.getInt(4)));
         }return list;
     }
-    /** No call to this method is made by the sampling loop or homepage watch. */
-    void calculate(long id)throws Exception{
-        if(!owns(id))return;
-        long startX,cursor,eventWall;double credit,baselineCredit;String saved;boolean dirty,game;long wallStart;
-        try(Cursor c=db.rawQuery("SELECT d.start_x,d.computed_x,d.event_wall,d.credit,d.timeline,d.dirty,s.fast_seconds,s.start_wall,d.baseline_credit FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=?",new String[]{""+id})){
-            if(!c.moveToFirst())return;startX=c.getLong(0);cursor=c.getLong(1);eventWall=c.isNull(2)?-1:c.getLong(2);credit=c.getDouble(3);saved=c.getString(4);dirty=c.getInt(5)!=0;game=c.getDouble(6)>0;wallStart=c.getLong(7);baselineCredit=c.getDouble(8);
+    /** Final results stay queryable without keeping the inputs for a late-event rebuild. */
+    void finalizeCalculated(long id){
+        if(eventBatch!=null)for(Pending item:eventBatch)if(item.id==id)return;
+        boolean own=!db.inTransaction();if(own)db.beginTransaction();
+        try(SQLiteStatement mark=db.compileStatement("UPDATE usage_deferred SET finalized=1,credit=0,timeline='',baseline_credit=0 WHERE session=? AND finalized=0 AND tail_checked=1 AND dirty=0 AND EXISTS(SELECT 1 FROM sessions WHERE id=? AND active=0) AND computed_x>=(SELECT MAX(x) FROM usage_raw WHERE session=?) AND event_wall>=(SELECT MAX(wall) FROM usage_raw WHERE session=?)")){
+            for(int i=1;i<=4;i++)mark.bindLong(i,id);
+            if(mark.executeUpdateDelete()==1){
+                String[] args={""+id};
+                db.delete("usage_events","session=?",args);
+                db.delete("usage_raw","session=?",args);
+                db.delete("usage_baseline","session=?",args);
+            }
+            if(own)db.setTransactionSuccessful();
+        }finally{if(own)db.endTransaction();}
+    }
+    void settleForBackup()throws Exception{
+        capture(true,0);
+        List<Long> records=new ArrayList<>();
+        try(Cursor c=db.rawQuery("SELECT session FROM usage_deferred WHERE finalized=0 ORDER BY session",null)){
+            while(c.moveToNext())records.add(c.getLong(0));
         }
-        if(eventWall<0)return; // Failed capture is pending, never finalized as empty usage.
-        if(!dirty)try(Cursor c=db.rawQuery("SELECT MAX(x) FROM usage_raw WHERE session=?",new String[]{""+id})){if(c.moveToFirst()&&!c.isNull(0)&&cursor>=c.getLong(0))return;}
+        long incomplete=-1;
+        for(long id:records){
+            calculate(id);
+            if(pendingSamples(id)&&incomplete<0)incomplete=id;
+        }
+        if(incomplete>0)throw new IOException("记录 "+incomplete+" 的应用耗电尚未结算，未开始数据库整理。请稍后重试备份。");
+    }
+    static final class UsageTotal{
+        long ms,energyMs,mahMs;double mah,energy;
+        void add(long duration,long interval,double loss,double mwh){
+            ms+=duration;
+            if(Core.finite(loss)){mah+=loss*duration/interval;mahMs+=duration;}
+            if(Core.finite(mwh)){energy+=mwh*duration/interval;energyMs+=duration;}
+        }
+    }
+    static final class Settlement{
+        final long id,revision,cursor,start;final boolean dirty;
+        long processed=-1,wall;double credit;String timeline;boolean changed;
+        final Map<String,UsageTotal> apps=new LinkedHashMap<>();
+        final ScreenUsage.Builder coverage=new ScreenUsage.Builder();
+        final Map<Long,Double> gameEnergy=new LinkedHashMap<>();
+        Settlement(long id,long revision,long cursor,long start,boolean dirty){
+            this.id=id;this.revision=revision;this.cursor=cursor;this.start=start;this.dirty=dirty;changed=dirty;
+        }
+    }
+    /** Prepare a bounded snapshot without holding the sampling mutex or a write transaction. */
+    Settlement plan(long id)throws Exception{
+        long startX,cursor,eventWall,revision,wallStart,endX;double credit,baselineCredit;String saved;boolean dirty,game;
+        try(Cursor c=db.rawQuery("SELECT d.start_x,d.computed_x,d.event_wall,d.credit,d.timeline,d.dirty,s.fast_seconds,s.start_wall,d.baseline_credit,d.event_revision,(SELECT MAX(x) FROM usage_raw WHERE session=d.session) FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0",new String[]{""+id})){
+            if(!c.moveToFirst()||c.isNull(2))return null;
+            startX=c.getLong(0);cursor=c.getLong(1);eventWall=c.getLong(2);credit=c.getDouble(3);saved=c.getString(4);dirty=c.getInt(5)!=0;game=c.getDouble(6)>0;wallStart=c.getLong(7);baselineCredit=c.getDouble(8);revision=c.getLong(9);endX=c.isNull(10)?-1:c.getLong(10);
+        }
+        Settlement result=new Settlement(id,revision,cursor,wallStart+startX,dirty);
+        if(!dirty&&cursor>=endX)return result;
         List<Core.Event> events=events(id);Core.Timeline timeline=new Core.Timeline();Core.Depletion depletion=new Core.Depletion();
         boolean ready=cursor>=0&&!saved.isEmpty()&&!dirty;
         if(ready){decode(timeline,saved);depletion.restore(credit);}else{cursor=-1;depletion.restore(baselineCredit);}
-        boolean own=!db.inTransaction();if(own)db.beginTransaction();boolean changed=false;
-        try{
-            if(dirty){
-                db.execSQL("DELETE FROM apps WHERE session=?",new Object[]{id});db.execSQL("INSERT INTO apps SELECT * FROM usage_baseline WHERE session=?",new Object[]{id});
-                db.execSQL("DELETE FROM screen_spans WHERE session=? AND start_wall>=?",new Object[]{id,wallStart+startX});db.execSQL("DELETE FROM screen_app_spans WHERE session=? AND start_wall>=?",new Object[]{id,wallStart+startX});
-                db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});changed=true;
-            }
-            int eventIndex=0;Sample previous=null;long processed=cursor,processedWall=0;
-            try(Cursor c=db.rawQuery("SELECT x,wall,rm,voltage,online,screen_on,quality,max_gap,discharge_interval FROM usage_raw WHERE session=? AND x>=? ORDER BY x",new String[]{""+id,""+Math.max(startX,cursor)})){
+        int eventIndex=0;Sample previous=null;
+        try(Cursor c=db.rawQuery("SELECT x,wall,rm,voltage,online,screen_on,quality,max_gap,discharge_interval FROM usage_raw WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+Math.max(startX,cursor),""+endX})){
                 while(c.moveToNext()){
                     Sample current=sample(c);if(current.wall>eventWall)break;
                     if(previous==null){
-                        previous=current;processed=current.x;processedWall=current.wall;
+                        previous=current;result.processed=current.x;result.wall=current.wall;
                         if(!ready){timeline.seed(current.screen,false);while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)timeline.apply(events.get(eventIndex++));}
                         else while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)eventIndex++;
                         continue;
@@ -190,23 +305,45 @@ final class DeferredStats {
                     if(discharging){
                         double loss=gap?Double.NaN:depletion.consume(previous.rm,current.rm,dt,current.maxGap);
                         double energy=Core.dischargeEnergyMwh(previous.voltage,current.voltage,loss);
-                        add(id,split,dt,loss,energy);
-                        if(mapped!=null){saveScreenSpans(id,mapped.spans);saveScreenApps(id,mapped.apps);}
-                        if(game)db.execSQL("UPDATE game_rm_intervals SET energy_mwh=? WHERE session=? AND x=?",new Object[]{nullable(energy),id,current.x});
+                        for(Map.Entry<String,Long> part:split.entrySet())result.apps.computeIfAbsent(part.getKey(),pkg->new UsageTotal()).add(part.getValue(),dt,loss,energy);
+                        if(mapped!=null){
+                            for(ScreenUsage.Span span:mapped.spans)result.coverage.accept(span.start,span.end,span.on);
+                            for(ScreenUsage.AppSpan span:mapped.apps)result.coverage.acceptApp(span.start,span.end,span.pkg);
+                        }
+                        if(game)result.gameEnergy.put(current.x,nullable(energy));
                     }else depletion.reset();
-                    previous=current;processed=current.x;processedWall=current.wall;changed=true;
+                    previous=current;result.processed=current.x;result.wall=current.wall;result.changed=true;
                 }
+        }
+        if(result.processed>=0){result.credit=depletion.checkpoint();result.timeline=encode(timeline);}
+        return result;
+    }
+    void calculate(long id)throws Exception{commit(plan(id));}
+    /** Commit only if the record and the event/checkpoint revision still match. */
+    void commit(Settlement result){
+        if(result==null)return;long id=result.id;
+        boolean own=!db.inTransaction();if(own)db.beginTransaction();
+        try{
+            boolean ended;
+            try(Cursor c=db.rawQuery("SELECT s.active FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0 AND d.event_revision=? AND d.computed_x=? AND d.dirty=?",new String[]{""+id,""+result.revision,""+result.cursor,result.dirty?"1":"0"})){
+                if(!c.moveToFirst())return;ended=c.getInt(0)==0;
             }
-            if(processed>=0)db.execSQL("UPDATE usage_deferred SET computed_x=?,computed_wall=?,credit=?,timeline=?,dirty=0 WHERE session=?",new Object[]{processed,processedWall,depletion.checkpoint(),encode(timeline),id});
-            if(changed)host.statsChanged();
+            if(result.dirty){
+                db.execSQL("DELETE FROM apps WHERE session=?",new Object[]{id});db.execSQL("INSERT INTO apps SELECT * FROM usage_baseline WHERE session=?",new Object[]{id});
+                db.execSQL("DELETE FROM screen_spans WHERE session=? AND start_wall>=?",new Object[]{id,result.start});db.execSQL("DELETE FROM screen_app_spans WHERE session=? AND start_wall>=?",new Object[]{id,result.start});
+                db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});
+            }
+            for(Map.Entry<String,UsageTotal> entry:result.apps.entrySet()){
+                UsageTotal total=entry.getValue();
+                db.execSQL("INSERT INTO apps(session,pkg,ms,mah,energy_mwh,energy_ms,mah_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session,pkg) DO UPDATE SET ms=ms+excluded.ms,mah=mah+excluded.mah,energy_mwh=energy_mwh+excluded.energy_mwh,energy_ms=energy_ms+excluded.energy_ms,mah_ms=mah_ms+excluded.mah_ms",new Object[]{id,entry.getKey(),total.ms,total.mah,total.energy,total.energyMs,total.mahMs});
+            }
+            saveScreenSpans(id,result.coverage.spans);saveScreenApps(id,result.coverage.apps);
+            for(Map.Entry<Long,Double> sample:result.gameEnergy.entrySet())db.execSQL("UPDATE game_rm_intervals SET energy_mwh=? WHERE session=? AND x=?",new Object[]{sample.getValue(),id,sample.getKey()});
+            if(result.processed>=0)db.execSQL("UPDATE usage_deferred SET computed_x=?,computed_wall=?,credit=?,timeline=?,dirty=0 WHERE session=?",new Object[]{result.processed,result.wall,result.credit,result.timeline,id});
+            if(ended)finalizeCalculated(id);
             if(own)db.setTransactionSuccessful();
         }finally{if(own)db.endTransaction();}
-    }
-    void add(long id,Map<String,Long> split,long dt,double loss,double energy){
-        for(Map.Entry<String,Long> part:split.entrySet()){
-            long ms=part.getValue();boolean mah=Core.finite(loss),wh=Core.finite(energy);
-            db.execSQL("INSERT INTO apps(session,pkg,ms,mah,energy_mwh,energy_ms,mah_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session,pkg) DO UPDATE SET ms=ms+excluded.ms,mah=mah+excluded.mah,energy_mwh=energy_mwh+excluded.energy_mwh,energy_ms=energy_ms+excluded.energy_ms,mah_ms=mah_ms+excluded.mah_ms",new Object[]{id,part.getKey(),ms,mah?loss*ms/dt:0,wh?energy*ms/dt:0,wh?ms:0,mah?ms:0});
-        }
+        if(result.changed&&host!=null)host.statsChanged();
     }
     static final Method USAGE_INSTANCE_ID=usageInstanceMethod();
     static Method usageInstanceMethod() {
@@ -272,13 +409,13 @@ final class DeferredStats {
         if(day>recordEnd||next<=recordStart)throw new IOException("日期不在记录范围内");
         long cutoff=recordEnd;
         if(host.activeSession(id)&&record.optInt("active")==1){Core.Reading settled=host.settledReading(id);cutoff=settled==null?recordStart:Math.min(recordEnd,recordStart+settled.elapsed-record.getLong("start_elapsed"));}
+        cutoff=confirmedEnd(id,recordStart,cutoff);
         long from=Math.max(Math.max(day,recordStart),requestedFrom>0?requestedFrom:day),to=Math.max(from,Math.min(Math.min(next,cutoff),requestedTo>0?requestedTo:next));
         List<ScreenUsage.Span> spans=screenSpans(id,from,to),missing=ScreenUsage.holes(spans,from,to);
-        String key=id+":"+from+":"+to+":"+zone.getID();long now=SystemClock.elapsedRealtime();Long attempted=screenUsageReads.get(key);
+        String key=id+":"+from+":"+to+":"+zone.getID();
         // UsageStats uses wall time. After a clock change only already captured,
         // normalized spans are trustworthy; querying chart timestamps is unsafe.
-        if(!owns(id)&&record.optInt("clock_adjusted")==0&&!missing.isEmpty()&&(attempted==null||now-attempted>=60000)){
-            screenUsageReads.put(key,now);while(screenUsageReads.size()>64)screenUsageReads.remove(screenUsageReads.keySet().iterator().next());
+        if(!owns(id)&&record.optInt("clock_adjusted")==0&&!missing.isEmpty()&&claimUsageRead(key)){
             List<ScreenUsage.Span> extra=Collections.emptyList();
             try{
                 int user=(Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null);
@@ -316,7 +453,6 @@ final class DeferredStats {
         }return out;
     }
     JSONObject intervalApps(long id,long after)throws Exception{
-        prepareViewedUsage(id);
         JSONArray found=rows("SELECT kind,fast_seconds,start_wall,start_elapsed,end_elapsed FROM sessions WHERE id=?",new String[]{""+id});
         if(found.length()==0)throw new IOException("记录不存在或已删除");JSONObject record=found.getJSONObject(0);
         if(!record.getString("kind").equals("discharge")||record.optDouble("fast_seconds")>0)throw new IOException("区间应用仅用于普通放电记录");
@@ -356,14 +492,14 @@ final class DeferredStats {
         if(!record.getString("kind").equals("discharge"))throw new IOException("应用使用时长仅用于放电记录");
         long start=record.getLong("start_wall"),end=start+Math.max(0,record.getLong("end_elapsed")-record.getLong("start_elapsed"));
         if(host.activeSession(id)&&record.optInt("active")==1){Core.Reading settled=host.settledReading(id);end=Math.min(end,settled==null?start:start+settled.elapsed-record.getLong("start_elapsed"));}
+        end=confirmedEnd(id,start,end);
         long from=Math.max(start,requestedFrom),to=Math.max(from,Math.min(end,requestedTo));
         if(requestedTo<requestedFrom||requestedTo-requestedFrom>27*3600000L||requestedTo>ScreenUsage.nextDay(requestedFrom,TimeZone.getDefault()))throw new IOException("日期范围无效");
         List<ScreenUsage.AppSpan> spans=screenApps(id,from,to);List<ScreenUsage.Span> coverage=new ArrayList<>();
         for(ScreenUsage.AppSpan span:spans)coverage.add(new ScreenUsage.Span(span.start,span.end,true));
         List<ScreenUsage.Span> holes=ScreenUsage.holes(coverage,from,to);
-        String key="apps:"+id+":"+from+":"+to;long now=SystemClock.elapsedRealtime();Long attempted=screenUsageReads.get(key);
-        if(!owns(id)&&record.optInt("clock_adjusted")==0&&!holes.isEmpty()&&(attempted==null||now-attempted>=60000)){
-            screenUsageReads.put(key,now);while(screenUsageReads.size()>64)screenUsageReads.remove(screenUsageReads.keySet().iterator().next());
+        String key="apps:"+id+":"+from+":"+to;
+        if(!owns(id)&&record.optInt("clock_adjusted")==0&&!holes.isEmpty()&&claimUsageRead(key)){
             try{
                 int user=(Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null);
                 if(user==0){
@@ -382,6 +518,7 @@ final class DeferredStats {
                             db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});
                             db.setTransactionSuccessful();
                         }finally{db.endTransaction();}
+                        if(host!=null)host.statsChanged();
                         spans=screenApps(id,from,to);
                     }
                 }
@@ -403,9 +540,14 @@ final class DeferredStats {
     long appRevision(long id){
         try(Cursor row=db.rawQuery("SELECT app_revision FROM sessions WHERE id=?",new String[]{""+id})){return row.moveToFirst()?row.getLong(0):0;}
     }
-    void prepareViewedUsage(long id)throws Exception{
-        if(owns(id)){capture(true,id);calculate(id);}
-        legacyIntervalApps(id);
+    boolean claimUsageRead(String key){
+        long now=SystemClock.elapsedRealtime();
+        synchronized(screenUsageReads){
+            if(now-screenUsageReads.getOrDefault(key,-60000L)<60000)return false;
+            screenUsageReads.put(key,now);
+            while(screenUsageReads.size()>64)screenUsageReads.remove(screenUsageReads.keySet().iterator().next());
+            return true;
+        }
     }
     /** Legacy app totals are immutable; only missing foreground spans may be recovered for tooltips. */
     void legacyIntervalApps(long id)throws Exception{
@@ -416,16 +558,23 @@ final class DeferredStats {
         if(owns(id))try(Cursor c=db.rawQuery("SELECT start_x FROM usage_deferred WHERE session=?",new String[]{""+id})){c.moveToFirst();to=Math.min(to,from+c.getLong(0));}
         if(to<=from)return;
         List<ScreenUsage.Span> coverage=new ArrayList<>();for(ScreenUsage.AppSpan span:screenApps(id,from,to))coverage.add(new ScreenUsage.Span(span.start,span.end,true));
-        List<ScreenUsage.Span> holes=ScreenUsage.holes(coverage,from,to);String key="legacy-top:"+id;long now=SystemClock.elapsedRealtime();
-        if(holes.isEmpty()||now-screenUsageReads.getOrDefault(key,-60000L)<60000)return;
-        screenUsageReads.put(key,now);while(screenUsageReads.size()>64)screenUsageReads.remove(screenUsageReads.keySet().iterator().next());
+        List<ScreenUsage.Span> holes=ScreenUsage.holes(coverage,from,to);
+        if(holes.isEmpty()||!claimUsageRead("legacy-top:"+id))return;
         try{
             int user=(Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null);if(user!=0)return;
             long a=holes.get(0).start,b=holes.get(holes.size()-1).end;List<Core.Event> events=queryUsage(ctx,Math.max(0,a-86400000L),b);
             List<ScreenUsage.Span> known=ScreenUsage.fromEvents(events,a,b);Core.Timeline timeline=new Core.Timeline();timeline.seed(false,true);
             ScreenUsage.Builder captured=new ScreenUsage.Builder();timeline.split(a,b,events,captured);List<ScreenUsage.AppSpan> extra=new ArrayList<>();
             for(ScreenUsage.Span hole:holes)for(ScreenUsage.Span confirmed:known){long lo=Math.max(hole.start,confirmed.start),hi=Math.min(hole.end,confirmed.end);if(hi<=lo)continue;for(ScreenUsage.AppSpan span:captured.apps){long x=Math.max(lo,span.start),y=Math.min(hi,span.end);if(y>x)extra.add(new ScreenUsage.AppSpan(x,y,span.pkg));}}
-            if(!extra.isEmpty()){saveScreenApps(id,extra);db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});}
+            if(!extra.isEmpty()){
+                db.beginTransaction();
+                try{
+                    saveScreenApps(id,extra);
+                    db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});
+                    db.setTransactionSuccessful();
+                }finally{db.endTransaction();}
+                if(host!=null)host.statsChanged();
+            }
         }catch(Throwable error){FallbackDiagnostics.record("旧记录区间应用补读",error);}
     }
     JSONObject hourlyEnergy(long id,long requested,long requestedFrom)throws Exception{
@@ -439,6 +588,7 @@ final class DeferredStats {
         // The raw game trace can cross midnight before its next RM settlement.
         // Return an empty confirmed range for that day instead of a read error.
         if(game&&host.activeSession(id)&&record.optInt("active")==1){Core.Reading settled=host.settledReading(id);end=Math.max(Math.max(day,start),Math.min(end,settled==null?start:start+settled.elapsed-record.getLong("start_elapsed")));}
+        end=Math.max(Math.max(day,start),confirmedEnd(id,start,end));
         long from=Math.max(Math.max(day,start),requestedFrom),to=Math.max(from,Math.min(next,end));
         if(from>Math.min(next,end))throw new IOException("分时耗电读取范围无效");
         JSONObject attribution=hourApps(id,from,to);

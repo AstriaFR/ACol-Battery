@@ -41,6 +41,10 @@ public final class ParallelRecordingTest {
         main.fastEnabled=true;main.recordingEnabled=true;main.stopping=true;main.candidateAt=-1;
         main.gameTrack.sampling.next=0;main.gameTrack.fastStatsNext=0;
         main.collectGame(null,false,10000);check(main.session==10&&main.gameTrack.session==21);
+        check(main.sharesChargingSample());
+        main.recordingEnabled=false;check(!main.sharesChargingSample());
+        main.recordingEnabled=true;main.session=-1;check(!main.sharesChargingSample());
+        main.session=10;
         main.stableOnline=false;main.state=0;
         main.withGame(()->{check(main.session==21&&main.sampling.fastMs==3000);});
         Core.Reading off=new Core.Reading(),on=new Core.Reading();on.online=true;

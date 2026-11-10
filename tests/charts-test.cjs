@@ -171,10 +171,21 @@ async function chartTimes(){
  assert.equal(chartSystemWall(performancePoints,gridStart,45*60000,'performance',new Map()),gridStart+45*60000,'old performance records fall back to record start, never a metric column');
  const midnight=wallTimeTicks([],start,[0,60*60000],360);
  assert.ok(midnight.length>=3&&midnight.every(t=>new Date(t.wall).getDate()===3));
- const chart={points:[row],window:[0,120000],left:0,right:0,width:120,kind:'charge',startWall:start,tooltip:{},enabled:new Set(),signals:()=>[],cellCount:1,draw(){}};
+ const chart=Object.assign(Object.create(Chart.prototype),{points:[row],window:[0,120000],left:0,right:0,width:120,kind:'charge',startWall:start,tooltip:{},markerLine:{style:{}},positionTooltip(){},enabled:new Set(),signals:()=>[],cellCount:1,
+   draw(){throw Error('Moving an inspection marker must not redraw the plot');}});
  Chart.prototype.inspect.call(chart,60,0,true);
  assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(row[13],true)+'\n计时  1:00\n'));
  delete row[13];Chart.prototype.inspect.call(chart,60,0,true);assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(start+60000,true)+'\n计时  1:00'));
+ const reads=[];chart.readRawInspection=(from,to,target)=>new Promise(resolve=>reads.push({from,to,target,resolve}));
+ chart.inspect(60,0,true);chart.inspect(66,0,true);
+ assert.equal(reads.length,1,'dragging coalesces the raw sample reads while IPC is busy');
+ const flush=()=>new Promise(setImmediate);
+ reads[0].resolve(row);await flush();
+ assert.equal(reads[1].target,66000);assert.equal(chart.tooltip.textContent,'正在读取采样点…','an older result must not replace the current tooltip');
+ const exact=[...row];exact[0]=65000;reads[1].resolve(exact);await flush();
+ assert.equal(chart.marker,65000);assert.match(chart.tooltip.textContent,/计时  1:05/);
+ assert.equal(chart.markerLine.hidden,false);assert.equal(chart.markerLine.style.transform,'translateX(65px)');
+ chart.clearInspect();assert.equal(chart.markerLine.hidden,true);
 }
 
 async function hitGeometry(){
@@ -203,7 +214,7 @@ function context(){
 }
 const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
  const ctx=context(),chart={ctx,kind:'discharge',fast:false,left:0,right:0,width:400,top:0,bottom:200,
-  enabled:new Set(['power']),signals:()=>[{key:'power',index:1}],scaleFor:()=>({}),pointPixel:row=>row.slice(0,2)};
+  enabled:new Set(['power']),signals:()=>[{key:'power',index:1}],scaleFor:()=>({}),traceSignal:Chart.prototype.traceSignal,pointPixel:row=>row.slice(0,2)};
  const row=(x,y,quality=0)=>[x,y,null,null,null,null,quality],points=[row(0,0),row(200,200),row(400,0)];
  const hit=(x,y,data=points)=>Chart.prototype.hitCurve.call(chart,x,y,data);
  assert.equal(hit(100,125),true,'point on the rendered cubic curve');
@@ -218,12 +229,12 @@ const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/
 }
 
 async function percentageInterpolation(){
- const{percentageAnchors,smoothPath}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+ const{plateauAnchors,smoothPath}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
  const raw=[[0,100],[2,100],[3,99],[5,99],[9,98],[16,98],[18,97],[22,97]],original=JSON.stringify(raw);
- const anchors=percentageAnchors(raw);assert.equal(anchors.length,4);assert.deepEqual(anchors[0],raw[0]);assert.deepEqual(anchors.at(-1),raw.at(-1));
+ const anchors=plateauAnchors(raw);assert.equal(anchors.length,4);assert.deepEqual(anchors[0],raw[0]);assert.deepEqual(anchors.at(-1),raw.at(-1));
  assert.equal(JSON.stringify(raw),original,'raw readings stay unchanged');
- assert.deepEqual(percentageAnchors([[0,90],[5,90],[10,90]]),[[0,90],[10,90]]);
- const reversal=percentageAnchors([[0,90],[2,89],[3,89],[5,90],[9,90],[11,88]]);assert.ok(reversal.some(p=>p[1]===89)&&reversal.some(p=>p[1]===90),'real reversals are retained');
+ assert.deepEqual(plateauAnchors([[0,90],[5,90],[10,90]]),[[0,90],[10,90]]);
+ const reversal=plateauAnchors([[0,90],[2,89],[3,89],[5,90],[9,90],[11,88]]);assert.ok(reversal.some(p=>p[1]===89)&&reversal.some(p=>p[1]===90),'real reversals are retained');
  let start,previous=100,curves=0;
  smoothPath({moveTo(x,y){start=[x,y];},bezierCurveTo(x1,y1,x2,y2,x,y){
   for(let i=1;i<=100;i++){const t=i/100,u=1-t,value=u*u*u*start[1]+3*u*u*t*y1+3*u*t*t*y2+t*t*t*y;assert.ok(value<=previous+1e-9&&value>=97-1e-9,'no new wiggles or overshoot');previous=value;}
@@ -240,7 +251,7 @@ globalThis.localStorage={
 };
 globalThis.document={documentElement:{dataset:{theme:'light'}}};
 const root=path.join(__dirname,'../src/main/assets/webroot/');
-  const{seriesFor,signalScale,plotPoints}=await import(pathToFileURL(path.join(root,'chart.js')).href);
+  const{seriesFor,signalScale,plotPoints,softenTemperature}=await import(pathToFileURL(path.join(root,'chart.js')).href);
   const{loadSelection}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
   const temp=seriesFor('discharge',2,true).find(series=>series.key==='temp');
 
@@ -259,6 +270,11 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
   assert.equal(plotted.length,1);
   assert.equal(plotted[0][10],36);
   assert.ok(loadSelection('discharge',['rm','pct','voltage','power','temp']).has('temp'));
+  const step=[[0,30],[30,30],[59,30],[60,40],[61,40]];
+  assert.deepEqual(softenTemperature(step,.3),step,'a temperature step must not move into the plateau');
+  const jitter=[[0,30],[1,30.2],[2,30],[3,30.2],[4,30]];
+  assert.deepEqual(softenTemperature(jitter,.3).slice(1,-1),[[1,30.1],[2,30.1],[3,30.1]]);
+  assert.equal(jitter[1][1],30.2,'the raw readings remain available');
 }
 
 async function screenOffProjection(){

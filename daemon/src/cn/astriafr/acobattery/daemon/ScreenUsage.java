@@ -12,8 +12,11 @@ final class ScreenUsage {
         final List<Span> spans=new ArrayList<>();
         final List<AppSpan> apps=new ArrayList<>();
         public void accept(long start,long end,boolean on,String pkg){
-            accept(start,end,on);if(end<=start)return;
-            String owner=on?pkg:Core.OFF;if(owner==null)owner=Core.OTHER;
+            accept(start,end,on);
+            acceptApp(start,end,on?(pkg==null?Core.OTHER:pkg):Core.OFF);
+        }
+        void acceptApp(long start,long end,String owner){
+            if(end<=start)return;
             if(!apps.isEmpty()){
                 AppSpan last=apps.get(apps.size()-1);
                 if(last.end==start&&last.pkg.equals(owner)){apps.set(apps.size()-1,new AppSpan(last.start,end,owner));return;}

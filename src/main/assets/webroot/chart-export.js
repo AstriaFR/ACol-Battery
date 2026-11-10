@@ -1,4 +1,4 @@
-import{remainingEstimate}from'./estimate.js?v=acol-2.2s';
+import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 export function csvCell(value){
   if(value===null||value===undefined||typeof value==='number'&&!finite(value))return'';
@@ -37,14 +37,15 @@ export function bindExport(button,name,rows){
 }
 export async function* recordCsv(api,id){
   if(!id)throw Error('请先打开记录。');
-  yield['系统时间','计时_ms','剩余容量_mAh','系统电量_%','电流_mA_补偿后','电芯均压_V','图表功率_W','电芯1_V','电芯2_V','电池温度_℃','剩余能量估算_Wh','连接充电','内存已用_GB','内存总量_GB','采样间隔_ms','质量标记'];
+  yield['系统时间','计时_ms','剩余容量_mAh','系统电量_%','电流_mA_补偿后','电池电压_V','图表功率_W','电芯1_V','电芯2_V','电池温度_℃','剩余能量估算_Wh','连接充电','内存已用_GB','内存总量_GB','采样间隔_ms','质量标记'];
   let cursor=0,end=0;
   do{
     const data=await api('export_points',id,cursor,end);end=data.end+1;
-    const record=data.record,fast=record.fast_seconds>0,cells=record.cell_count===2?2:1;
+    const record=data.record,fast=record.fast_seconds>0;
     for(const p of data.points){
-      const estimate=record.kind==='discharge'&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4]},null):null;
-      yield[exportTime(finite(p[13])?p[13]:record.start_wall+p[0]),p[0],p[1],p[2],finite(p[3])?p[3]*cells:null,finite(p[4])?p[4]/1000:null,p[5],finite(p[8])?p[8]/1000:null,finite(p[9])?p[9]/1000:null,p[10],estimate?Number(estimate.whText):null,p[12],p[14],p[15],p[7],p[6]];
+      const cellCount=(p[6]&unclassifiedCells)?0:record.cell_count;
+      const estimate=record.kind==='discharge'&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4],cellCount},null):null;
+      yield[exportTime(finite(p[13])?p[13]:record.start_wall+p[0]),p[0],p[1],p[2],finite(p[3])?p[3]*(cellCount===2?2:1):null,finite(p[4])?p[4]/1000:null,p[5],finite(p[8])?p[8]/1000:null,finite(p[9])?p[9]/1000:null,p[10],estimate?Number(estimate.whText):null,p[12],p[14],p[15],p[7],p[6]];
     }
     if(!finite(data.nextAfter))break;
     const next=data.nextAfter+1;if(next<=cursor)throw Error('采样分页未前进，已停止导出。');cursor=next;

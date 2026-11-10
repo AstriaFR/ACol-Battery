@@ -173,13 +173,81 @@ public final class SamplingTest {
         reader.invalidate();value=reader.read(1001,()->"2",()->{throw new AssertionError("Broadcast was valid");});check(value.known&&value.online&&value.source.equals("android"));
         reader.invalidate();value=reader.read(1002,()->null,()->{throw new java.io.IOException("timeout");});check(!value.known&&value.diagnostics.contains("timeout"));
     }
+    static void usageCaptureCadence(){
+        DeferredStats.CaptureSchedule schedule=new DeferredStats.CaptureSchedule();
+        long minute=60000L;
+        check(schedule.deadline==Long.MAX_VALUE);
+        schedule.screen(true,10*minute);check(schedule.deadline==130*minute);
+        schedule.screen(false,50*minute);check(schedule.deadline==Long.MAX_VALUE);
+        schedule.screen(false,90*minute);check(schedule.remaining==80*minute);
+        schedule.screen(true,350*minute);check(schedule.deadline==430*minute);
+        schedule.screen(true,360*minute);check(schedule.deadline==430*minute);
+        schedule.schedule(430*minute,DeferredStats.CaptureSchedule.INTERVAL_MS);check(schedule.deadline==550*minute);
+        schedule.screen(false,450*minute);
+        schedule.schedule(460*minute,0);check(schedule.deadline==Long.MAX_VALUE);
+        schedule.screen(true,470*minute);check(schedule.deadline==470*minute);
+    }
+    static void alternateBatteryDiscovery()throws Exception{
+        Path root=Files.createTempDirectory("acol-battery-supplies-");
+        try{
+            Path accessory=Files.createDirectory(root.resolve("accessory"));
+            Files.write(accessory.resolve("type"),"Battery".getBytes(StandardCharsets.UTF_8));
+            Files.write(accessory.resolve("scope"),"Device".getBytes(StandardCharsets.UTF_8));
+            Path main=Files.createDirectory(root.resolve("main_battery"));
+            Files.write(main.resolve("type"),"Battery".getBytes(StandardCharsets.UTF_8));
+            check(main.toFile().equals(BatteryService.discoverAlternateBattery(root.toFile())));
+            Files.writeString(accessory.resolve("number_of_serial_cells"),"2");
+            Files.writeString(main.resolve("voltage_now"),"4050000");
+            check(BatteryService.detectCellCount("",root.toFile(),false)==0);
+            Files.writeString(main.resolve("voltage_min_design"),"3000000");
+            Files.writeString(main.resolve("voltage_max_design"),"4400000");
+            check(BatteryService.detectCellCount("",root.toFile(),false)==1);
+            check(BatteryService.detectCellCount("",root.toFile(),true)==0);
+            Files.writeString(main.resolve("number_of_serial_cells"),"2");
+            check(BatteryService.detectCellCount("",root.toFile(),true)==2);
+            check(BatteryService.detectCellCount("0,1",root.toFile(),true)==1);
+            Files.writeString(main.resolve("number_of_serial_cells"),"3");
+            check(BatteryService.detectCellCount("",root.toFile(),false)==0);
+            Files.delete(main.resolve("number_of_serial_cells"));
+            Files.writeString(main.resolve("voltage_now"),"7400000");
+            Files.writeString(main.resolve("voltage_min_design"),"6000000");
+            Files.writeString(main.resolve("voltage_max_design"),"8800000");
+            check(BatteryService.detectCellCount("",root.toFile(),false)==2);
+            Files.write(main.resolve("present"),"0".getBytes(StandardCharsets.UTF_8));
+            Path first=Files.createDirectory(root.resolve("pack_a"));
+            Files.write(first.resolve("type"),"Battery".getBytes(StandardCharsets.UTF_8));
+            check(first.toFile().equals(BatteryService.discoverAlternateBattery(root.toFile())));
+            Path second=Files.createDirectory(root.resolve("pack_b"));
+            Files.write(second.resolve("type"),"Battery".getBytes(StandardCharsets.UTF_8));
+            check(BatteryService.discoverAlternateBattery(root.toFile())==null);
+        }finally{try(java.util.stream.Stream<Path> files=Files.walk(root)){
+            for(Path file:(Iterable<Path>)files.sorted(java.util.Comparator.reverseOrder())::iterator)Files.delete(file);
+        }}
+    }
+    static void gaugeFallback(){
+        Core.Reading r=new Core.Reading();r.cellCount=1;
+        BatteryService.applyGaugeFallback(r,2000,400000,115,true,
+            node->node.equals("voltage_now")?"9990000":"-900",
+            node->node.equals("voltage_now")?"4050000":"335");
+        check(r.displayVoltage()==4050&&r.temp==33.5&&r.current==-400);
+        Core.Reading primary=new Core.Reading();primary.cellCount=1;
+        BatteryService.applyGaugeFallback(primary,4100,300000,31.5,true,
+            node->{throw new AssertionError("valid broadcast read fell through: "+node);},
+            node->{throw new AssertionError("valid broadcast read fell through: "+node);});
+        check(primary.displayVoltage()==4100&&primary.temp==31.5);
+        Core.Reading dual=new Core.Reading();
+        BatteryService.applyGaugeFallback(dual,-1,400000,115,false,
+            node->{check(node.equals("voltage_now"));return "5800000";},
+            node->{throw new AssertionError("valid primary pack voltage fell through: "+node);});
+        check(dual.displayVoltage()==2900&&Double.isNaN(dual.temp));
+    }
     public static void main(String[] args)throws Exception{
         MemoryStats memory=MemoryStats.parse("MemTotal: 11392228 kB\nMemFree: 824840 kB\nMemAvailable: 4639988 kB\n");
         check(memory!=null&&memory.totalBytes==11665641472L&&memory.usedBytes==6914293760L);
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();
-        System.out.println("Sampling: independent tail rules, exact boundaries, optional charging-only logs, screen and power input fallback passed");
+        chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();
+        System.out.println("Sampling: independent tail rules, exact boundaries, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

@@ -48,6 +48,7 @@ missing=[str(path) for path in required if not path.is_file()]
 if missing:parser.error('Required files not found:\n'+'\n'.join(missing))
 try:
     manifest=ET.parse(app/'src/main/AndroidManifest.xml').getroot()
+    min_api=manifest.find('uses-sdk').attrib['{http://schemas.android.com/apk/res/android}minSdkVersion']
     version=manifest.get('{http://schemas.android.com/apk/res/android}versionName','')
     if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._-]*',version):raise ValueError('Invalid manifest versionName')
     signing_password=password.read_text(encoding='utf-8-sig').strip()
@@ -73,10 +74,10 @@ def jar_classes(directory,output):
 
 run(jdk/('javac'+exe),'--release','8','-encoding','UTF-8','-cp',android,'-d',build/'daemon-classes',*sorted((app/'daemon/src').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')))
 jar_classes(build/'daemon-classes',build/'daemon.jar')
-run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api','35','--lib',android,'--output',build/'daemon-dex',build/'daemon.jar')
+run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api',min_api,'--lib',android,'--output',build/'daemon-dex',build/'daemon.jar')
 with zipfile.ZipFile(build/'payload/bin/daemon.dex.jar','w',zipfile.ZIP_DEFLATED) as archive:archive.write(build/'daemon-dex/classes.dex','classes.dex')
 for source,output,flags in [('wait.c','libcurvewait.so',['-shared','-fPIC']),('launcher.c','aco-launcher',['-fPIE','-pie'])]:
-    run(ndk/('bin/clang'+exe),'--target=aarch64-linux-android35','--sysroot='+str(ndk/'sysroot'),*flags,'-O2','-Wall','-Wextra','-Werror','-Wl,-z,max-page-size=16384','-Wl,-z,relro,-z,now',app/'daemon/src'/source,'-o',build/'payload/bin'/output)
+    run(ndk/('bin/clang'+exe),'--target=aarch64-linux-android'+min_api,'--sysroot='+str(ndk/'sysroot'),*flags,'-O2','-Wall','-Wextra','-Werror','-Wl,-z,max-page-size=16384','-Wl,-z,relro,-z,now',app/'daemon/src'/source,'-o',build/'payload/bin'/output)
 for path in (app/'runtime').glob('*.sh'):
     # Android sh treats CR in CRLF as part of options/commands. Normalize bytes
     # here as well as in source control, including Windows-edited scripts.
@@ -98,7 +99,7 @@ for resource in sorted(compiled.glob('*.flat')):resource_args.extend(['-R',resou
 run(tools/('aapt2'+exe),'link','--manifest',app/'src/main/AndroidManifest.xml','-I',android,*resource_args,'--java',build/'generated','-o',build/'resources.apk')
 run(jdk/('javac'+exe),'--release','8','-encoding','UTF-8','-cp',android,'-d',build/'classes',*sorted((app/'src/main/java').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')))
 jar_classes(build/'classes',build/'app.jar')
-run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api','35','--lib',android,'--output',build/'dex',build/'app.jar')
+run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api',min_api,'--lib',android,'--output',build/'dex',build/'app.jar')
 shutil.copyfile(build/'resources.apk',build/'unsigned.apk')
 with zipfile.ZipFile(build/'unsigned.apk','a',zipfile.ZIP_DEFLATED) as archive:
     archive.write(build/'dex/classes.dex','classes.dex')

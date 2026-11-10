@@ -158,6 +158,14 @@ final class WebViewHost {
         @JavascriptInterface public void restoreAllData(){ui(()->{if(app.dataTransfer!=null)app.dataTransfer.restore();});}
         @JavascriptInterface public void openErrorLogs(){ui(app::openErrorLogs);}
         @JavascriptInterface public void clearAllData(){ui(()->app.askClearAllData(1));}
+        @JavascriptInterface public String readRecordListCache(String key){return active()?app.recordListCache.read(key):"";}
+        @JavascriptInterface public void writeRecordListCache(String key,String json){
+            if(!active()||json==null||json.length()>32768)return;
+            long generation=app.recordListCache.generation();
+            try{app.worker.execute(()->{if(active())app.recordListCache.write(key,json,generation);});}
+            catch(java.util.concurrent.RejectedExecutionException ignored){}
+        }
+        @JavascriptInterface public void clearRecordListCache(){if(active())app.recordListCache.clear();}
         @JavascriptInterface public void post(String text){if(active())app.startup.post(text);}
         @JavascriptInterface public String beginChartExport(String name){return active()?app.chartExport.begin(name):"";}
         @JavascriptInterface public boolean appendChartExport(String token,String text){return active()&&app.chartExport.append(token,text);}

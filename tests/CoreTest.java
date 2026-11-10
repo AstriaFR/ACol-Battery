@@ -10,6 +10,15 @@ public final class CoreTest {
     public static void main(String[] args){
         close(Core.remainingMah(5040123),5040.123);close(Core.remainingMah(0),0);
         for(long value:new long[]{Long.MIN_VALUE,Integer.MIN_VALUE,-1,Long.MAX_VALUE})missing(Core.remainingMah(value));
+        close(Core.levelPercentage(42,50),84);close(Core.levelPercentage(0,100),0);
+        missing(Core.levelPercentage(101,100));missing(Core.levelPercentage(-1,100));missing(Core.levelPercentage(0,0));
+        Core.Reading unknown=new Core.Reading();unknown.cellCount=0;
+        Core.applySystem(unknown,8200,1000000,30);
+        close(unknown.displayVoltage(),8200);close(unknown.chargingCurrent(),1000);
+        missing(unknown.voltage());missing(unknown.power());missing(unknown.cell1);missing(unknown.cell2);
+        Core.Reading known=new Core.Reading();known.cellCount=2;
+        Core.applySystem(known,8200,1000000,30);
+        close(known.displayVoltage(),4100);close(known.power(),8.2);
         Core.Reading one=reading(1),two=reading(2);
         close(one.compensatedCurrent(),-1000);close(one.power(),-4);
         close(two.compensatedCurrent(),-2000);close(two.power(),-8);

@@ -8,7 +8,7 @@ export class ScreenOffOverlay{
     this.chart.screenOffSpans=[];
   }
   stamp(record,version){
-    const settled=record.fast_seconds>0&&Number.isFinite(version)?`stats:${version}`:`end:${record.end_elapsed}`;
+    const settled=Number.isFinite(version)?`stats:${version}`:`end:${record.end_elapsed}`;
     return `${record.id}:${record.start_wall}:${settled}:${record.active}`;
   }
   update(record,version){

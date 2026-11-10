@@ -48,18 +48,25 @@ async function recordLists(){
  globalThis.history={state:{page:'records'},pushState(state){this.state=state},replaceState(state){this.state=state},go(){},back(){}};globalThis.location={href:'https://aco.local/webroot/index.html'};
  const{createRecords}=await import(pathToFileURL(path.join(root,'records.js')).href);
  const{LiveChannel}=await import(pathToFileURL(path.join(root,'live-channel.js')).href);
- const channel=new LiveChannel(),calls=[],deleted=[],opened=[];let database=[],version=1,delayGame=null;
- const ui=createRecords({liveChannel:channel,toast:message=>{if(message!=='记录已删除')throw Error(message)},getSettings:()=>({hidePct:30}),getStatus:()=>({recordingEnabled:true}),getDetail:()=>null,getTab:()=> 'records',
-  openRecord:id=>opened.push(id),onKindChange(){},pauseRemaining(){},onDialogClose(){},onDeleted:id=>deleted.push(id),onRefresh(){},
+ const channel=new LiveChannel(),calls=[],deleted=[],opened=[];let database=[],version=1,delayGame=null,tab='home';
+ dom.get('showSmall').checked=false;
+ const ui=createRecords({liveChannel:channel,toast:message=>{if(message!=='记录已删除')throw Error(message)},getSettings:()=>({hidePct:30}),getStatus:()=>({recordingEnabled:true}),getDetail:()=>null,getTab:()=>tab,
+  openRecord:(id,record)=>opened.push([id,record]),onKindChange(){},pauseRemaining(){},onDialogClose(){},onDeleted:id=>deleted.push(id),onRefresh(){},
   api:async(action,...args)=>{
    if(action==='delete'){database=database.filter(r=>r.id!==args[0]);return{listVersion:++version};}
-   calls.push(args);const[all,offset,year,month,type]=args;if(type===3&&delayGame)return delayGame;
+   calls.push(args);const[all,before,year,month,type,expected,rank]=args;if(type===3&&delayGame)return delayGame;
+   if(expected!==undefined&&expected!==version)return{listChanged:true,listVersion:version};
    const filtered=database.filter(r=>(all||r.active||r.fast_seconds>0||r.delta>30)&&(!year||r.year===year&&r.month===month)&&(!type||(type===1?r.kind==='charge':type===2?r.kind==='discharge'&&!r.fast_seconds:r.kind==='discharge'&&r.fast_seconds>0)));
-   return{records:filtered.slice(offset,offset+40),total:filtered.length,totalRecords:database.length,listVersion:version};
+   const cursorRank=r=>r.active?(r.fast_seconds>0?0:1):2;
+   const rows=expected===undefined?filtered:filtered.filter(r=>cursorRank(r)>rank||cursorRank(r)===rank&&r.id<before);
+   return{records:rows.slice(0,40),total:filtered.length,totalRecords:database.length,listVersion:version};
   }});
  ui.bind();
  const flush=()=>new Promise(setImmediate),record=(id,kind,fast=0,month=10)=>({id,kind,fast_seconds:fast,delta:50,active:0,year:2026,month,start_wall:1000,start_elapsed:0,end_elapsed:120000,pct_start:80,pct_end:40,rm_start:5000,rm_end:2500});
  database=[...Array.from({length:101},(_,i)=>record(200-i,'charge')),record(1,'discharge',10)];
+ const active={...database[0],active:1};await ui.receive({activeRecord:active},ui.pollRequest());
+ assert.equal(calls.length,0,'home telemetry does not request history');assert.equal(ui.find(active.id),active);
+ tab='records';ui.open();await flush();assert.equal(ui.snapshot().records.length,40);assert.equal(ui.snapshot().totalRecords,102);
  ui.selectKind('game');await flush();assert.deepEqual(ui.snapshot().records.map(r=>r.id),[1]);assert.equal(ui.snapshot().total,1);assert.equal(ui.snapshot().totalRecords,database.length);assert.equal(calls.at(-1)[4],3);
  ui.selectMonth(2026,10);await flush();database.unshift(record(201,'discharge',10));
  await ui.receive({records:[],activeRecord:null},ui.pollRequest());assert.deepEqual(ui.snapshot().records.map(r=>r.id),[201,1]);assert.equal(ui.snapshot().total,2,'live month queries refresh counts');
@@ -70,9 +77,21 @@ async function recordLists(){
  let release;delayGame=new Promise(resolve=>release=resolve);const pending=ui.receive({records:[]},ui.pollRequest());
  database=[record(900,'charge')];ui.selectKind('charge');await flush();release({records:[record(1,'discharge',10)],total:1,listVersion:version});await pending;delayGame=null;
  assert.deepEqual(ui.snapshot().records.map(r=>r.id),[900],'old requests cannot overwrite a new filter');
- const card=dom.get('records').children[0];await card.click();assert.deepEqual(opened,[900]);
+ const card=dom.get('records').children[0];await card.click();assert.deepEqual(opened,[[900,database[0]]]);
  const remove=card.querySelector('.record-delete');await remove.click();assert.equal(dom.get('confirm').open,true);await dom.get('confirmDelete').click();
  assert.deepEqual(deleted,[900]);assert.equal(ui.snapshot().totalRecords,0);assert.equal(dom.get('confirm').open,false);
+ const historyRows=Array.from({length:100},(_,i)=>record(100-i,'charge'));
+ database=[{...record(101,'discharge'),active:1},...historyRows];version++;
+ ui.selectKind('all');await flush();
+ assert.equal(ui.snapshot().records.at(-1).id,62);
+ database=historyRows;version++;
+ await ui.more();
+ assert.deepEqual(calls.at(-2).slice(1),[62,0,0,0,version-1,2],'page request uses the stable sort position and revision');
+ assert.equal(calls.at(-1)[1],0,'changed ordering must refresh the head before appending');
+ assert.equal(ui.snapshot().records.some(r=>r.id===101),false);
+ assert.equal(ui.snapshot().records.at(-1).id,61,'the record displaced by an auto-deleted active row stays visible');
+ await ui.more();assert.equal(ui.snapshot().records.at(-1).id,21);
+ assert.equal(ui.snapshot().records.length,80);
 }
 
 async function recordDisplay(){
@@ -104,12 +123,52 @@ const record={kind:'discharge',pct_start:81,pct_end:77,rm_start:5100,rm_end:4800
   const unchanged=recordChanges({...game,pct_end:40,rm_end:2500});assert.deepEqual(unchanged.primary,{text:'+0%',flow:''});assert.deepEqual(unchanged.secondary,{text:'+0',flow:''});
 }
 
+async function persistentListAndBatches(){
+ const root=path.join(__dirname,'../src/main/assets/webroot/');
+ const{createRecords}=await import(pathToFileURL(path.join(root,'records.js')).href);
+ const{LiveChannel}=await import(pathToFileURL(path.join(root,'live-channel.js')).href);
+ const dom=require('./helpers.cjs').recordDom(),frames=[],writes=[],requests=[];
+ globalThis.document=dom.document;globalThis.history={state:{page:'records'},pushState(state){this.state=state},go(){}};
+ globalThis.location={href:'https://aco.local/webroot/index.html'};
+ globalThis.requestAnimationFrame=callback=>frames.push(callback);
+ const record=id=>({id,kind:'charge',active:0,start_wall:1000,start_elapsed:0,end_elapsed:120000,pct_start:25,pct_end:80,rm_start:1000,rm_end:4000});
+ const saved=Array.from({length:40},(_,i)=>record(80-i));
+ let cleared=0;
+ globalThis.window={AcoNative:{
+  readRecordListCache:key=>key==='all.0.0.0.30'?JSON.stringify({records:saved,total:80,totalRecords:81}):'',
+  writeRecordListCache:(key,text)=>writes.push([key,JSON.parse(text)]),clearRecordListCache:()=>cleared++
+ }};
+ const flush=()=>new Promise(setImmediate);
+ const page=()=>{for(const callback of frames.splice(0))callback();};
+ const list=dom.get('records'),scroller=dom.get('recordsPage').querySelector('.record-scroll');scroller.clientHeight=450;dom.get('showSmall').checked=false;
+ const ui=createRecords({api:async(action,...args)=>{
+  if(action==='delete')return{listVersion:3};
+  return new Promise(resolve=>requests.push({args,resolve}));
+ },liveChannel:new LiveChannel(),toast:message=>{if(message!=='记录已删除')throw Error(message);},getSettings:()=>({hidePct:30}),getStatus:()=>null,getDetail:()=>null,getTab:()=> 'records',
+ openRecord(){},onKindChange(){},pauseRemaining(){},onDialogClose(){},onDeleted(){},onRefresh(){}});
+ ui.bind();ui.open();assert.match(list.textContent,/正在读取/);
+ page();assert.ok(list.children.length>0&&list.children.length<saved.length,'cached cards paint a screenful before the next batch');
+ assert.equal(dom.get('recordCount').textContent,'共81条');
+ while(frames.length)page();
+ await ui.more();assert.equal(requests.length,1,'cached rows cannot determine a pagination offset');
+ const reused=list.children[0],active={...record(81),active:1};
+ requests[0].resolve({records:[active,...saved.slice(0,39)],total:81,totalRecords:82,listVersion:2});await flush();
+ assert.equal(list.children[1],reused,'live reconciliation reuses unchanged cached cards');
+ assert.equal(writes[0][1].records.length,39);assert.equal(writes[0][1].records.some(r=>r.id===81),false);
+ scroller.scrollTop=145;ui.open();assert.equal(scroller.scrollTop,145);assert.equal(list.children[1],reused);
+ await reused.querySelector('.record-delete').click();await dom.get('confirmDelete').click();
+ assert.equal(cleared,1);assert.equal(ui.find(80),undefined);
+ ui.invalidate();assert.equal(cleared,2);assert.equal(ui.snapshot().ready,false);
+}
+
 async function detailPaging(){
  globalThis.window={};
  const{readRecordDetail}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/record-detail.js')).href);
  const calls=[],record={id:9,start_elapsed:10,end_elapsed:310};
  const api=async(...args)=>{calls.push(args);return calls.length===1?{record,points:[[0]],nextAfter:100,apps:[]}:{record,points:[[200]],nextAfter:null};};
  const data=await readRecordDetail(api,9,0,1000,1600);assert.deepEqual(data.points,[[0],[200]]);assert.equal(calls[1][3],300,'later pages stay within the opened record endpoint');
+ const preview=await readRecordDetail(async(action)=>{assert.equal(action,'detail_preview');return{record,preview:true,points:[[0],[300]]};},9,0,1000,1200,()=>false,true);
+ assert.equal(preview.preview,true);assert.deepEqual(preview.points,[[0],[300]]);
  let canceled=false,count=0;
  const stale=await readRecordDetail(async()=>{count++;canceled=true;return{record,points:[[0]],nextAfter:100}},9,0,1000,1600,()=>canceled);
  assert.equal(stale,null);assert.equal(count,1,'leaving the page prevents additional detail pages');
@@ -160,4 +219,4 @@ async function usageCompletion(){
  }finally{globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
 }
 
-runCases([liveCursors,recordLists,recordDisplay,detailPaging,usageCompletion]).then(()=>console.log('Records: list/detail pagination, filters, deletion, live cursors, races, display and deferred usage completion passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([liveCursors,recordLists,recordDisplay,persistentListAndBatches,detailPaging,usageCompletion]).then(()=>console.log('Records: cache and staged rendering, pagination, filters, deletion, live cursors, races, display and deferred usage completion passed')).catch(error=>{console.error(error);process.exitCode=1;});

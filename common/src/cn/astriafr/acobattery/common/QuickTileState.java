@@ -12,7 +12,6 @@ public final class QuickTileState {
         String key=game?"fastEnabled":"powerDisplayEnabled";
         if(!(status.opt(key) instanceof Boolean))throw new IOException("后台状态不可用，请先打开应用完成更新。");
         boolean enabled=(Boolean)status.opt(key);
-        if(game&&!enabled&&status.has("recordingEnabled")&&!status.optBoolean("recordingEnabled"))return new QuickTileState(false,false,"请先开启记录");
         String error=game?"":status.optString("powerDisplayError","");
         return new QuickTileState(enabled,true,enabled&&!error.isEmpty()?"显示异常":"");
     }

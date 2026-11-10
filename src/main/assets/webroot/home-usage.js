@@ -14,6 +14,7 @@ export class HomeUsagePanel extends DailyUsageChart{
   homeVisible(){return !document.hidden&&!this.host.closest('[hidden]');}
   visible(){return !document.hidden&&['homePage','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail'].some(id=>{const node=document.getElementById(id);return node&&!node.closest('[hidden]')});}
   connected(){if(this.ready)return;this.ready=true;this.resume();}
+  prioritize(day){this.priorityDay=day;}
   pause(){this.generation++;this.cancelPress();this.hideTip();clearTimeout(this.refreshTimer);this.refreshTimer=null;}
   resume(force=false){
     if(!this.ready||!this.visible())return;
@@ -23,29 +24,44 @@ export class HomeUsagePanel extends DailyUsageChart{
     this.running=this.collect(generation).finally(()=>{this.running=null;if(this.rerun&&this.visible()){this.lastStarted=0;this.resume();}else this.scheduleRefresh();});
   }
   scheduleRefresh(){clearTimeout(this.refreshTimer);if(this.visible()&&this.ready)this.refreshTimer=setTimeout(()=>this.resume(true),60000);}
+  collecting(generation){return this.visible()&&generation===this.generation;}
+  *prioritizedDays(today){
+    const first=nextDate(today,-9),pending=new Set(Array.from({length:10},(_,i)=>nextDate(first,i)));
+    while(pending.size){
+      const visibleDay=this.priorityDay??this.day;
+      const day=pending.has(visibleDay)?visibleDay:pending.has(today)?today:pending.values().next().value;
+      pending.delete(day);yield day;
+    }
+  }
+  async publishDay(day,generation){
+    if(!this.collecting(generation))return;
+    if(this.homeVisible()&&this.day===day)await this.display(day);
+    if(this.collecting(generation))Promise.resolve(this.onDataChange?.(day)).catch(()=>{});
+  }
   async collect(generation){
     try{
       await this.warm;await yieldUI();if(!this.visible()||generation!==this.generation)return;
       if(localZone()!==this.cache.zone){this.close();this.day=midnight(Date.now());this.selected=null;this.data=null;this.cache=new DailyUsageCache();await this.display(this.day);}
-      const today=midnight(Date.now()),first=nextDate(today,-9);
+      const today=midnight(Date.now());
       if(this.lastToday&&this.day===this.lastToday&&this.lastToday!==today)await this.display(today);this.lastToday=today;
-      for(let i=0;i<10;i++){
-        if(!this.visible()||generation!==this.generation)return;
-        const day=nextDate(first,i),summary=await this.cache.summary(day),from=summary?.through??day,target=Math.min(nextDate(day),Date.now()-5000);
+      for(const day of this.prioritizedDays(today)){
+        if(!this.collecting(generation))return;
+        const summary=await this.cache.summary(day),from=summary?.through??day,target=Math.min(nextDate(day),Date.now()-5000);
         if(summary?.deleted)continue;
-        // Finished dates require only a tiny summary record, never their app/hour layers.
-        let changed=false;
         if(from<target){
           const progress=await this.cache.getProgress(from>day?day:nextDate(day,-1));
-          await yieldUI();if(!this.visible()||generation!==this.generation)return;
+          await yieldUI();if(!this.collecting(generation))return;
+          // Without a matching checkpoint the backend seeds from earlier events.
           const result=await this.api('daily_usage',from,target,progress.through===from?progress.state||'0':'0');
-          await this.cache.apply(result);changed=true;
+          if(!this.collecting(generation))return;
+          await this.cache.apply(result);
+          await this.publishDay(day,generation);
         }
-        if(await this.repairDay(day,generation))changed=true;
-        if(changed){
-          if(this.homeVisible()&&this.day===day)await this.display(day);
-          Promise.resolve(this.onDataChange?.(day)).catch(()=>{});
-        }
+      }
+      // Missing historical hours are repaired after the newest totals are available.
+      for(const day of this.prioritizedDays(today)){
+        if(!this.collecting(generation))return;
+        if(await this.repairDay(day,generation))await this.publishDay(day,generation);
       }
     }catch(error){if(this.visible()&&generation===this.generation)this.node('screenTimeHint').textContent=this.entry?.through>this.day?'已显示缓存，新增时段暂未读取':'使用情况暂不可用，稍后重试';}
   }
@@ -66,6 +82,7 @@ export class HomeUsagePanel extends DailyUsageChart{
       await yieldUI();if(!this.visible()||generation!==this.generation)break;
       try{
         const result=await this.api('daily_usage',from,to,'0');
+        if(!this.collecting(generation))break;
         if(await this.cache.repairHour(result,hour))changed=true;
       }catch{ /* Preserve the confirmed part and retry this hour on a later foreground pass. */ }
       if(++attempts>=2)break;

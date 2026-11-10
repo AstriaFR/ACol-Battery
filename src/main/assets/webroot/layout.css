@@ -85,3 +85,6 @@ dialog{max-height:calc(100dvh - 24px);overflow-y:auto;overflow-wrap:anywhere}
   .numeric-keypad .keypad-readout{padding-block:3px;margin-bottom:5px}
   .numeric-keypad .keypad-heading{margin-bottom:6px}
 }
+.detail[data-panel-loading]>.page-scroll{display:none}
+.detail[data-panel-loading] .subpage-header button:not(.back):not(.page-home){visibility:hidden}
+.panel-loading-status{margin:12px 2px;color:var(--muted)}

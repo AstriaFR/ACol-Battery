@@ -9,9 +9,11 @@ import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,recordEnd
 import{createRecordDrain}from'./record-usage.js?v=acol-2.2s';
 import{bindExport,recordCsv}from'./chart-export.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
+const fullRecordEnd=Number.MAX_SAFE_INTEGER,previewBudget=1200;
 
-export async function readRecordDetail(api,id,from,to,budget,cancelled=()=>false){
-  let data=await api('detail',id,from,to,budget);if(cancelled())return null;
+export async function readRecordDetail(api,id,from,to,budget,cancelled=()=>false,preview=false){
+  const action=preview?'detail_preview':'detail';
+  let data=await api(action,id,from,to,budget);if(cancelled())return null;
   const points=[...data.points],end=Math.min(to,data.record.end_elapsed-data.record.start_elapsed);
   while(valid(data.nextAfter)){
     const page=await api('detail',id,from,end,budget,data.nextAfter);if(cancelled())return null;
@@ -23,17 +25,18 @@ export async function readRecordDetail(api,id,from,to,budget,cancelled=()=>false
 export function createRecordDetail(options){
   const{api,liveChannel,toast,fullScreen,readAppIcons,beforeOpen,onShow,onRefresh}=options;
   let detail=null,activeId=null,request=0,detailBusy=0,zoomTimer,expanded=false,fullscreenAnchor=null;
-  let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],reversePlot=false;
+  let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],streamPreview=false,reversePlot=false;
+  let followRedrawPending=false;
   let remainingTimer,remainingGeneration=0,remainingRecordId=null,gameFrequencies=null,lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
   const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
   const intervalAppDetails=new IntervalAppDetails(chart,api,()=>detail?.record);
   const screenOffOverlay=new ScreenOffOverlay(chart,api,()=>!document.hidden&&!$('detail').hidden,message=>toast(message));
-  const performancePanel=new PerformancePanel(api);
+  let performancePanel;
   const drain=createRecordDrain(api,{getData:()=>detail,readAppIcons,onSettled:result=>{
     if(!detail)return;
     liveChannel.settle(detail.record,result);
     detail={...detail,apps:result.apps,drainSummary:result.drainSummary,statsVersion:result.statsVersion,statsEpoch:result.statsEpoch,usagePending:result.usagePending,record:{...detail.record,app_revision:result.appRevision??detail.record.app_revision}};
-    renderApps(detail);intervalAppDetails.preload(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
+    renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);screenOffOverlay.update(detail.record,detail.statsVersion);
   }});
   chart.onInteract=()=>pauseFollowing();
   const readDetail=(...args)=>readRecordDetail(api,...args);
@@ -87,7 +90,7 @@ export function createRecordDetail(options){
   function dismissRemainingExplanation(){
     if(history.state?.remainingExplanation)history.back();else $('remainingExplanation').close();
   }
-  function syncReversePlot(){
+  function syncReversePlot(redraw=true){
     const available=detail?.record.kind==='charge'||!!(detail?.record&&recordFast(detail.record));
     const enabled=available&&reversePlot;
     $('reversePlot').hidden=!available;
@@ -95,7 +98,7 @@ export function createRecordDetail(options){
     $('reversePlot').setAttribute('aria-pressed',String(reversePlot));
     $('chartPanel').classList.toggle('reverse-plot',enabled);
     chart.reversePlot=enabled;
-    chart.draw();
+    if(redraw)chart.draw();
   }
   function pauseFollowing(){followLive=false;renderFollow();}
   function renderFollow(){
@@ -103,16 +106,19 @@ export function createRecordDetail(options){
     $('followLatest').textContent=followLive?'实时跟随':'回到实时';$('followLatest').classList.toggle('selected',followLive);$('followLatest').setAttribute('aria-pressed',String(followLive));
   }
   function followWindow(end){return followSpan===null?[0,end]:[Math.max(0,end-followSpan),end];}
-  function scheduleZoom(){pauseFollowing();clearTimeout(zoomTimer);zoomTimer=setTimeout(()=>loadWindow(),180);}
+  function scheduleZoom(){if(!detail||detail.loading)return;pauseFollowing();clearTimeout(zoomTimer);zoomTimer=setTimeout(()=>loadWindow(),180);}
   function applyChart(data,view,live=false){
-    intervalAppDetails.preload(data.record);
-    chart.set(data.points,Math.max(1,data.record.end_elapsed-data.record.start_elapsed),view,{kind:data.record.kind,cellCount:recordCells(data.record),fast:recordFast(data.record),recordId:data.record.id,startWall:data.record.start_wall,ranges:data.ranges??{},live});screenOffOverlay.update(data.record,data.statsVersion);renderChartInfo();renderFollow();
+    const record=data.record;
+    chart.readRawInspection=data.preview?async(from,to,x)=>(await api('detail_sample',record.id,from,to,x)).sample:null;
+    chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live});
+    if(!data.loading){intervalAppDetails.preload(record,data.statsVersion);screenOffOverlay.update(record,data.statsVersion);}
+    renderChartInfo();renderFollow();
   }
   function renderChartInfo(){
     if(!detail)return;const r=detail.record,raw=r.kind==='charge';
     const gameSeconds=valid(lastStatus?.gamePowerIntervalMs)?lastStatus.gamePowerIntervalMs/1000:uiSettings.fastSeconds;
     const plan=raw?(r.active?`每 ${uiSettings.chargeSeconds} 秒记录`:'充电原始采样'):recordFast(r)?`游戏性能统计${r.active?' · 功耗每 '+gameSeconds+' 秒':''} · 实时功率`:r.active?`亮屏 ${uiSettings.screenOnMinutes} 分钟 / 息屏 ${uiSettings.screenOffMinutes} 分钟`:'按屏幕状态记录';
-    $('chartInfo').textContent=`${r.active?(followLive?'实时跟随':'已暂停跟随'):'已结束'} · ${plan}`;
+    $('chartInfo').textContent=detail.loading?'正在读取曲线…':`${r.active?(followLive?'实时跟随':'已暂停跟随'):'已结束'} · ${plan}${detail.preview?' · 预览':''}`;
     for(const s of seriesFor(r.kind,recordCells(r),recordFast(r))){
       const label=$('legend').querySelector(`[data-series="${s.key}"]`);if(!label)continue;
       const scale=chart.scaleFor(s);label.querySelector('.legend-scale').textContent=scale.label;
@@ -123,38 +129,54 @@ export function createRecordDetail(options){
   }
   async function loadWindow(){
     if(activeId===null)return;const token=++request,id=activeId,[a,b]=chart.window;detailBusy++;
-    try{const data=await readDetail(id,Math.floor(a),Math.ceil(b),1600,()=>token!==request||id!==activeId);if(!data)return;detail=data;applyChart(data,[a,b]);}
-    catch(e){toast(e.message);}
+    try{await loadCurve(id,Math.floor(a),Math.ceil(b),token,data=>{detail=data;applyChart(data,[a,b]);});}
+    catch(e){if(current(token,id))toast(e.message);}
     finally{detailBusy--;schedulePoll(0);}
+  }
+  async function loadCurve(id,from,to,token,apply){
+    const data=await readDetail(id,from,to,previewBudget,()=>!current(token,id),true);
+    if(data)apply(data);
   }
   async function close(){
     screenOffOverlay.close();
     drain.close();
-    performancePanel.close();
+    performancePanel?.close();
     stopRemaining();
     hideAppEnergyTip();
     if(expanded)await toggleFullscreen(false);
     ++request;clearTimeout(zoomTimer);
-    activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;followLive=false;
+    activeId=null;detail=null;streamId=null;streamPoints=[];streamAfter=0;streamPreview=false;followLive=false;followRedrawPending=false;chart.clearInspect();
     $('detail').hidden=true;
   }
-  async function openDetail(id){
+  async function openDetail(id,record){
     screenOffOverlay.close();
     beforeOpen();
     drain.close();
-    performancePanel.close();
+    performancePanel?.close();
     gameFrequencies=null;
-    liveChannel.setMode(0);
     stopRemaining();hideAppEnergyTip();
-    const token=++request;activeId=id;detail=null;streamId=null;followLive=false;reversePlot=false;syncReversePlot();detailBusy++;
-    try{const data=await readDetail(id,0,9007199254740991,1600,()=>token!==request||id!==activeId);if(data)showDetail(data);}
-    catch(e){if(token===request){activeId=null;toast(e.message);}}
+    clearTimeout(zoomTimer);
+    const token=++request;activeId=id;detail=null;streamId=null;streamPoints=[];streamAfter=0;streamPreview=false;followLive=false;followRedrawPending=false;reversePlot=false;detailBusy++;
+    if(record?.id===id)showDetail({record,points:[],loading:true});
+    try{
+      await loadCurve(id,0,fullRecordEnd,token,data=>{
+        const preserve=detail?.record.id===id;
+        streamId=id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;streamPreview=!!data.preview;
+        if(preserve&&chart.window[0]===0&&chart.window[1]===chart.total)chart.window=[0,Math.max(1,data.record.end_elapsed-data.record.start_elapsed)];
+        showDetail(data,preserve);
+        if(data.record.active){liveChannel.seedRecord(id,streamAfter);startRemaining();}
+      });
+    }
+    catch(e){if(current(token,id)){if(detail?.loading)$('chartInfo').textContent='曲线读取失败';else if(!detail)activeId=null;toast(e.message);}}
     finally{detailBusy--;schedulePoll(0);}
   }
   function showDetail(data,preserve=false,live=false){
+    followRedrawPending=false;
     detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
-    liveChannel.setMode(recordFast(r)?2:0);
-    performancePanel.open(r);
+    if(!data.loading)liveChannel.setMode(r.active?(recordFast(r)?2:0):3);
+    if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
+    if(data.loading)$('apps').hidden=true;
+    $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
     onShow();
     const heading=$('detailScroll').querySelector('.record-detail-head');
     heading.dataset.kind=recordFast(r)?'game':r.kind;heading.dataset.active=r.active?'1':'0';
@@ -168,12 +190,13 @@ export function createRecordDetail(options){
     $('chartTitle').textContent=r.kind==='charge'?'充电曲线':'放电曲线';
     renderSummary(r);
     syncRemainingExplanation();
-    if(!preserve){streamId=r.id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
+    if(!preserve){followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
+    syncReversePlot(false);
     const end=Math.max(1,r.end_elapsed-r.start_elapsed),view=live&&followLive?followWindow(end):preserve?chart.window:[0,end];applyChart(data,view,live);
-    syncReversePlot();
     if(!preserve&&chart.enabled.has('energy')&&!(uiSettings.energyWh>0))toast(uiSettings.energyWh===0?'默认能量量程为 0，量程按记录最大值显示。':'未设置默认能量量程，量程按记录最大值显示。');
-    renderApps(data);renderDetailNote(data);
-    if(!preserve){if(history.state?.page!=='record'||history.state.id!==r.id)history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);startRemaining();}
+    if(!data.loading)renderApps(data);
+    renderDetailNote(data);
+    if(!preserve&&(history.state?.page!=='record'||history.state.id!==r.id))history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);
   }
   function frequencyCell(label,kind){
     const cell=el('div',undefined,kind),value=el('strong');
@@ -206,8 +229,8 @@ export function createRecordDetail(options){
     const currentRecord=live&&valid(reading.rm)?{...r,rm_end:reading.rm}:r;
     const change=capacityChange(currentRecord),changeFlow=recordFast(r)?capacityFlow(currentRecord):r.kind;
     const primary=[
-      ['pct',valid(reading.pct)?`${fmt(reading.pct)}%`:'—','电量','',null],
-      ['rm',fmt(reading.rm),'剩余容量','',null],
+      ['pct',valid(reading.pct??r.pct_end)?`${fmt(reading.pct??r.pct_end)}%`:'—','电量','',null],
+      ['rm',fmt(reading.rm??r.rm_end),'剩余容量','',null],
       ['current',r.kind==='discharge'?signed(displayCurrent,0):signed(valid(displayCurrent)?displayCurrent/1000:null),'电流',r.kind==='discharge'?'mA':'A',flow],
       ...(separateCells?[
         ['cell1',number(valid(reading.cell1)?reading.cell1/1000:null,3),'电芯 1','V',null],
@@ -276,7 +299,7 @@ export function createRecordDetail(options){
   }
   function renderDetailNote(data){
     const r=data.record;
-    $('detailNote').textContent=`${fmt(data.rawCount??data.points.length)} 个采样点 · 缺样 ${r.missed??0} · 异常 ${r.anomalies??0}`;
+    $('detailNote').textContent=data.loading?'':`${fmt(data.rawCount??data.points.length)} 个采样点 · 缺样 ${r.missed??0} · 异常 ${r.anomalies??0}`;
   }
   function legendKeys(kind,cells,fast){return [...seriesFor(kind,cells,fast).map(s=>s.key),...(kind==='discharge'?['screenOff']:[])];}
   function buildLegend(kind){
@@ -356,17 +379,13 @@ export function createRecordDetail(options){
     if(id&&current(token,id)){
       if(packet.record===null){toast('此记录已删除');$('back').click();return;}
       if(packet.record){
-        if(points.length&&packet.record.kind==='discharge'){
-          const settled=await api('settle_usage',id);if(!current(token,id))return;
-          liveChannel.settle(packet.record,settled);
-          packet.apps=settled.apps;packet.drainSummary=settled.drainSummary;packet.statsVersion=settled.statsVersion;packet.statsEpoch=settled.statsEpoch;packet.record.app_revision=settled.appRevision;packet.usagePending=settled.usagePending;
-        }
         for(const point of points)if(point[0]>streamAfter){streamPoints.push(point);streamAfter=point[0];}
-        const changed=points.length>0||packet.record.active!==detail.record.active||valid(packet.statsVersion)&&packet.statsVersion!==detail.statsVersion;
+        const pendingChanged=typeof packet.usagePending==='boolean'&&packet.usagePending!==detail.usagePending;
+        const changed=points.length>0||packet.record.active!==detail.record.active||pendingChanged||valid(packet.statsVersion)&&packet.statsVersion!==detail.statsVersion;
         detail={...detail,record:packet.record,ranges:packet.ranges??detail.ranges,rawCount:packet.rawCount??detail.rawCount,statsVersion:packet.statsVersion??detail.statsVersion,statsEpoch:packet.statsEpoch??detail.statsEpoch,usagePending:packet.usagePending??detail.usagePending,apps:packet.apps??detail.apps,drainSummary:packet.drainSummary??detail.drainSummary};
         if(changed){
-          if(followLive&&!chart.pointers.size)showDetail({...detail,points:streamPoints},true,true);
-          else{chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps)renderApps(detail);renderDetailNote(detail);renderFollow();renderChartInfo();}
+          if(followLive&&!chart.pointers.size)showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);
+          else{followRedrawPending=followLive;chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}renderDetailNote(detail);renderFollow();renderChartInfo();}
         }
         renderSummary(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
       }
@@ -388,23 +407,23 @@ export function createRecordDetail(options){
       if(followLive){pauseFollowing();renderChartInfo();return;}
       ++request;clearTimeout(zoomTimer);const span=chart.window[1]-chart.window[0];
       followSpan=chart.window[0]===0&&span>=chart.total-1?null:span;followLive=true;
-      showDetail({...detail,points:streamPoints},true,true);schedulePoll(0);
+      showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);schedulePoll(0);
     };
     $('resetZoom').onclick=()=>{
-      if(detail?.record.active&&streamId===activeId){++request;clearTimeout(zoomTimer);followLive=true;followSpan=null;showDetail({...detail,points:streamPoints},true,true);schedulePoll(0);}
+      if(detail?.record.active&&streamId===activeId){++request;clearTimeout(zoomTimer);followLive=true;followSpan=null;showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);schedulePoll(0);}
       else{chart.setWindow(0,chart.total);scheduleZoom();}
     };
 
-    document.addEventListener('pointerup',()=>{if(followLive&&detail?.record.active&&!chart.pointers.size)showDetail({...detail,points:streamPoints},true,true);});
+    document.addEventListener('pointerup',()=>{if(followRedrawPending&&followLive&&detail?.record.active&&streamId===activeId&&!detail.loading&&!chart.pointers.size)showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'&&expanded)toggleFullscreen(false);});
   }
   return{bind,open:openDetail,close,pollRequest,current,receive,
     get data(){return detail;},get id(){return activeId;},get busy(){return detailBusy>0;},
     setStatus(value){lastStatus=value;},
     setSettings(value){uiSettings=value;if(detail){chart.draw();renderChartInfo();}},
-    theme(){if(activeId!==null&&detail)buildLegend(detail.record.kind);chart.draw();performancePanel.refreshTheme();},
+    theme(){if(activeId!==null&&detail)buildLegend(detail.record.kind);chart.draw();performancePanel?.refreshTheme();},
     syncHistory:syncRemainingExplanation,
-    backFullscreen(){if(performancePanel.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
+    backFullscreen(){if(performancePanel?.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
     pause(){stopRemaining();drain.pause();gameFrequencies=null;renderGameFrequencies(null);},
     resume(){startRemaining();drain.resume();},pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
     prune(){drain.prune();intervalAppDetails.prune();},

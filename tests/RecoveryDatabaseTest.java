@@ -113,12 +113,31 @@ public final class RecoveryDatabaseTest {
         Main next=open(dir,"boot-a");check(next.settings.getInt("chargeSeconds")==10);next.recover(reading(20000,5001,true));
         check(next.session==id);check(next.sampling.interval(1)==10000);release(next);
     }
+    static void standaloneGameWaitsForReadings()throws Exception {
+        File dir=Files.createTempDirectory("acol-recovery-game-only-").toFile();
+        Files.createFile(new File(dir,"recording.disabled").toPath());
+        Main first=open(dir,"boot-a");
+        first.rememberFast(true);
+        first.withGame(()->first.begin(reading(10000,5000,false)));
+        long id=first.gameTrack.session;
+        release(first);
+
+        Main next=open(dir,"boot-a");
+        next.recoverWhenReady(reading(11000,Double.NaN,false));
+        check(next.fastEnabled&&!next.recordingEnabled&&!next.powerReady&&next.powerRetryAt>11000);
+        check(value(next,"SELECT active FROM sessions")==1);
+        check(value(next,"SELECT COUNT(*) FROM samples")==1);
+        next.recoverWhenReady(reading(16000,4998,false));
+        check(next.powerReady&&next.gameTrack.session==id&&next.session<0);
+        check(value(next,"SELECT COUNT(*) FROM sessions")==1);
+        release(next);
+    }
     public static void main(String[] args)throws Exception {
         android.os.Looper.prepareMainLooper();
         Class<?> activityThread=Class.forName("android.app.ActivityThread");
         Object thread=activityThread.getMethod("systemMain").invoke(null);
         context=(android.content.Context)activityThread.getMethod("getSystemContext").invoke(thread);
-        sameBootAndLegacy();fastMinuteAnchor();splitAndTail();damagedCheckpointAndRollback();samplingSettings();
+        sameBootAndLegacy();fastMinuteAnchor();splitAndTail();damagedCheckpointAndRollback();samplingSettings();standaloneGameWaitsForReadings();
         System.out.println("SQLite recovery: legacy upgrade, repeated resume, game minute accounting, power transition, kernel reboot, completed tail, charging, corrupt checkpoint and transaction rollback passed");
         System.exit(0);
     }

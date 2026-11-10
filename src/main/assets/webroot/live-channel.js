@@ -1,18 +1,18 @@
 import{spawn,exec}from'./root-bridge.js?v=acol-2.2s';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 
-export function compareRecords(a,b){
-  const rank=r=>r.active?(Number(r.fast_seconds)>0?0:1):2;
-  return rank(a)-rank(b)||b.id-a.id;
-}
+export const recordRank=record=>record.active?(Number(record.fast_seconds)>0?0:1):2;
+export function compareRecords(a,b){return recordRank(a)-recordRank(b)||b.id-a.id;}
 
 export class LiveChannel{
-  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.lists=null;this.listSequence=0;this.sentList=0;this.mode=0;this.small=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
+  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.lists=null;this.listSequence=0;this.mode=3;this.small=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
   selectSmall(value){
-    const small=Number(!!value);if(this.small===small)return;
-    this.close();this.small=small;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;
+    this.small=Number(!!value);
   }
   setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===1)this.infoSnapshot=null;}
+  seedRecord(id,after){
+    if(!this.connection){this.resumeId=id;this.resumeAfter=after;}
+  }
   stopProcess(connection){
     if(!connection.pid||connection.killed)return;
     connection.killed=true;
@@ -26,7 +26,7 @@ export class LiveChannel{
   open(){
     if(this.connection&&!this.connection.closed)return;
     const connection={closed:false,pid:null,killed:false};this.connection=connection;
-    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),this.infoSnapshot?'0':'1',String(this.small)]);
+    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),this.infoSnapshot?'0':'1',String(this.small),'0']);
     const failed=()=>{
       if(connection.closed)return;
       connection.closed=true;if(this.connection!==connection)return;
@@ -76,15 +76,11 @@ export class LiveChannel{
     this.merge(packet.previous);this.merge(packet.parallelPrevious);this.merge(packet.parallel);this.merge(packet);
     this.latest=packet;this.receivedAt=Date.now();++this.sequence;
     const resumeId=Math.max(0,packet.status.session);
-    this.resumeAfter=resumeId?(this.rows.get(resumeId)?.points.at(-1)?.[0]??(resumeId===this.resumeId?this.resumeAfter:0)):0;
+    this.resumeAfter=resumeId?Math.max(this.rows.get(resumeId)?.points.at(-1)?.[0]??0,resumeId===this.resumeId?this.resumeAfter:0):0;
     this.resumeId=resumeId;
     if(Array.isArray(packet.records)&&(packet.listVersion??0)>=this.minimumListVersion){
       if(packet.listSmall!==undefined){
-        const small=!!packet.listSmall,key=small?'all':'normal',totalKey=small?'totalAll':'total';
-        const hidePct=packet.status.settings?.hidePct??this.lists?.hidePct,rows=packet.records.filter(row=>!this.deleted.has(row.id));
-        this.lists??={normal:null,all:null,total:0,totalAll:0,hidePct};
-        this.lists[key]=this.mergeHead(rows,packet.total,this.lists[key]??[],this.lists[totalKey],small||hidePct===this.lists.hidePct);
-        this.lists[totalKey]=packet.total;this.lists.totalAll=packet.totalRecords;this.lists.hidePct=hidePct;++this.listSequence;
+        this.replaceHead(!!packet.listSmall,packet,packet.status.settings?.hidePct??this.lists?.hidePct);
       }else{
       const hidePct=packet.status.settings?.hidePct??this.lists?.hidePct;
       const normal=packet.records.filter(row=>!this.deleted.has(row.id)),all=packet.recordsAll.filter(row=>!this.deleted.has(row.id));
@@ -116,6 +112,16 @@ export class LiveChannel{
     const tail=keep&&total>=previousTotal&&oldest?previous.filter(row=>!row.active&&row.id<oldest&&!this.deleted.has(row.id)):[];
     return[...head,...tail].sort(compareRecords).slice(0,total);
   }
+  replaceHead(small,page,hidePct){
+    const key=small?'all':'normal',totalKey=small?'totalAll':'total',versionKey=small?'versionAll':'version';
+    const rows=page.records.filter(row=>!this.deleted.has(row.id));
+    this.lists??={normal:null,all:null,total:0,totalAll:0,hidePct};
+    const sameVersion=page.listVersion===undefined||this.lists[versionKey]===undefined||page.listVersion===this.lists[versionKey];
+    this.lists[key]=this.mergeHead(rows,page.total,this.lists[key],this.lists[totalKey],sameVersion&&(small||hidePct===this.lists.hidePct));
+    this.lists[versionKey]=page.listVersion;
+    this.lists[totalKey]=page.total;this.lists.totalAll=page.totalRecords;this.lists.hidePct=hidePct;++this.listSequence;
+    return this.cachedList(small);
+  }
   appendList(small,page){
     if((page.listVersion??0)<this.minimumListVersion)return this.cachedList(small);
     if(!this.lists)return page;
@@ -140,7 +146,8 @@ export class LiveChannel{
     if(!Array.isArray(records))return null;
     // Pagination and active-row updates must not mutate the shared snapshots.
     const active=this.deleted.has(this.latest?.activeRecord?.id)?null:this.latest?.activeRecord;
-    return{records:records.map(row=>row.id===active?.id?active:row.active&&this.rows.get(row.id)?.record||row).sort(compareRecords),total:small?this.lists.totalAll:this.lists.total,totalRecords:this.lists.totalAll};
+    return{records:records.map(row=>row.id===active?.id?active:row.active&&this.rows.get(row.id)?.record||row).sort(compareRecords),
+      total:small?this.lists.totalAll:this.lists.total,totalRecords:this.lists.totalAll,listVersion:small?this.lists.versionAll:this.lists.version};
   }
   async live(args){
     this.selectSmall(args[3]);
@@ -151,10 +158,7 @@ export class LiveChannel{
       const row=this.rows.get(id);
       Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter:null,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,statsEpoch:row.statsEpoch,usagePending:row.usagePending,apps:row.apps,drainSummary:row.drainSummary});
     }
-    const list=this.cachedList(small);
-    if(list&&(wantList||this.sentList!==this.listSequence)){
-      Object.assign(result,list);this.sentList=this.listSequence;
-    }
+    if(wantList){const list=this.cachedList(small);if(list)Object.assign(result,list);}
     return result;
   }
 }

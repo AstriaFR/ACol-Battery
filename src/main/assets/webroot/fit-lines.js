@@ -3,11 +3,31 @@
 const selector='.livegrid strong,.record-date,.summary-metric>strong,.summary-remaining>div>strong,.summary-frequencies strong,.drain-item-values,.appEnergy strong,.home-usage-summary>.screen-time-total,.usage-detail-summary>.screen-time-total,.usage-week-average>strong';
 export function installLineFitting(){
   let frame=0;const pending=new Set();
+  const recordScroll=document.querySelector('.record-scroll'),observed=new WeakSet(),visible=new WeakSet();
+  const records=recordScroll&&typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{
+    for(const {target,isIntersecting}of entries){
+      if(!observed.has(target))continue;
+      if(isIntersecting){visible.add(target);pending.add(target);}
+      else{visible.delete(target);pending.delete(target);}
+    }
+    if(pending.size)schedule();
+  },{root:recordScroll,rootMargin:'72px 0px'}):null;
+  const queue=node=>{
+    if(records&&node.matches('.record-date')&&recordScroll.contains(node)){
+      if(!observed.has(node)){observed.add(node);records.observe(node);}
+      if(!visible.has(node))return;
+    }
+    pending.add(node);
+  };
   const collect=root=>{
     const element=root.nodeType===1?root:root.parentElement;
-    const line=element?.closest(selector);if(line)pending.add(line);
-    for(const node of root.querySelectorAll?.(selector)??[])pending.add(node);
+    const line=element?.closest(selector);if(line)queue(line);
+    for(const node of root.querySelectorAll?.(selector)??[])queue(node);
   };
+  function unobserve(node){
+    if(!observed.delete(node))return;
+    records.unobserve(node);visible.delete(node);pending.delete(node);
+  }
   const fit=()=>{
     frame=0;
     const lines=[...pending].filter(node=>node.isConnected&&node.getClientRects().length&&!node.closest('.expanded'));pending.clear();
@@ -26,7 +46,10 @@ export function installLineFitting(){
     for(const record of records){
       if(record.type==='attributes')collect(record.target);
       else{
-        const line=(record.target.nodeType===1?record.target:record.target.parentElement)?.closest(selector);if(line)pending.add(line);
+        const line=(record.target.nodeType===1?record.target:record.target.parentElement)?.closest(selector);if(line)queue(line);
+        if(records&&recordScroll.contains(record.target))for(const node of record.removedNodes??[]){
+          unobserve(node);for(const date of node.querySelectorAll?.('.record-date')??[])unobserve(date);
+        }
         for(const node of record.addedNodes??[])collect(node);
       }
     }

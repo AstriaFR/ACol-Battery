@@ -79,6 +79,7 @@ export class BatteryHistoryPanel{
     this.scroller.addEventListener('scroll',()=>{if(this.active&&this.state?.page==='battery-history'&&this.scroller.scrollTop>0&&this.scroller.scrollHeight-this.scroller.scrollTop-this.scroller.clientHeight<60)this.load();},{passive:true});
   }
   close(){this.stopPress();this.trendChart?.clearInspect();if(this.trend)this.trend.hidden=true;if(this.deleteDialog.open)this.deleteDialog.close();if(this.recordDialog.open)this.recordDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
+  refreshTheme(){if(this.active&&!this.trend.hidden)this.trendChart.draw();}
   askRecord(){
     if(this.saving||this.deleting||!this.active||this.state?.page!=='battery-history'||this.recordDialog.open)return;
     this.recordDialog.showModal();this.recordCancel.focus({preventScroll:true});

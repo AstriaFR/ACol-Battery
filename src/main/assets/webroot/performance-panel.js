@@ -65,7 +65,8 @@ export class PerformancePanel{
     try{
       let data;
       do{
-        data=await this.api('performance',this.id,this.cursor);
+        const first=this.cursor===0;
+        data=await this.api('performance',this.id,this.cursor,first?600:2000);
         if(token!==this.token)return;
         this.active=!!data.active;this.end=Math.max(this.end,data.end??1);if(data.intervalMs>0)this.interval=Math.max(500,data.intervalMs);
         for(const[x,wall]of data.wallTimes??[])if(valid(x)&&valid(wall))this.chart.wallByX.set(x,wall);
@@ -73,6 +74,10 @@ export class PerformancePanel{
         const fresh=(data.points??[]).filter(p=>!this.points.length||p[0]>this.points.at(-1)[0]);
         if(fresh.length){this.points.push(...fresh);this.chart.ingest(fresh);changed=true;}
         this.cursor=data.cursor;
+        if(data.more){
+          if(first&&changed){this.render();changed=false;}
+          if(document.hidden)return;
+        }
       }while(data.more);
       if(changed||!this.points.length)this.render();
       $('performanceHint').textContent=this.points.length?

@@ -25,7 +25,7 @@ public final class Admin {
     }
     static JSONObject status(){return status(OperationTimeout.deadline());}
     static JSONObject status(long deadline){try{return AppBridge.api("status",new JSONArray(),OperationTimeout.remaining(deadline));}catch(Exception e){return null;}}
-    static boolean ready(JSONObject status){return status!=null&&status.optBoolean("ok",false)&&status.optBoolean("frameworkHealthy",true);}
+    static boolean ready(JSONObject status){return status!=null&&status.optBoolean("ok",false)&&status.optBoolean("frameworkHealthy",true)&&status.optBoolean("recorderReady",true);}
     static void waitStopped()throws Exception{
         waitStopped(OperationTimeout.deadline());
     }
@@ -79,10 +79,13 @@ public final class Admin {
     static boolean ownerAlive(String token){
         try{int end=token.indexOf(':');return end>0&&token.equals(ownerToken(Integer.parseInt(token.substring(0,end))));}catch(Exception invalid){return false;}
     }
-    static RuntimeTransaction.Control updateControl(boolean restart){return new RuntimeTransaction.Control(){
-        public void stop()throws Exception{stopForUpdate();}
-        public void start()throws Exception{if(restart)ensure();}
-    };}
+    static RuntimeTransaction.Control updateControl(){
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
+        return new RuntimeTransaction.Control(){
+            public void stop()throws Exception{stopForUpdate(deadline,true);}
+            public void start(){}
+        };
+    }
     static void stopSupervisorForUpdate()throws Exception {
         File file=new File(Owner.BASE,"supervisor.pid");if(!file.exists())return;
         int pid;
@@ -99,31 +102,51 @@ public final class Admin {
         stopForUpdate(OperationTimeout.deadline());
     }
     static void stopForUpdate(long deadline)throws Exception {
+        stopForUpdate(deadline,false);
+    }
+    static void stopForUpdate(long deadline,boolean boundedSwitch)throws Exception {
         // Quiesce the launcher as well: an old supervisor may otherwise wake from
         // its retry delay and start the old collector between the lock check and unzip.
         stopSupervisorForUpdate();
-        JSONObject current=status(deadline);
+        long statusDeadline=boundedSwitch?Math.min(deadline,System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(1500)):deadline;
+        JSONObject current=status(statusDeadline);
         if(current!=null&&current.optInt("resumeProtocol",0)>=1){
-            try{AppBridge.api("shutdown",new JSONArray().put("service_updated"),OperationTimeout.remaining(deadline));}
-            catch(Exception ignored){} // It can commit and exit before delivering its reply.
+            int remaining=OperationTimeout.remaining(deadline);
+            try{
+                JSONObject reply=AppBridge.api("shutdown",new JSONArray().put("service_updated"),boundedSwitch?Math.min(3000,remaining):remaining);
+                requireShutdownReply(reply);
+            }
+            catch(Exception stopFailure){
+                if(boundedSwitch)try{terminateRecorder(deadline);}
+                catch(Exception fallbackFailure){fallbackFailure.addSuppressed(stopFailure);throw fallbackFailure;}
+            }
         }else{
             // Older collectors interpret shutdown as finish/delete. Stop only the
             // authenticated recorder process, leaving its committed active row intact.
             // SQLite WAL rolls back any in-flight transaction on the next open.
-            LocalSocket connected;
-            try{connected=AppBridge.connect("status",new JSONArray(),OperationTimeout.remaining(deadline));}
-            catch(IOException absent){waitStopped(deadline);return;}
-            try(LocalSocket socket=connected){
-                Credentials peer=socket.getPeerCredentials();int pid=peer.getPid();
-                if(peer.getUid()!=0||pid<=1||pid==android.os.Process.myPid())throw new IOException("无法确认旧后台身份，已取消更新。");
-                String command=Owner.read(new File("/proc/"+pid+"/cmdline"));
-                boolean recorder=false;
-                for(String argument:command.split("\u0000"))if(argument.equals(Main.class.getName()))recorder=true;
-                if(!recorder)throw new IOException("旧后台进程身份不匹配，已取消更新。");
-                Os.kill(pid,OsConstants.SIGTERM);
-            }
+            terminateRecorder(deadline);
         }
         waitStopped(deadline);
+    }
+    static void requireShutdownReply(JSONObject reply)throws IOException{
+        if(!reply.optBoolean("ok",false))throw new IOException(reply.optString("error","后台未能停止记录。"));
+    }
+    private static void terminateRecorder(long deadline)throws Exception{
+        LocalSocket connected;
+        try{connected=AppBridge.connect("status",new JSONArray(),OperationTimeout.remaining(deadline));}
+        catch(IOException absent){return;}
+        try(LocalSocket socket=connected){
+            Credentials peer=socket.getPeerCredentials();int pid=peer.getPid();
+            if(peer.getUid()!=0||pid<=1||pid==android.os.Process.myPid())throw new IOException("无法确认旧后台身份，已取消更新。");
+            String command;
+            try{command=Owner.read(new File("/proc/"+pid+"/cmdline"));}
+            catch(java.nio.file.NoSuchFileException exited){return;}
+            boolean recorder=false;
+            for(String argument:command.split("\u0000"))if(argument.equals(Main.class.getName()))recorder=true;
+            if(!recorder)throw new IOException("旧后台进程身份不匹配，已取消更新。");
+            try{Os.kill(pid,OsConstants.SIGTERM);}
+            catch(ErrnoException exited){if(exited.errno!=OsConstants.ESRCH)throw exited;}
+        }
     }
     static void clearAllData(long deadline)throws Exception{
         if(DataTransfer.PENDING.exists()||DataTransfer.running())throw new IOException("数据备份或恢复正在进行，请稍后清除数据。");
@@ -158,9 +181,9 @@ public final class Admin {
             else if(action.equals("apply-update")){
                 if(args.length!=3||!args[1].matches("[0-9a-f]{64}"))throw new IOException("后台更新参数无效。");
                 String owner=ownerToken(Integer.parseInt(args[2]));if(owner.isEmpty())throw new IOException("无法确认后台更新会话。");
-                transaction().apply(args[1],owner,updateControl(true));System.out.println("INSTALLED");
+                transaction().apply(args[1],owner,updateControl(),false);System.out.println("INSTALLED");
             }else if(action.equals("recover-update")){
-                transaction().recover("",Admin::ownerAlive,updateControl(args.length<2||!args[1].equals("boot")));System.out.println("RECOVERED");
+                transaction().recover("",Admin::ownerAlive,updateControl());System.out.println("RECOVERED");
             }
             else if(action.equals("stop-update")){
                 stopForUpdate();

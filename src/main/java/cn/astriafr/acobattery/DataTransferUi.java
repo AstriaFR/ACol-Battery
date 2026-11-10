@@ -26,7 +26,7 @@ final class DataTransferUi {
     File output(){return new File(app.getCacheDir(),"acol-backup-"+token+".zip");}
     boolean resume(){
         if(!marker.isFile())return false;
-        try{JSONObject data=new JSONObject(new String(Files.readAllBytes(marker.toPath()),StandardCharsets.UTF_8));token=data.getString("token");mode=data.getString("mode");if(!token.matches("[0-9a-f-]{36}")||!Arrays.asList("backup","restore").contains(mode))throw new IOException("数据任务标记异常。");active=true;app.transferringData=true;page("正在完成数据操作","正在读取后台任务状态。");try(FileOutputStream ready=new FileOutputStream(new File(app.getNoBackupFilesDir(),"acol-transfer.ready"))){ready.write(token.getBytes(StandardCharsets.UTF_8));ready.getFD().sync();}poll();}
+        try{JSONObject data=new JSONObject(new String(Files.readAllBytes(marker.toPath()),StandardCharsets.UTF_8));token=data.getString("token");mode=data.getString("mode");if(!token.matches("[0-9a-f-]{36}")||!Arrays.asList("backup","restore").contains(mode))throw new IOException("数据任务标记异常。");active=true;app.transferringData=true;if(mode.equals("restore"))app.recordListCache.clear();page("正在完成数据操作","正在读取后台任务状态。");try(FileOutputStream ready=new FileOutputStream(new File(app.getNoBackupFilesDir(),"acol-transfer.ready"))){ready.write(token.getBytes(StandardCharsets.UTF_8));ready.getFD().sync();}poll();}
         catch(Exception error){app.startup.showInitialization();app.startup.fail("读取数据任务状态",error);}return true;
     }
     void backup(){if(!app.startup.initialized||!app.startup.rootReady||active||app.clearingData)return;token=UUID.randomUUID().toString();mode="backup";begin();}
@@ -72,7 +72,7 @@ final class DataTransferUi {
         }catch(Exception error){active=false;Toast.makeText(app,"无法保存任务状态，未开始操作。",Toast.LENGTH_LONG).show();return;}
         active=true;app.transferringData=true;generation++;if(app.errorLogs!=null)app.errorLogs.close();app.startup.closeErrorPage();app.startup.disconnect();app.browser.destroy();
         page(mode.equals("backup")?"准备备份":"准备恢复","应用会短暂重启，以保证记录与使用时间数据完整。");
-        app.worker.execute(()->{try{connect();shell.command(app.startup.admin("transfer-start "+mode+" "+token),10);app.runOnUiThread(this::poll);}catch(Exception error){app.runOnUiThread(()->problem(error));}});
+        app.worker.execute(()->{try{if(mode.equals("restore"))app.recordListCache.clear();connect();shell.command(app.startup.admin("transfer-start "+mode+" "+token),10);app.runOnUiThread(this::poll);}catch(Exception error){app.runOnUiThread(()->problem(error));}});
     }
     void connect()throws Exception{if(shell!=null)return;shell=new RootSession();if(!"0".equals(shell.command("id -u",10)))throw new IOException("未获得 root 权限。");}
     void poll(){

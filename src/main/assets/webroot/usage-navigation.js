@@ -1,5 +1,6 @@
 import{isoWeek,firstUsageWeek,calendarMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.2s';
-export const usagePages=new Set(['usage-day','usage-week','usage-month','usage-app','usage-app-week']);
+export const usageRoots={'usage-day':'usageDetail','usage-week':'usageWeekDetail','usage-month':'usageMonthDetail','usage-app':'usageAppDetail','usage-app-week':'usageAppWeekDetail'};
+export const usagePages=new Set(Object.keys(usageRoots));
 // Page switching replaces the current date; opening another page pushes native
 // history. Both header Back and system Back consume that same browser history.
 export function usageState(input){

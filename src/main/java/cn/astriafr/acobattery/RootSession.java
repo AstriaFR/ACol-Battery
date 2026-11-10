@@ -95,18 +95,21 @@ final class RootSession implements Closeable {
     JSONObject connect(Consumer<JSONObject> callback,Consumer<String> phase,boolean commit)throws Exception{
         String id="native-startup";CompletableFuture<JSONObject> ready=new CompletableFuture<>();
         long until=OperationTimeout.deadline();broker(message->{
-            if(!id.equals(message.optString("id"))){callback.accept(message);return;}
+            if(!id.equals(message.optString("id"))){
+                if("disconnected".equals(message.optString("event")))ready.completeExceptionally(new IOException("初始化期间前台 root 连接已断开。"));
+                callback.accept(message);return;
+            }
             String event=message.optString("event");
             if(event.equals("startup_phase"))phase.accept(message.optString("message"));
             else if(event.equals("startup_ready"))ready.complete(message);
             else ready.completeExceptionally(new CommandFailure(message.optString("message",message.optString("stderr","前台连接未能就绪。")),message.optString("diagnostics")));
         },until);
-        request(new JSONObject().put("id",id).put("action","initialize").put("commit",commit));
+        request(new JSONObject().put("id",id).put("action","initialize").put("commit",commit).put("timeoutMs",Math.max(1,OperationTimeout.remaining(until)-250)));
         // Broker creation and backend handshake share one ten-second deadline.
         JSONObject reply;
         try{reply=ready.get(OperationTimeout.remaining(until),TimeUnit.MILLISECONDS);}catch(ExecutionException failure){Throwable cause=failure.getCause();if(cause instanceof Exception)throw (Exception)cause;throw failure;}
         JSONObject status=reply.optJSONObject("status");
-        if(status==null||!status.optBoolean("ok")||!status.optBoolean("frameworkHealthy",true))throw new IOException("后台连接尚未就绪，请重试初始化。");
+        if(status==null||!status.optBoolean("ok")||!status.optBoolean("frameworkHealthy",true)||!status.optBoolean("recorderReady",true))throw new IOException("后台连接尚未就绪，请重试初始化。");
         return status;
     }
     @Override public void close(){closed=true;failNativeResults();try{input.close();}catch(Exception ignored){}if(process!=null)process.destroy();output.offer(EOF);}

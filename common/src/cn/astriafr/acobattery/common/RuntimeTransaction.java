@@ -96,13 +96,19 @@ public final class RuntimeTransaction {
         Files.deleteIfExists(new File(base,"update.pending").toPath());Files.deleteIfExists(new File(base,"update.installed").toPath());
     }
     public void apply(String version,String owner,Control control)throws Exception{
+        apply(version,owner,control,true);
+    }
+    public void apply(String version,String owner,Control control,boolean startAfterInstall)throws Exception{
         locked(()->{
             if(transaction.exists())throw new IOException("上次后台更新尚未恢复，请重新打开应用。");
             try{
-                prepare(version,owner);control.stop();install();control.start();
+                prepare(version,owner);control.stop();install();
+                if(startAfterInstall)control.start();
             }catch(Exception failure){
                 try{
-                    if(transaction.isFile())rollback(control);
+                    // The split update recovers via a separate command with a fresh
+                    // deadline. Preserve its journal for that command or boot.
+                    if(transaction.isFile()){if(startAfterInstall)rollback(control);}
                     else if(new File(backup,"ready").isFile()){restore(new File(backup,"boot.entry"),boot);if(boot.isFile())access.set(boot,true);cleanBackup();}
                 }catch(Exception recovery){failure.addSuppressed(recovery);}
                 throw failure;

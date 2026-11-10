@@ -1,7 +1,6 @@
 import{valid,setChartSettings}from'./chart.js?v=acol-2.2s';
 import{fmt}from'./record-display.js?v=acol-2.2s';
 import{createRecords}from'./records.js?v=acol-2.2s';
-import{createRecordDetail}from'./record-detail.js?v=acol-2.2s';
 import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
@@ -10,12 +9,10 @@ import{LiveChannel}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
-import{BatteryHistoryPanel}from'./battery-history.js?v=acol-2.2s';
 import{ThemeController}from'./theme.js?v=acol-2.2s';
 import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.2s';
 import{HomeUsagePanel}from'./home-usage.js?v=acol-2.2s';
-import{UsageDetailsPanel}from'./usage-details.js?v=acol-2.2s';
-import{usagePages,usageState}from'./usage-navigation.js?v=acol-2.2s';
+import{usagePages,usageRoots,usageState}from'./usage-navigation.js?v=acol-2.2s';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
 const edgeScrollbar=new EdgeScrollbar();
 const baseUrl=()=>`${location.pathname}${location.search}`;
@@ -36,12 +33,14 @@ document.addEventListener('selectionchange',()=>{const selection=getSelection();
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
 const liveChannel=new LiveChannel();
 let lastStatus=null,pollTimer,liveBusy=false,queuedPoll=false,usageNavigation=0;
+let detailPage,batteryHistory,usageDetails,pendingPanel;
+const batteryHistoryRoots={'battery-history':'batteryHistoryPanel','battery-history-detail':'batteryHistoryDetail','battery-history-trend':'batteryTrendPanel'};
 function connectionMessage(fallback){try{return window.AcoNative?.connectionStatus?.()||fallback;}catch{return fallback;}}
 window.addEventListener('aco-connection',event=>{if(!$('warning').dataset.startupError)$('warning').textContent=event.detail||'';});
 $('warning').textContent=connectionMessage('正在连接…');
 let uiSettings={...DEFAULT_SETTINGS};
 function syncTheme(){
-  const kind=recordsView.kind,flow=detailPage.data?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind==='game'?'discharge':kind);
+  const kind=recordsView.kind,flow=detailPage?.data?.record.kind??(kind==='all'?(lastStatus?.state===0?'discharge':'charge'):kind==='game'?'discharge':kind);
   document.body.dataset.flow=flow;
 }
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4500);}
@@ -55,22 +54,67 @@ async function api(action,...args){
   if(Number(result.errno)!==0)throw Error(result.stderr?.trim()||'操作未能完成，请重试。');
   const data=JSON.parse(result.stdout.trim());if(!data.ok){const error=Error(data.error||'未能取得电池数据，请重新初始化。');throw error;}return data;
 }
-const detailPage=createRecordDetail({api,liveChannel,toast,fullScreen,readAppIcons,
-  beforeOpen(){usageNavigation++;usageDetails.close();batteryHistory.close();batteryPanel.close();},
-  onShow:syncTheme,onRefresh:()=>schedulePoll(0)});
-const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSettings,getStatus:()=>lastStatus,getDetail:()=>detailPage.data,
-  getTab:()=>activeTab,openRecord:id=>detailPage.open(id),onKindChange:syncTheme,
-  pauseRemaining:()=>detailPage.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage.resumeRemaining();},
-  onDeleted:id=>detailPage.removeCaches(id),onRefresh:()=>schedulePoll(0)});
-const settingsPanel=new SettingsPanel(api,value=>{applySettings(value);refresh();});
+function lazyPanel(load){
+  let pending;
+  return()=>pending??=load().catch(error=>{pending=null;throw error;});
+}
+const importDetail=()=>import('./record-detail.js?v=acol-2.2s');
+const importBatteryHistory=()=>import('./battery-history.js?v=acol-2.2s');
+const importUsageDetails=()=>import('./usage-details.js?v=acol-2.2s');
+const warmModules=[importDetail,importUsageDetails,importBatteryHistory];
+let warming=false;
+function warmPanelCode(){
+  if(warming||!warmModules.length||document.hidden||activeTab!=='home'||$('appShell').hidden)return;
+  warming=true;
+  const load=async()=>{
+    try{
+      if(!document.hidden&&activeTab==='home'&&!$('appShell').hidden)await warmModules.shift()();
+    }catch{}finally{warming=false;}
+  };
+  if(typeof requestIdleCallback==='function')requestIdleCallback(load);else setTimeout(load,200);
+}
+function closePendingPanel(hide=true){
+  if(!pendingPanel)return;
+  const{root,status}=pendingPanel;pendingPanel=null;
+  delete root.dataset.panelLoading;status.remove();if(hide)root.hidden=true;
+}
+function showPendingPanel(id){
+  closePendingPanel();const root=$(id),status=document.createElement('p');
+  status.className='small panel-loading-status';status.setAttribute('role','status');status.textContent='正在加载…';
+  root.dataset.panelLoading='true';root.append(status);root.hidden=false;pendingPanel={root,status};
+}
+const loadDetail=lazyPanel(async()=>{
+  const{createRecordDetail}=await importDetail();
+  const panel=createRecordDetail({api,liveChannel,toast,fullScreen,readAppIcons,
+    beforeOpen(){closePendingPanel();usageDetails?.close();batteryHistory?.close();batteryPanel.close();},
+    onShow:syncTheme,onRefresh:()=>schedulePoll(0)});
+  panel.setStatus(lastStatus);panel.setSettings(uiSettings);panel.bind();return detailPage=panel;
+});
+async function openRecord(id,record){
+  const navigation=++usageNavigation;
+  try{const panel=await loadDetail();if(navigation===usageNavigation)await panel.open(id,record);}
+  catch(error){if(navigation===usageNavigation)toast(error.message);}
+}
+const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSettings,getStatus:()=>lastStatus,getDetail:()=>detailPage?.data,
+  getTab:()=>activeTab,openRecord,onKindChange:syncTheme,
+  pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage?.resumeRemaining();},
+  onDeleted:id=>detailPage?.removeCaches(id),onRefresh:()=>schedulePoll(0)});
+const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();});
 const batteryPanel=new BatteryInfoPanel();
-const batteryHistory=new BatteryHistoryPanel(api,(state,push)=>openBatteryHistory(state,push),()=>window.__acoBack());
 const homeUsage=new HomeUsagePanel(api);
-const usageDetails=new UsageDetailsPanel(api,()=>homeUsage.cache,(state,push)=>openUsage(state,push));
-homeUsage.onDataChange=day=>usageDetails.refresh(day);
+const loadBatteryHistory=lazyPanel(async()=>{
+  const{BatteryHistoryPanel}=await importBatteryHistory();
+  return batteryHistory=new BatteryHistoryPanel(api,(state,push)=>openBatteryHistory(state,push),()=>window.__acoBack());
+});
+const loadUsageDetails=lazyPanel(async()=>{
+  const{UsageDetailsPanel}=await importUsageDetails();
+  const panel=new UsageDetailsPanel(api,()=>homeUsage.cache,(state,push)=>openUsage(state,push));
+  panel.dayChart.onDeleteDay=askUsageDelete;
+  return usageDetails=panel;
+});
+homeUsage.onDataChange=day=>usageDetails?.refresh(day);
 let usageDeleteDay=null,usageDeleteBusy=false;
 const askUsageDelete=day=>{if(usageDeleteBusy||$('usageDeleteConfirm').open)return;usageDeleteDay=day;$('usageDeleteConfirm').showModal();$('usageDeleteCancel').focus({preventScroll:true});};
-usageDetails.dayChart.onDeleteDay=askUsageDelete;
 $('usageDeleteCancel').onclick=()=>$('usageDeleteConfirm').close();
 $('usageDeleteConfirm').addEventListener('cancel',event=>{if(usageDeleteBusy)event.preventDefault();});
 $('usageDeleteApply').onclick=async()=>{
@@ -95,7 +139,8 @@ const themeController=new ThemeController(state=>{
   updateThemeControl(state);
   if(!themeUiReady||!state.darkChanged)return;
   try{
-    detailPage.theme();
+    detailPage?.theme();
+    batteryHistory?.refreshTheme();
   }catch(error){console.error('Theme redraw failed',error);}
 });
 $('themeToggle').onclick=()=>themeController.cycle();
@@ -114,15 +159,16 @@ function showTab(tab){
   document.title=tab==='home'?'ACol 电池':tab==='records'?'记录 · ACol 电池':'设置 · ACol 电池';
 }
 async function activateTab(tab){
-  usageNavigation++;usageDetails.close();
-  batteryHistory.close();batteryPanel.close();
+  usageNavigation++;closePendingPanel();usageDetails?.close();
+  batteryHistory?.close();batteryPanel.close();
   settingsPanel.closeEditor();
-  liveChannel.setMode(0);
-  await detailPage.close();
+  liveChannel.setMode(3);
+  await detailPage?.close();
   $('appShell').hidden=false;
   showTab(tab);
+  if(tab==='home')homeUsage.prioritize(null);
   syncTheme();
-  if(tab==='records')recordsView.render();
+  if(tab==='records')recordsView.open();
   if(tab==='settings'){prepareCutoff();await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);}
   else refresh();
 }
@@ -153,13 +199,13 @@ function showCutoff(state){
 }
 window.__acoBack=()=>{
   if(!cutoffFrame.hidden){if(cutoffReady)return cutoffFrame.contentWindow.__acoBack();history.back();return'handled';}
-  if(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip){usageDetails.hideTips();return'handled';}
+  if(usageDetails&&(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip)){usageDetails.hideTips();return'handled';}
   if(homeUsage.tip){homeUsage.hideTip();return'handled';}
   if(cancelTopDialog())return'handled';
-  if(detailPage.backFullscreen())return'handled';
+  if(detailPage?.backFullscreen())return'handled';
   if(history.state?.page&&history.state.page!=='home'){history.back();return'handled';}
   // Recover a visible child page even if its browser history state was lost.
-  if(activeTab!=='home'||batteryPanel.active||batteryHistory.active||!$('detail').hidden||usageDetails.state){showHome();return'handled';}
+  if(activeTab!=='home'||batteryPanel.active||batteryHistory?.active||!$('detail').hidden||usageDetails?.state){showHome();return'handled';}
   return $('appShell').hidden?'wait':'home';
 };
 function applySettings(value){
@@ -167,12 +213,12 @@ function applySettings(value){
   if(JSON.stringify(next)===JSON.stringify(uiSettings))return;
   uiSettings=next;setChartSettings(next);
   $('showSmallLabel').textContent=`显示 ≤${next.hidePct}%`;
-  detailPage.setSettings(next);
+  detailPage?.setSettings(next);
 }
 $('openCutoff').onclick=async e=>{e.preventDefault();const button=e.currentTarget;if(button.getAttribute('aria-disabled')==='true'){toast('当前设备缺少截止电压调整接口。');return;}if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}history.pushState({page:'cutoff'},'',pageUrl('cutoff'));showCutoff(history.state);};
 async function openBatteryInfo(){
-  batteryHistory.close();const navigation=++usageNavigation;usageDetails.close();settingsPanel.closeEditor();
-  await detailPage.close();if(navigation!==usageNavigation)return;
+  closePendingPanel();batteryHistory?.close();const navigation=++usageNavigation;usageDetails?.close();settingsPanel.closeEditor();
+  await detailPage?.close();if(navigation!==usageNavigation)return;
   $('appShell').hidden=true;batteryPanel.open();liveChannel.setMode(1);
   if(history.state?.page!=='battery-info')history.pushState({page:'battery-info'},'',`${location.pathname}${location.search}#battery-info`);
   refresh();
@@ -180,42 +226,50 @@ async function openBatteryInfo(){
 $('openBatteryInfo').onclick=openBatteryInfo;
 $('batteryInfoBack').onclick=()=>window.__acoBack();
 $('openBatteryHistory').onclick=()=>openBatteryHistory({page:'battery-history'},true);
-for(const id of ['batteryHistoryBack','batterySnapshotBack'])$(id).onclick=()=>window.__acoBack();
+for(const id of ['batteryHistoryBack','batterySnapshotBack','batteryTrendBack'])$(id).onclick=()=>window.__acoBack();
 async function openBatteryHistory(state,push=false){
-  const navigation=++usageNavigation;usageDetails.close();batteryPanel.close();settingsPanel.closeEditor();
-  await detailPage.close();if(navigation!==usageNavigation)return;
-  clearTimeout(pollTimer);liveChannel.setMode(0);liveChannel.close();$('appShell').hidden=true;
+  const navigation=++usageNavigation;
+  closePendingPanel();
+  usageDetails?.close();batteryPanel.close();settingsPanel.closeEditor();
+  await detailPage?.close();if(navigation!==usageNavigation)return;
+  clearTimeout(pollTimer);liveChannel.setMode(3);liveChannel.close();$('appShell').hidden=true;
   if(push)history.pushState(state,'',pageUrl(state.page));
   document.title=(state.page==='battery-history'?'电池历史记录':state.page==='battery-history-trend'?'电池健康趋势':'电池快照')+' · ACol 电池';
+  if(!batteryHistory){
+    showPendingPanel(batteryHistoryRoots[state.page]);
+    try{await loadBatteryHistory();}catch(error){if(navigation===usageNavigation&&pendingPanel)pendingPanel.status.textContent=error.message;return;}
+    if(navigation!==usageNavigation)return;
+    closePendingPanel(false);
+  }
   await batteryHistory.open(state,push&&state.page==='battery-history');
 }
 
 function schedulePoll(delay=0){
-  clearTimeout(pollTimer);if(document.hidden||$('confirm').open||batteryHistory.active)return;
+  clearTimeout(pollTimer);if(document.hidden||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy){queuedPoll=true;return;}pollTimer=setTimeout(pollLive,delay);
 }
 function refresh(){recordsView.refresh();}
 async function pollLive(){
-  if(document.hidden||$('confirm').open||batteryHistory.active)return;
-  if(liveBusy||detailPage.busy||recordsView.busy){schedulePoll(200);return;}
+  if(document.hidden||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  if(liveBusy||detailPage?.busy||recordsView.busy){schedulePoll(200);return;}
   liveBusy=true;queuedPoll=false;
-  const started=performance.now(),snapshot=detailPage.pollRequest(),listSnapshot=recordsView.pollRequest(),infoMode=batteryPanel.active;
-  const{id,after,token}=snapshot,{small,wantList}=listSnapshot;let failed=false;
+  const started=performance.now(),snapshot=detailPage?.pollRequest()??{id:0,after:0},listSnapshot=recordsView.pollRequest(),infoMode=batteryPanel.active;
+  const{id,after,token}=snapshot,{small}=listSnapshot;let failed=false;
   try{
-    let packet=await api('live',id,after,wantList?1:0,small,(lastStatus?.session??-1)+1);
-    if(infoMode!==batteryPanel.active||batteryHistory.active)return;
+    let packet=await api('live',id,after,0,small,(lastStatus?.session??-1)+1,0);
+    if(infoMode!==batteryPanel.active||batteryHistory?.active)return;
     if(infoMode){batteryPanel.update(packet);return;}
     const initial=packet,points=[...(packet.points??[])];
     while(id&&valid(packet.nextAfter)&&detailPage.current(token,id)){
-      packet=await api('live',id,packet.nextAfter,0,small,packet.status.session+1);points.push(...(packet.points??[]));
+      packet=await api('live',id,packet.nextAfter,0,small,packet.status.session+1,0);points.push(...(packet.points??[]));
     }
     packet={...initial,...packet,points,records:initial.records,total:initial.total,totalRecords:initial.totalRecords};
-    lastStatus=packet.status;detailPage.setStatus(lastStatus);renderStatus(lastStatus);homeUsage.connected();detailPage.prune();
+    lastStatus=packet.status;detailPage?.setStatus(lastStatus);renderStatus(lastStatus);homeUsage.connected();detailPage?.prune();warmPanelCode();
     await recordsView.receive(packet,listSnapshot);
-    await detailPage.receive(packet,snapshot);
+    await detailPage?.receive(packet,snapshot);
   }catch(error){
     if(infoMode!==batteryPanel.active)return;failed=true;
-    if(infoMode)batteryPanel.error(error.message);else{$('warning').textContent=connectionMessage(error.message);detailPage.failure();}
+    if(infoMode)batteryPanel.error(error.message);else{$('warning').textContent=connectionMessage(error.message);detailPage?.failure();}
   }finally{
     liveBusy=false;const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:1000;
     schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
@@ -242,10 +296,12 @@ function renderStatus(s){
   $('livePower').parentElement.dataset.flow=valid(r.power)&&r.power!==0?flow:'';
   $('livePower').textContent=valid(r.power)?Math.abs(r.power).toFixed(2):'—';
   $('livePower').setAttribute('aria-label',`${flow==='charge'?'充电':'放电'}功率 ${valid(r.power)?fmt(Math.abs(r.power),2):'—'} W`);
-  const warnings=[];if(s.recordingEnabled===false)warnings.push(s.recordingProblem?`${s.recordingProblem}，记录已关闭，可在设置中重新开启。`:'记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限，不能保证深度休眠期间准时采样。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
+  const recording=s.recordingEnabled!==false||s.fastEnabled;
+  const warnings=[];if(!recording)warnings.push(s.recordingProblem?`${s.recordingProblem}，记录已关闭，可在设置中重新开启。`:'记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限，不能保证深度休眠期间准时采样。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
   if(s.frameworkHealthy===false)warnings.push('系统服务已断开，后台正在自动恢复。');
-  if(s.powerStateAvailable===false&&s.recordingEnabled!==false||r.onlineKnown===false)warnings.push('充电连接状态待确认，采样暂停并自动重试。');
-  else{if(s.error)warnings.push('采样异常。');if(r.error)warnings.push('电池数据读取失败。');}if(s.usageError&&s.state===0&&s.recordingEnabled!==false)warnings.push('应用统计暂不可用。');
+  if(recording&&s.readingRecoveryProblem)warnings.push(`${s.readingRecoveryProblem}，后台正在重试。`);
+  if(s.powerStateAvailable===false&&recording||r.onlineKnown===false)warnings.push('充电连接状态待确认，采样暂停并自动重试。');
+  else{if(s.error)warnings.push('采样异常。');if(r.error)warnings.push('电池数据读取失败。');}if(s.usageError&&s.state===0&&recording)warnings.push('应用统计暂不可用。');
   if(s.screenFallback)warnings.push('屏幕监听不可用，已启用状态回退检测，亮息屏切换可能延迟。');
   else if(s.screenError)warnings.push('屏幕事件通知受限，亮息屏切换可能延迟。');
   if(s.screenStateKnown===false)warnings.push('屏幕状态暂不可用，等待状态恢复。');
@@ -255,12 +311,21 @@ async function openUsage(state,push=null){
   const navigation=++usageNavigation,day=Number(state.day),isApp=state.page==='usage-app'||state.page==='usage-app-week';
   if(!Number.isFinite(day)||day<0||day> Date.now()||!usagePages.has(state.page)||isApp&&(typeof state.pkg!=='string'||!state.pkg||state.pkg.length>256))return;
   if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
-  batteryHistory.close();batteryPanel.close();settingsPanel.closeEditor();liveChannel.setMode(0);await detailPage.close();
+  if(navigation!==usageNavigation)return;
+  closePendingPanel();
+  batteryHistory?.close();batteryPanel.close();settingsPanel.closeEditor();liveChannel.setMode(3);await detailPage?.close();
   if(navigation!==usageNavigation)return;
   $('appShell').hidden=true;
   const pageState=usageState({...state,day});
+  homeUsage.prioritize(pageState.day);
   if(push===true)history.pushState(pageState,'',pageUrl(state.page));else if(push===false)history.replaceState(pageState,'',pageUrl(state.page));
   document.title=state.page==='usage-app-week'?'应用周使用时间 · ACol 电池':isApp?'应用使用时间 · ACol 电池':state.page==='usage-month'?'月使用时间 · ACol 电池':state.page==='usage-week'?'周使用时间 · ACol 电池':'使用时间 · ACol 电池';
+  if(!usageDetails){
+    showPendingPanel(usageRoots[state.page]);
+    try{await loadUsageDetails();}catch(error){if(navigation===usageNavigation&&pendingPanel)pendingPanel.status.textContent=error.message;return;}
+    if(navigation!==usageNavigation)return;
+    closePendingPanel(false);
+  }
   await usageDetails.open(pageState);if(navigation===usageNavigation)refresh();
 }
 $('openUsageDetails').onclick=()=>openUsage({page:'usage-day',day:homeUsage.day},true);
@@ -283,14 +348,14 @@ async function showHome(){
   await activateTab('home');return true;
 }
 async function applyHistory(state){
-  detailPage.syncHistory();recordsView.syncHistory();
+  detailPage?.syncHistory();recordsView.syncHistory();
   const page=state?.page??'home';
   if(page==='cutoff'){if(cutoffFrame.hidden)showCutoff(state);else if(cutoffReady)cutoffFrame.contentWindow.__acoCutoffSync(state);return;}
   if(!cutoffFrame.hidden){hideCutoff();$('appShell').hidden=false;}
   if(usagePages.has(page)){await openUsage(state);return;}
   if(page==='battery-history'||page==='battery-history-detail'||page==='battery-history-trend'){await openBatteryHistory(state);return;}
   if(page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(state);return;}
-  if(page==='record'){settingsPanel.closeEditor();if(detailPage.id!==state.id)detailPage.open(state.id);return;}
+  if(page==='record'){settingsPanel.closeEditor();if(detailPage?.id!==state.id)openRecord(state.id,recordsView.find(state.id));return;}
   if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');settingsPanel.handleHistory(state);return;}
   if(activeTab==='settings'&&!await settingsPanel.flush()){
     history.pushState({page:'settings'},'',pageUrl('settings'));$('appShell').hidden=false;showTab('settings');toast('设置未能保存，请重试。');return;
@@ -299,10 +364,10 @@ async function applyHistory(state){
 }
 $('back').onclick=()=>window.__acoBack();
 window.addEventListener('popstate',event=>applyHistory(event.state));
-document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){detailPage.pause();settingsPanel.flush();liveChannel.close();}else{refresh();detailPage.resume();}});
-window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);detailPage.pause();settingsPanel.flush();liveChannel.close();});
-window.addEventListener('pageshow',e=>{if(e.persisted){refresh();detailPage.resume();}});
-recordsView.bind();detailPage.bind();
+document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){detailPage?.pause();settingsPanel.flush();liveChannel.close();}else{refresh();detailPage?.resume();}});
+window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);detailPage?.pause();settingsPanel.flush();liveChannel.close();});
+window.addEventListener('pageshow',e=>{if(e.persisted){refresh();detailPage?.resume();}});
+recordsView.bind();
 themeUiReady=true;
 window.__acoPageReady=true;
 if(startTab!=='home'){

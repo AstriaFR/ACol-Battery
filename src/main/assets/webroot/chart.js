@@ -1,5 +1,5 @@
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
-import{remainingEstimate}from'./estimate.js?v=acol-2.2s';
+import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
@@ -27,11 +27,12 @@ export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>s
   return item;
 });}
 export function plotPoints(points,kind,cellCount=2,fast=false){
-  if(kind!=='discharge')return points.map(p=>{if(!valid(p[3]))return p;const row=[...p];row[3]*=cellCount===2?2:1;return row;});
+  if(kind!=='discharge')return points.map(p=>{if(!valid(p[3])||cellCount!==2||(p[6]&unclassifiedCells))return p;const row=[...p];row[3]*=2;return row;});
   const withEnergy=p=>{
     const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
-    if(fast&&valid(row[3]))row[3]*=-(cellCount===2?2:1);
-    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4]},null)?.wh??null;return row;
+    const cells=(p[6]&unclassifiedCells)?0:cellCount;
+    if(fast&&valid(row[3]))row[3]*=-(cells===2?2:1);
+    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null)?.wh??null;return row;
   };
   if(fast)return points.map(withEnergy);
   return points.filter(p=>!valid(p[7])||p[7]>=20000).map(p=>{
@@ -213,9 +214,9 @@ function selectTimeTicks(segments,[from,to],width,localClock){
   }
   return best;
 }
-// Collapse quantized percentage plateaus into temporal anchors, retaining endpoints
+// Collapse quantized plateaus into temporal anchors, retaining endpoints
 // and every actual rise/fall. Raw samples remain available for inspection.
-export function percentageAnchors(points){
+export function plateauAnchors(points){
   if(points.length<3)return points;
   const groups=[];
   for(let start=0;start<points.length;){
@@ -225,13 +226,24 @@ export function percentageAnchors(points){
   if(groups.length===1)return[points[0],points.at(-1)];
   return groups.map(({start,end},i)=>i===0?points[0]:i===groups.length-1?points.at(-1):[(points[start][0]+points[end][0])/2,points[start][1]]);
 }
-// Percentage paths use time-weighted monotone tangents after plateau consolidation.
-export function smoothPath(ctx,points,percentage=false){
-  if(percentage)points=percentageAnchors(points);
+// Soften small reversals without moving the ends of a temperature plateau.
+export function softenTemperature(points,noise){
+  return points.map(([x,y],i)=>{
+    if(i===0||i===points.length-1)return points[i];
+    const [beforeX,before]=points[i-1],[afterX,after]=points[i+1];
+    const left=before-y,right=after-y;
+    if(left*right<=0||Math.max(Math.abs(left),Math.abs(right))>noise||afterX<=beforeX)return points[i];
+    const estimate=before+(after-before)*(x-beforeX)/(afterX-beforeX);
+    return [x,(y+estimate)/2];
+  });
+}
+// Quantized paths use time-weighted monotone tangents after plateau consolidation.
+export function smoothPath(ctx,points,quantized=false){
+  if(quantized)points=plateauAnchors(points);
   if(!points.length)return;ctx.moveTo(...points[0]);if(points.length===1)return;
   const d=points.slice(1).map((p,i)=>(p[1]-points[i][1])/(p[0]-points[i][0]||1));
   const m=points.map((_,i)=>i===0?d[0]:i===points.length-1?d[d.length-1]:(d[i-1]*d[i]<=0?0:2*d[i-1]*d[i]/(d[i-1]+d[i])));
-  if(percentage&&points.length>2){
+  if(quantized&&points.length>2){
     const h=points.slice(1).map((p,i)=>Math.max(1e-9,p[0]-points[i][0]));
     for(let i=1;i<m.length-1;i++){
       if(d[i-1]*d[i]<=0){m[i]=0;continue;}
@@ -253,17 +265,20 @@ export function smoothPath(ctx,points,percentage=false){
   }
 }
 export function duration(ms){const s=Math.max(0,Math.round(ms/1000)),h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}小时${m}分`:m?`${m}分${s%60}秒`:`${s}秒`;}
-export function windowPoints(points,from,to){
+function pointBound(points,x,after=false){
   let lo=0,hi=points.length;
-  while(lo<hi){const mid=(lo+hi)>>>1;if(points[mid][0]<from)lo=mid+1;else hi=mid;}
-  const start=Math.max(0,lo-1);hi=points.length;
-  while(lo<hi){const mid=(lo+hi)>>>1;if(points[mid][0]<=to)lo=mid+1;else hi=mid;}
-  return points.slice(start,Math.min(points.length,lo+1));
+  while(lo<hi){const mid=(lo+hi)>>>1,t=points[mid][0];if(t<x||after&&t===x)lo=mid+1;else hi=mid;}
+  return lo;
+}
+export function windowPoints(points,from,to){
+  return points.slice(Math.max(0,pointBound(points,from)-1),Math.min(points.length,pointBound(points,to,true)+1));
 }
 
 export class Chart{
   constructor(canvas,tooltip,onWindow){
     this.canvas=canvas;this.ctx=canvas.getContext('2d');this.tooltip=tooltip;this.onWindow=onWindow;
+    this.markerLine=document.createElement('span');this.markerLine.className='plot-marker';this.markerLine.hidden=true;
+    this.markerLine.setAttribute('aria-hidden','true');canvas.after(this.markerLine);
     this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;
     this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.startWall=null;this.wallByX=new Map();
     new ResizeObserver(()=>this.draw()).observe(canvas.parentElement);
@@ -316,7 +331,14 @@ export class Chart{
     return scale;
   }
   markerX(){return this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right);}
-  clearInspect(){this.cancelInspectionHold();this.dragMarker=null;if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
+  clearInspect(){this.cancelInspectionHold();this.dragMarker=null;this.inspectionTarget=null;if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.refreshInspection();}
+  refreshInspection(){
+    this.markerLine.hidden=this.marker===null;
+    if(this.marker!==null){
+      this.markerLine.style.transform=`translateX(${this.markerX()}px)`;
+      this.positionTooltip();
+    }
+  }
   positionTooltip(){
     if(this.marker===null||this.tooltip.hidden)return;
     const w=this.canvas.clientWidth,h=this.canvas.clientHeight,tw=this.tooltip.offsetWidth,th=this.tooltip.offsetHeight,x=this.markerX();
@@ -330,9 +352,9 @@ export class Chart{
     if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
     this.startWall=valid(options.startWall)?options.startWall:null;
     this.kind=kind;this.fast=fast;this.cellCount=cells;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
-    if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);}this.draw();
+    if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);}this.draw();
   }
-  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
+  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
   zoom(factor,anchor=.5){anchor=Math.max(0,Math.min(1,anchor));const[a,b]=this.window,span=(b-a)*factor;this.setWindow(a+(b-a)*anchor-span*anchor,a+(b-a)*anchor+span*(1-anchor));}
   move(e){
     if(!this.pointers.has(e.pointerId))return;this.pointers.set(e.pointerId,this.local(e));
@@ -358,7 +380,7 @@ export class Chart{
         const hit=()=>{
           if(!segment.length)return false;
           if(segment.length===1)return Math.hypot(pixel-segment[0][0],y-segment[0][1])<=13;
-          ctx.beginPath();smoothPath(ctx,segment,s.key==='pct');return ctx.isPointInStroke(pixel,y);
+          ctx.beginPath();this.traceSignal(ctx,segment,s,scale);return ctx.isPointInStroke(pixel,y);
         };
         for(const row of visible){
           if(!valid(row[s.index])||!connected&&(row[6]&3)){
@@ -372,22 +394,59 @@ export class Chart{
       return false;
     }finally{ctx.restore();}
   }
+  traceSignal(ctx,points,signal,scale){
+    if(signal.unit==='℃'){
+      const pixelsPerDegree=100*(this.bottom-this.top)/((this.axisHi-this.axisLo)*(scale.full-scale.base));
+      points=softenTemperature(points,0.3*pixelsPerDegree);
+    }
+    smoothPath(ctx,points,signal.key==='pct');
+  }
   pointPixel(row,s,scale){return[this.left+(row[0]-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right),this.bottom-(scalePercent(row[s.index],scale)-this.axisLo)/((this.axisHi??100)-this.axisLo)*(this.bottom-this.top)];}
   inspect(pixel,y,force=false){
-    const visible=this.points.filter(p=>p[0]>=this.window[0]&&p[0]<=this.window[1]);if(!visible.length)return;
-    if(!force&&!this.hitCurve(pixel,y,visible)){this.clearInspect();return;}
+    const start=pointBound(this.points,this.window[0]),end=pointBound(this.points,this.window[1],true);if(start>=end)return;
+    if(!force&&!this.hitCurve(pixel,y,this.points.slice(start,end))){this.clearInspect();return;}
     const x=this.window[0]+(pixel-this.left)/(this.width-this.left-this.right)*(this.window[1]-this.window[0]);
-    let row=visible[0];for(const p of visible)if(Math.abs(p[0]-x)<Math.abs(row[0]-x))row=p;
+    if(this.readRawInspection){
+      const from=Math.ceil(this.window[0]),to=Math.floor(this.window[1]),target=Math.max(from,Math.min(to,Math.round(x)));
+      const old=this.inspectionTarget;
+      if(old?.target===target&&old.from===from&&old.to===to){this.inspectY=y;this.positionTooltip();return;}
+      this.inspectionTarget={target,from,to,read:this.readRawInspection};
+      this.marker=target;this.inspectY=y;this.tooltip.textContent='正在读取采样点…';this.tooltip.hidden=false;this.refreshInspection();
+      if(!this.inspectionBusy)this.resolveRawInspection();
+      return;
+    }
+    const right=Math.min(end-1,Math.max(start,pointBound(this.points,x))),left=Math.max(start,right-1);
+    const a=this.points[left],b=this.points[right],row=x-a[0]<=b[0]-x?a:b;
+    this.showInspection(row,y);
+  }
+  async resolveRawInspection(){
+    this.inspectionBusy=true;
+    try{
+      let pending;
+      while(this.inspectionTarget&&pending!==this.inspectionTarget){
+        pending=this.inspectionTarget;
+        let row,failed=false;
+        try{row=await pending.read(pending.from,pending.to,pending.target);}catch{failed=true;}
+        if(pending!==this.inspectionTarget)continue;
+        if(row)this.showInspection(this.preparePoints([row])[0],this.inspectY);
+        else{
+          if(failed)this.inspectionTarget=null;
+          this.tooltip.textContent=failed?'采样点读取失败':'该区间暂无采样点';this.positionTooltip();
+        }
+      }
+    }finally{this.inspectionBusy=false;}
+  }
+  showInspection(row,y){
     this.marker=row[0];this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
-    this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]?' · 数据异常':''}\n`+
+    this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]&~unclassifiedCells?' · 数据异常':''}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
         if(this.kind==='discharge'&&this.fast&&(s.key==='current'||s.key==='power'))return`${s.name}  ${gameSampleText(value,s.key,s.key==='current'?0:2)} ${s.unit}`;
         return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+
-      (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.onInspect?.(row);this.draw();
+      (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.onInspect?.(row);this.refreshInspection();
   }
   drawScreenOff(ctx,top,height,width){
     if(document.hidden||this.kind!=='discharge'||!this.enabled.has('screenOff'))return;
@@ -403,7 +462,9 @@ export class Chart{
   }
   draw(){
     const w=this.canvas.clientWidth,h=this.canvas.clientHeight;if(!w||!h)return;
-    const ratio=(devicePixelRatio||1)*(globalThis.visualViewport?.scale||1);this.canvas.width=Math.round(w*ratio);this.canvas.height=Math.round(h*ratio);
+    const ratio=(devicePixelRatio||1)*(globalThis.visualViewport?.scale||1),width=Math.round(w*ratio),height=Math.round(h*ratio);
+    if(this.canvas.width!==width)this.canvas.width=width;
+    if(this.canvas.height!==height)this.canvas.height=height;
     const ctx=this.ctx;ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);this.width=w;
     const selected=this.signals().filter(s=>this.enabled.has(s.key));
     const scales=new Map(this.signals().map(s=>[s.key,this.scaleFor(s)]));
@@ -418,6 +479,7 @@ export class Chart{
     ctx.font='10px system-ui';this.left=Math.max(34,Math.ceil(Math.max(...gutterTicks.map(v=>ctx.measureText(tickLabel(v)).width)))+9);this.right=8;
     const top=22,bottom=h-25,pw=w-this.left-this.right,ph=bottom-top;if(pw<=0||ph<=0)return;
     this.top=top;this.bottom=bottom;this.axisLo=lo;this.axisHi=hi;
+    this.markerLine.style.top=`${top}px`;this.markerLine.style.height=`${ph}px`;
     const mapY=value=>bottom-(value-lo)/(hi-lo)*ph;
     const visible=windowPoints(this.points,...this.window);
     ctx.font='10px system-ui';ctx.lineWidth=.65;ctx.fillStyle=cssColor('--plot-bg','#ffffff');ctx.fillRect(this.left,top,pw,ph);
@@ -458,13 +520,12 @@ export class Chart{
       ctx.save();ctx.beginPath();ctx.rect(this.left,top-2,pw,ph+4);ctx.clip();ctx.strokeStyle=s.color;ctx.lineWidth=special?.75:.9;ctx.globalAlpha=special?.7:.86;ctx.lineJoin='miter';ctx.lineCap='round';
       let segment=[];const flush=()=>{
         if(!segment.length)return;ctx.beginPath();
-        smoothPath(ctx,segment,s.key==='pct');
+        this.traceSignal(ctx,segment,s,scale);
         ctx.stroke();if(segment.length===1){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
       };
       for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(!connected&&(p[6]&3))flush();segment.push(map(p));}flush();ctx.restore();
     });
-    if(this.marker!==null){const x=this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*pw;ctx.strokeStyle=cssColor('--plot-marker','#405267');ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();ctx.setLineDash([]);}
     if(!visible.length||!selected.length){ctx.fillStyle=cssColor('--plot-label','#64748b');ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
-    this.positionTooltip();
+    this.refreshInspection();
   }
 }

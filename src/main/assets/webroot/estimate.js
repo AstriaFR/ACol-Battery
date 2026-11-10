@@ -22,6 +22,7 @@ export function remainingMeanVoltage(millivolts){
   return null;
 }
 export function remainingEstimate(reading,averagePower){
+  if(reading?.cellCount===0)return null;
   const mean=remainingMeanVoltage(reading?.voltage);
   if(mean===null||!finite(reading?.rm)||reading.rm<0)return null;
   // battery_rm is the equivalent remaining mAh used by the discharge accounting.
@@ -31,6 +32,7 @@ export function remainingEstimate(reading,averagePower){
   return{wh,whText:wh.toFixed(wh<2?2:1),minutes,voltage:Math.round(reading.voltage/10)/100,mean,
     averagePower:finite(averagePower)&&averagePower>0?averagePower:null,wall:reading.wall};
 }
+export const unclassifiedCells=32;
 export function remainingTime(minutes,wh){
   if(minutes===null||!Number.isSafeInteger(minutes)||minutes<0)return'—';
   if(minutes===0)return wh>0?'少于 1 分钟':'0 分钟';

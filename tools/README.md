@@ -4,7 +4,7 @@
 
 ## APK 构建
 
-需要 Python 3、JDK 17、Android SDK 和 NDK。默认使用 Android 37 平台、Build Tools 37.0.0、NDK 29.0.14206865，可通过参数指定其他已安装版本。构建目标为 Android 15 及以上的 ARM64 设备。
+需要 Python 3、JDK 17、Android SDK 和 NDK。默认使用 Android 37 平台、Build Tools 37.0.0、NDK 29.0.14206865，可通过参数指定其他已安装版本。构建目标为 Android 13 及以上的 ARM64 设备。
 
 构建脚本使用 Python 标准库及本目录的 `font_checks.py`，无需安装字体处理依赖。脚本读取清单中已有的版本号，不自动递增编号，也不改写源码中的版本信息。
 

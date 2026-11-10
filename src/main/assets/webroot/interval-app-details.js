@@ -3,15 +3,18 @@ import{IntervalAppCache}from'./interval-app-cache.js?v=acol-2.2s';
 export class IntervalAppDetails{
   constructor(chart,api,getRecord,cache=new IntervalAppCache()){this.chart=chart;this.api=api;this.getRecord=getRecord;this.cache=cache;this.records=new Map();this.deleted=new Set();chart.onInspect=row=>this.inspect(row);}
   eligible(record){return record?.kind==='discharge'&&!(record.fast_seconds>0);}
-  preload(record){
+  preload(record,statsVersion){
     if(!this.eligible(record)||this.deleted.has(record.id))return Promise.resolve();
     record={...record}; // Bind saved results to the revision that started this read.
     const key=this.key(record);
     let state=this.records.get(key);
     if(!state){state={names:new Map(),cursor:0,loadedEnd:-1,complete:false,retryCursor:null};this.records.set(key,state);while(this.records.size>3)this.records.delete(this.records.keys().next().value);}
+    if(Number.isFinite(statsVersion)&&Number.isFinite(state.statsVersion)&&statsVersion!==state.statsVersion&&!state.complete)state.retryAt=0;
+    if(Number.isFinite(statsVersion))state.statsVersion=statsVersion;
     const end=record.end_elapsed-record.start_elapsed;
     if(state.busy)return state.busy;
     if(state.loadedEnd>=end&&state.complete||Date.now()<(state.retryAt??0))return Promise.resolve();
+    const startedVersion=state.statsVersion;
     state.busy=(async()=>{
       try{
         if(!state.restored){const saved=await this.cache.read(record);state.restored=true;if(this.deleted.has(record.id))return;if(saved){state.names=new Map(saved.names);state.cursor=saved.cursor;state.loadedEnd=saved.end;state.complete=saved.complete;state.retryCursor=saved.retryCursor;state.retryAt=Math.min(Number(saved.retryAt)||0,Date.now()+60000);this.render();}}
@@ -29,7 +32,14 @@ export class IntervalAppDetails{
         }while(data.more);
         state.loadedEnd=Math.min(end,data.through??end);state.complete=complete;state.retryAt=complete?0:Date.now()+60000;await this.cache.save(record,state);
       }catch{state.retryAt=Date.now()+5000;}
-      finally{state.busy=null;this.render();const latest=this.getRecord();if(latest?.id===record.id&&latest.start_wall===record.start_wall&&((latest.app_revision??0)!==(record.app_revision??0)||!state.retryAt&&latest.end_elapsed-latest.start_elapsed>state.loadedEnd))this.preload(latest);else this.scheduleRetry(record,state);}
+      finally{
+        state.busy=null;this.render();const latest=this.getRecord();
+        const advanced=startedVersion!==state.statsVersion&&!state.complete;
+        if(advanced)state.retryAt=0;
+        if(latest?.id===record.id&&latest.start_wall===record.start_wall
+          &&((latest.app_revision??0)!==(record.app_revision??0)||advanced||!state.retryAt&&latest.end_elapsed-latest.start_elapsed>state.loadedEnd))this.preload(latest);
+        else this.scheduleRetry(record,state);
+      }
     })();return state.busy;
   }
   scheduleRetry(record,state){

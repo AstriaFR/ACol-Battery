@@ -6,7 +6,7 @@ public final class QuickSettingsTest {
   JSONObject state=new JSONObject().put("ok",true).put("fastEnabled",false).put("recordingEnabled",true).put("powerDisplayEnabled",true);
   check(!QuickTileState.read(state,true).enabled&&QuickTileState.read(state,true).available);
   check(QuickTileState.read(state,false).enabled);
-  state.put("recordingEnabled",false);check(!QuickTileState.read(state,true).available);check(QuickTileState.read(state,false).available);
+  state.put("recordingEnabled",false);check(QuickTileState.read(state,true).available);check(QuickTileState.read(state,false).available);
   state.put("fastEnabled",true);check(QuickTileState.read(state,true).available&&QuickTileState.read(state,true).enabled);
   state.put("powerDisplayError","unavailable");check(QuickTileState.read(state,false).enabled&&QuickTileState.read(state,false).subtitle.contains("异常"));
   for(JSONObject bad:new JSONObject[]{null,new JSONObject(),new JSONObject().put("ok",true).put("fastEnabled","true")})try{QuickTileState.read(bad,true);throw new AssertionError("Unknown state accepted");}catch(java.io.IOException expected){}

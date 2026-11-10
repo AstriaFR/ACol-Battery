@@ -49,6 +49,17 @@ public final class RuntimeTransactionTest {
             f.old();check(f.starts==2&&f.stops==2,"Old recorder was not restarted");check(!new File(f.base,"update.transaction").exists(),"Rollback remained pending");
         }
         try(Fixture f=new Fixture(true)){
+            RuntimeTransaction t=f.transaction();int[] attempts={0};
+            RuntimeTransaction.Control expired=new RuntimeTransaction.Control(){
+                public void stop()throws IOException{attempts[0]++;throw new IOException("stop deadline expired");}
+                public void start(){throw new AssertionError("Expired update tried to start a recorder");}
+            };
+            try{t.apply("new","owner-a",expired,false);throw new AssertionError();}catch(IOException expected){}
+            check(attempts[0]==1&&new File(f.base,"update.transaction").isFile(),"Recovery must retain the journal for a fresh deadline");
+            t.recover("",token->false,f.control);f.old();
+            check(f.stops==1&&f.starts==1&&!new File(f.base,"update.transaction").exists(),"Independent recovery did not finish");
+        }
+        try(Fixture f=new Fixture(true)){
             f.crashStart=true;try{f.transaction().apply("new","owner-a",f.control);throw new AssertionError();}catch(Crash expected){}
             int stopped=f.stops;
             try{f.transaction().recover("other",token->true,f.control);throw new AssertionError();}catch(IOException expected){}

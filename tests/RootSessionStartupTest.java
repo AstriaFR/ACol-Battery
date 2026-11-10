@@ -12,7 +12,8 @@ public final class RootSessionStartupTest {
         final PipedInputStream output=new PipedInputStream(),commands=new PipedInputStream();
         final PipedOutputStream send,toCommands;final List<String> received=Collections.synchronizedList(new ArrayList<>());
         final boolean fail;volatile boolean exited;
-        Shell(boolean fail)throws IOException{
+        Shell(boolean fail)throws IOException{this(fail,false);}
+        Shell(boolean fail,boolean drop)throws IOException{
             this.fail=fail;send=new PipedOutputStream(output);toCommands=new PipedOutputStream(commands);
             Thread server=new Thread(()->{
                 try(BufferedReader in=new BufferedReader(new InputStreamReader(commands,"UTF-8"));PrintWriter out=new PrintWriter(new OutputStreamWriter(send,"UTF-8"),true)){
@@ -22,6 +23,7 @@ public final class RootSessionStartupTest {
                         else{
                             JSONObject request=new JSONObject(line);String id=request.getString("id");
                             if(request.optString("action").equals("initialize")){
+                                if(drop)return;
                                 out.println(new JSONObject().put("id",id).put("event","startup_phase").put("message","正在连接后台…"));
                                 out.println(fail?new JSONObject().put("id",id).put("event","result").put("message","后台无法启动。").put("diagnostics","full technical cause")
                                     :new JSONObject().put("id",id).put("event","startup_ready").put("status",new JSONObject().put("ok",true).put("frameworkHealthy",true)));
@@ -53,11 +55,15 @@ public final class RootSessionStartupTest {
             try{root.connect(message->{},text->{},false);throw new AssertionError("Failure accepted as ready");}
             catch(RootSession.CommandFailure failure){check(failure.getMessage().equals("后台无法启动。"),"Human cause lost");check(failure.diagnostics.equals("full technical cause"),"Technical report lost");}
         }
+        try(RootSession root=new RootSession(new Shell(false,true))){
+            try{root.connect(message->{},text->{},false);throw new AssertionError("Disconnected broker accepted as ready");}
+            catch(IOException failure){check(failure.getMessage().contains("断开"),"Broker EOF must complete the handshake with its direct cause");}
+        }
         Set<String> bridge=new HashSet<>();
         for(java.lang.reflect.Method method:WebViewHost.Bridge.class.getDeclaredMethods())if(method.isAnnotationPresent(android.webkit.JavascriptInterface.class)){
             check(java.lang.reflect.Modifier.isPublic(method.getModifiers()),"Native bridge method is not public");bridge.add(method.getName());
         }
-        check(bridge.equals(new HashSet<>(Arrays.asList("backupAllData","restoreAllData","openErrorLogs","clearAllData","post","beginChartExport","appendChartExport","finishChartExport","cancelChartExport","appIcons","fullScreen","setDarkTheme","isSystemDark","connectionStatus","repair"))),"WebView bridge contract changed during the split");
+        check(bridge.equals(new HashSet<>(Arrays.asList("backupAllData","restoreAllData","openErrorLogs","clearAllData","readRecordListCache","writeRecordListCache","clearRecordListCache","post","beginChartExport","appendChartExport","finishChartExport","cancelChartExport","appIcons","fullScreen","setDarkTheme","isSystemDark","connectionStatus","repair"))),"WebView bridge contract changed during the split");
         System.out.println("Root startup: one bridge, health handshake, phase feedback, native/WebView routing, failure diagnostics and bridge contract passed");
     }
 }

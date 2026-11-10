@@ -4,6 +4,7 @@ import java.util.*;
 
 /** Hardware-independent rules. All time arguments are monotonic milliseconds. */
 public final class Core {
+    static final int UNCLASSIFIED_CELLS=32;
     public static final class Reading {
         public long elapsed, wall;
         public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
@@ -11,19 +12,24 @@ public final class Core {
         public double cell1 = Double.NaN, cell2 = Double.NaN;
         public double memoryUsedGB=Double.NaN,memoryTotalGB=Double.NaN;
         public int cellCount=2;
-        public String voltageSource="",currentSource="",rmSource="",onlineSource="";
+        public String voltageSource="",currentSource="",rmSource="",pctSource="",onlineSource="";
         public boolean online, full, enabled;
         public boolean vendorLogRead;
         public boolean onlineKnown=true;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
+        public double displayVoltage() { return cellCount==0?vmin:voltage(); }
         // OPLUS gauge current is negative while charging.
         public double chargingCurrent() { return -current; }
         public double compensatedCurrent() { return chargingCurrent() * (cellCount==2?2:1); }
         public double power() { return cellCount==0?Double.NaN:compensatedCurrent() * voltage() / 1_000_000; }
-        public boolean valid() { return finite(rm) && finite(pct) && rm >= 0 && pct >= 0 && pct <= 100; }
+        public boolean valid() { return finite(rm) && rm >= 0 && validPercentage(pct); }
     }
     public static boolean finite(double v) { return !Double.isNaN(v) && !Double.isInfinite(v); }
+    static boolean validPercentage(double value){return value>=0&&value<=100;}
+    static double levelPercentage(int level,int scale){
+        return scale>0&&level>=0&&level<=scale?level*100.0/scale:Double.NaN;
+    }
     /** Android CHARGE_COUNTER already represents remaining capacity in microamp-hours. */
     public static double remainingMah(long microampHours) {
         return microampHours>=0&&microampHours<=Integer.MAX_VALUE?microampHours/1000.0:Double.NaN;
@@ -50,6 +56,12 @@ public final class Core {
     }
     static double parse(String raw){try{return Double.parseDouble(raw.trim());}catch(Exception e){return Double.NaN;}}
     static boolean cellVoltage(double value){return finite(value)&&value>=2200&&value<=4800;}
+    static boolean batteryTemperature(double value){return value>=-40&&value<=100;}
+    static double systemVoltage(int cells,double millivolts){
+        double voltage=cells==2&&millivolts>4800?millivolts/2:millivolts;
+        boolean valid=cells==0?voltage>=2200&&voltage<=9600:cellVoltage(voltage);
+        return valid?voltage:Double.NaN;
+    }
     /** Read one BCC response; single-cell devices never require field 11. */
     public static boolean applyBcc(Reading r,String raw) {
         String[] fields=raw.trim().split(",",-1);
@@ -61,19 +73,20 @@ public final class Core {
         }
         double current=parse(fields[8]),temp=parse(fields[7])/10;
         if(finite(current)&&Math.abs(current)<=30000){r.current=current;r.currentSource="bcc";}
-        if(finite(temp)&&temp>=-40&&temp<=100)r.temp=temp;
+        if(batteryTemperature(temp))r.temp=temp;
         return finite(r.voltage())&&finite(r.current);
     }
     /** Android voltage is mV; CURRENT_NOW is microamps, positive while charging. */
     public static void applySystem(Reading r,double millivolts,double microamps,double temperature) {
-        if(!finite(r.voltage())&&r.cellCount>0){
-            double voltage=r.cellCount==2&&millivolts>6000?millivolts/2:millivolts;
-            if(cellVoltage(voltage)){
+        if(!finite(r.displayVoltage())){
+            double voltage=systemVoltage(r.cellCount,millivolts);
+            // An unclassified pack may report pack voltage. Keep it for display only.
+            if(finite(voltage)){
                 r.vmin=r.vmax=voltage;r.cell1=r.cellCount==1?voltage:Double.NaN;r.cell2=Double.NaN;r.voltageSource="android";
             }
         }
         if(!finite(r.current)&&finite(microamps)&&Math.abs(microamps)<=30000000){r.current=-microamps/1000;r.currentSource="android";}
-        if(!finite(r.temp)&&finite(temperature)&&temperature>=-40&&temperature<=100)r.temp=temperature;
+        if(!finite(r.temp)&&batteryTemperature(temperature))r.temp=temperature;
     }
     // battery_rm discharge uses the cell-mean voltage basis; do not multiply by 2S again.
     public static double dischargeEnergyMwh(double cellMeanA,double cellMeanB,double mah) {

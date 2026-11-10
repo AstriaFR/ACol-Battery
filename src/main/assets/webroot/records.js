@@ -1,15 +1,18 @@
 import{valid,duration}from'./chart.js?v=acol-2.2s';
-import{compareRecords}from'./live-channel.js?v=acol-2.2s';
+import{compareRecords,recordRank}from'./live-channel.js?v=acol-2.2s';
 import{recordFast,fmt,recordChanges,pad2,stampList,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
+const nextFrame=callback=>typeof requestAnimationFrame==='function'?requestAnimationFrame(callback):callback();
+const summaryFields=['id','kind','start_wall','start_elapsed','end_elapsed','pct_start','pct_end','rm_start','rm_end','fast_seconds','cell_count','reason'];
 
 /** Owns list/filter/delete state and the shared homepage record presentation. */
 export function createRecords(options){
   const{api,liveChannel,toast,getSettings,getStatus,getDetail,openRecord,onKindChange,pauseRemaining,onDialogClose,onDeleted,onRefresh}=options;
   let records=[],kind='all',total=0,totalRecords=0,loading=false,recordsReady=false;
   let listDue=true,lastListAt=0,listSelection=0,monthFilter=null,filterYear=0,filterMonth=0,filterBusy=false,filterRequest=0;
+  let displayKey=null,loadedVersion=null,cacheOnly=false,renderVersion=0,rendering=false,painted=null;
   let revealedRecordId=null,deleteTarget=null,homeActiveRecord=null,bound=false;
-  const filteredLists=new Map();
+  const filteredLists=new Map(),writtenSnapshots=new Map();
   function refresh(){listDue=true;onRefresh();}
   function renderRecordIcon(node,r){
     const type=r?(recordFast(r)?'game':r.kind):'empty';if(node.dataset.type===type)return;
@@ -67,32 +70,84 @@ export function createRecords(options){
     renderRecordPrimary(value,change,r);
   }
   function filteredList(){return !!monthFilter||kind!=='all';}
-  function filterKey(){return[kind,monthFilter?.year??0,monthFilter?.month??0,Number($('showSmall').checked),getSettings().hidePct].join(':');}
-  async function loadFiltered(reset){
-    if(!filteredList()||filterBusy)return false;
-    filterBusy=true;
-    const id=++filterRequest,selection=listSelection,key=filterKey(),small=Number($('showSmall').checked),offset=reset?0:records.length;
-    const year=monthFilter?.year??0,month=monthFilter?.month??0,type={all:0,charge:1,discharge:2,game:3}[kind];
+  function filterKey(){return[kind,monthFilter?.year??0,monthFilter?.month??0,Number($('showSmall').checked),getSettings().hidePct].join('.');}
+  function warmList(){
+    const key=filterKey(),selection=listSelection;
+    if(recordsReady||typeof window.AcoNative?.readRecordListCache!=='function')return;
+    nextFrame(()=>{
+      if(recordsReady||!listVisible()||selection!==listSelection||key!==filterKey())return;
+      try{
+        const text=window.AcoNative.readRecordListCache(key);if(!text)return;
+        const snapshot=JSON.parse(text);
+        if(!Array.isArray(snapshot.records)||snapshot.records.length>40||!Number.isSafeInteger(snapshot.total)||!Number.isSafeInteger(snapshot.totalRecords)
+          ||snapshot.total<snapshot.records.length||snapshot.totalRecords<snapshot.total)return;
+        records=snapshot.records.filter(row=>Number.isSafeInteger(row?.id)&&row.id>0&&!row.active&&!liveChannel.deleted.has(row.id));
+        total=snapshot.total;totalRecords=snapshot.totalRecords;recordsReady=true;cacheOnly=true;renderRecords();
+      }catch{ /* The recorder remains the source of truth when cache is unavailable. */ }
+    });
+  }
+  function saveList(key,data){
+    if(typeof window.AcoNative?.writeRecordListCache!=='function')return;
+    // Active sessions can end or be auto-deleted while the app is closed.
+    const stable=data.records.filter(row=>!row.active&&!liveChannel.deleted.has(row.id)).slice(0,40)
+      .map(row=>Object.fromEntries(summaryFields.map(field=>[field,row[field]])));
+    const text=JSON.stringify({records:stable,total:data.total,totalRecords:data.totalRecords});
+    if(writtenSnapshots.get(key)===text)return;
     try{
-      const data=await api('list',small,offset,year,month,type);
+      window.AcoNative.writeRecordListCache(key,text);
+      writtenSnapshots.delete(key);writtenSnapshots.set(key,text);
+      if(writtenSnapshots.size>8)writtenSnapshots.delete(writtenSnapshots.keys().next().value);
+    }catch{}
+  }
+  function clearSnapshots(){
+    writtenSnapshots.clear();
+    try{window.AcoNative?.clearRecordListCache?.();}catch{}
+  }
+  async function loadList(reset){
+    if(filterBusy||loading)return false;
+    const cursor=reset?null:records.at(-1);
+    if(!reset&&(!cursor||!Number.isSafeInteger(loadedVersion)))return loadList(true);
+    filterBusy=true;
+    loading=!reset&&!filteredList();
+    const id=++filterRequest,selection=listSelection,key=filterKey(),small=Number($('showSmall').checked),version=loadedVersion;
+    const year=monthFilter?.year??0,month=monthFilter?.month??0,type={all:0,charge:1,discharge:2,game:3}[kind];
+    let reload=false;
+    try{
+      const args=[small,cursor?.id??0,year,month,type];
+      if(cursor)args.push(version,recordRank(cursor));
+      const data=await api('list',...args);
       if(id!==filterRequest||selection!==listSelection||key!==filterKey()||(data.listVersion??0)<liveChannel.minimumListVersion)return false;
-      const rows=data.records.filter(row=>!liveChannel.deleted.has(row.id)),cached=filteredLists.get(key);
-      records=reset?liveChannel.mergeHead(rows,data.total,cached?.records,cached?.total,data.listVersion===cached?.listVersion)
-        :[...new Map([...records,...rows].map(row=>[row.id,row])).values()].sort(compareRecords);
-      filteredLists.delete(key);filteredLists.set(key,{...data,records});
-      while(filteredLists.size>12)filteredLists.delete(filteredLists.keys().next().value);
-      total=data.total;totalRecords=data.totalRecords??totalRecords;recordsReady=true;renderRecords();
-      listDue=false;lastListAt=Date.now();return true;
+      if(data.listChanged||cursor&&data.listVersion!==version){
+        // The cursor belongs to a different ordering. Reconcile the head before
+        // allowing another continuation or displaying data from that page.
+        loadedVersion=null;listDue=true;reload=true;
+      }else{
+        if(filteredList()){
+          const rows=data.records.filter(row=>!liveChannel.deleted.has(row.id)),cached=filteredLists.get(key);
+          records=reset?liveChannel.mergeHead(rows,data.total,cached?.records,cached?.total,data.listVersion===cached?.listVersion)
+            :[...new Map([...records,...rows].map(row=>[row.id,row])).values()].sort(compareRecords);
+          filteredLists.delete(key);filteredLists.set(key,{...data,records});
+          while(filteredLists.size>12)filteredLists.delete(filteredLists.keys().next().value);
+        }else records=(reset?liveChannel.replaceHead(small,data,getSettings().hidePct):liveChannel.appendList(small,data)).records;
+        total=data.total;totalRecords=data.totalRecords??totalRecords;recordsReady=true;cacheOnly=false;displayKey=key;loadedVersion=data.listVersion;renderRecords();
+        if(reset)saveList(key,data);
+        listDue=false;lastListAt=Date.now();return true;
+      }
     }catch(e){if(id===filterRequest)toast(e.message);return false;}
-    finally{if(id===filterRequest)filterBusy=false;}
+    finally{if(id===filterRequest)filterBusy=loading=false;}
+    if(reload&&listVisible())return loadList(true);
+    return false;
   }
   function selectRecords(){
-    ++listSelection;++filterRequest;filterBusy=false;revealRecordDelete(null);
+    ++listSelection;++filterRequest;filterBusy=loading=false;revealRecordDelete(null);
     liveChannel.selectSmall($('showSmall').checked);
     $('recordsPage').querySelector('.record-scroll').scrollTop=0;
-    const cached=filteredList()?filteredLists.get(filterKey()):liveChannel.cachedList($('showSmall').checked);
-    records=cached?.records??[];total=cached?.total??0;totalRecords=cached?.totalRecords??liveChannel.lists?.totalAll??totalRecords;recordsReady=!!cached;renderRecords();
-    if(filteredList())loadFiltered(true);
+    displayKey=filterKey();const small=$('showSmall').checked;
+    const cached=filteredList()?filteredLists.get(displayKey)
+      :(small||liveChannel.lists?.hidePct===getSettings().hidePct?liveChannel.cachedList(small):null);
+    records=cached?.records??[];total=cached?.total??0;totalRecords=cached?.totalRecords??liveChannel.lists?.totalAll??totalRecords;loadedVersion=cached?.listVersion;recordsReady=!!cached;cacheOnly=false;renderRecords();
+    warmList();
+    loadList(true);
     refresh();
   }
   function cancelMonthFilter(){
@@ -101,18 +156,40 @@ export function createRecords(options){
     selectRecords();
   }
   function renderRecords(){
-    const list=$('records'),shown=records;
+    if(!listVisible())return;
+    if(!rendering&&painted?.rows===records&&painted.key===displayKey&&painted.total===total
+      &&painted.totalRecords===totalRecords&&painted.ready===recordsReady&&painted.cacheOnly===cacheOnly)return;
+    const version=++renderVersion;
+    const finish=()=>{rendering=false;painted={rows:records,key:displayKey,total,totalRecords,ready:recordsReady,cacheOnly};};
+    const list=$('records'),shown=records,scroller=$('recordsPage').querySelector('.record-scroll');
     const existing=new Map([...list.children].filter(row=>row.dataset.recordId).map(row=>[Number(row.dataset.recordId),row]));
-    const rows=shown.map(r=>{const row=existing.get(r.id)??createRecordRow(r);updateRecordRow(row,r);return row;});
-    if(!rows.length){
-      const empty=list.querySelector('.empty')??el('div',undefined,'empty'),text=`暂无记录，可勾选“显示 ≤${getSettings().hidePct}%”。`;
-      if(empty.textContent!==text)empty.textContent=text;rows.push(empty);
-    }
-    let cursor=list.firstChild;
-    for(const row of rows){if(row===cursor)cursor=cursor.nextSibling;else list.insertBefore(row,cursor);}
-    while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
+    const ids=new Set(shown.map(row=>row.id));
+    for(const [id,node]of existing)if(!ids.has(id))node.remove();
     $('recordCount').textContent=recordsReady?(filteredList()?`${total}/共${totalRecords}条`:`共${totalRecords}条`):'';
-    $('more').hidden=records.length>=total;
+    $('more').hidden=true;
+    if(!shown.length){
+      const empty=list.querySelector('.empty')??el('div',undefined,'empty'),text=recordsReady?`暂无记录，可勾选“显示 ≤${getSettings().hidePct}%”。`:'正在读取记录…';
+      if(empty.textContent!==text)empty.textContent=text;
+      if(!empty.parentElement)list.append(empty);
+      finish();
+      return;
+    }
+    list.querySelector('.empty')?.remove();
+    let index=0,cursor=list.firstChild;rendering=true;
+    const batch=limit=>{
+      if(version!==renderVersion)return;
+      if(!listVisible()){rendering=false;return;}
+      while(index<shown.length){
+        const data=shown[index];let row=existing.get(data.id);
+        if(!row){if(limit===0)break;row=createRecordRow(data);limit--;}
+        updateRecordRow(row,data);
+        if(row===cursor)cursor=cursor.nextSibling;else list.insertBefore(row,cursor);
+        index++;
+      }
+      if(index<shown.length)nextFrame(()=>batch(8));
+      else{finish();$('more').hidden=cacheOnly||records.length>=total;}
+    };
+    batch(Math.max(6,Math.ceil((scroller.clientHeight||480)/68)+1));
   }
   function updateRecordRow(row,r){
     row.dataset.active=r.active?'1':'0';row.classList.toggle('game-record',recordFast(r));
@@ -127,15 +204,13 @@ export function createRecords(options){
   }
   function createRecordRow(r){
       const row=el('div',undefined,'record-row record '+r.kind+(recordFast(r)?' game-record':'')),b=el('button',undefined,'record-open');
-      row.dataset.recordId=r.id;row.dataset.active=r.active?'1':'0';b.type='button';const icon=el('span',undefined,'icon');renderRecordIcon(icon,r);
+      row.dataset.recordId=r.id;b.type='button';const icon=el('span',undefined,'icon');
       const info=el('span',undefined,'info');
-      const title=el('strong');updateRecordTitle(title,r);info.append(title);
-      const meta=el('small');updateRecordMeta(meta,r);info.append(meta);b.append(info);
+      info.append(el('strong'),el('small'));b.append(info);
       const action=el('span',undefined,'record-action'),delta=el('span',undefined,'delta');
-      delta.append(el('span',undefined,'delta-value'));updateRecordDelta(delta,r);
+      delta.append(el('span',undefined,'delta-value'));
       action.append(delta);row.append(icon,action,b);
       const remove=el('button','删除','record-delete');remove.type='button';remove.dataset.deleteId=r.id;
-      remove.hidden=revealedRecordId!==r.id;action.classList.toggle('delete-revealed',!remove.hidden);
       remove.onclick=e=>{e.stopPropagation();confirmRecordDelete(records.find(item=>item.id===r.id)??r);};
       action.append(remove);
       let timer,start,held=false,moved=false;
@@ -147,12 +222,18 @@ export function createRecords(options){
       row.addEventListener('pointermove',e=>{if(start&&Math.hypot(e.clientX-start[0],e.clientY-start[1])>8){moved=true;clearTimeout(timer);}});
       const end=()=>{clearTimeout(timer);start=null;if(held||moved)setTimeout(()=>{held=moved=false;},400);};
       for(const type of['pointerup','pointercancel','pointerleave'])row.addEventListener(type,end);
-      row.onclick=e=>{if(held||moved){e.preventDefault();return;}revealRecordDelete(null);openRecord(r.id);};
+      row.onclick=e=>{if(held||moved){e.preventDefault();return;}revealRecordDelete(null);openRecord(r.id,records.find(item=>item.id===r.id)??r);};
       return row;
   }
   function revealRecordDelete(id){
+    if(revealedRecordId===id)return;
+    const previous=revealedRecordId;
     revealedRecordId=id;
-    for(const button of $('records').querySelectorAll('[data-delete-id]')){button.hidden=Number(button.dataset.deleteId)!==id;button.parentElement.classList.toggle('delete-revealed',!button.hidden);}
+    for(const target of [previous,id]){
+      if(target===null)continue;
+      const button=$('records').querySelector(`[data-delete-id="${target}"]`);
+      if(button){button.hidden=target!==id;button.parentElement.classList.toggle('delete-revealed',!button.hidden);}
+    }
   }
   function confirmRecordDelete(record,push=true){
     if(!record||$('confirm').open||liveChannel.deleted.has(record.id))return;
@@ -204,7 +285,8 @@ export function createRecords(options){
     $('confirmDelete').disabled=true;
     try{
       const result=await api('delete',target.id);liveChannel.forgetRecord(target,result.listVersion??0);onDeleted(target.id);
-      ++listSelection;++filterRequest;filterBusy=false;filteredLists.clear();
+      ++listSelection;++filterRequest;filterBusy=loading=false;loadedVersion=null;filteredLists.clear();
+      clearSnapshots();
       if(records.some(r=>r.id===target.id))total=Math.max(0,total-1);
       totalRecords=Math.max(0,totalRecords-1);records=records.filter(r=>r.id!==target.id);renderRecords();
       $('confirm').close();revealRecordDelete(null);
@@ -216,18 +298,22 @@ export function createRecords(options){
     }catch(e){toast(e.message);}finally{$('confirmDelete').disabled=false;}
   }
 
-  function pollRequest(){return{selection:listSelection,small:Number($('showSmall').checked),wantList:listDue||Date.now()-lastListAt>=15000};}
+  function listVisible(){return options.getTab()==='records'&&!$('appShell').hidden;}
+  function listNeedsRefresh(){return listDue||Date.now()-lastListAt>=15000;}
+  function pollRequest(){return{selection:listSelection,small:Number($('showSmall').checked)};}
   async function receive(packet,snapshot){
+    const active=packet.activeRecord&&!liveChannel.deleted.has(packet.activeRecord.id)?packet.activeRecord:null;
+    if(active?.id!==homeActiveRecord?.id||Number.isSafeInteger(loadedVersion)&&packet.status?.listVersion>loadedVersion)listDue=true;
+    renderHomeActive(active);
+    if(listVisible()&&displayKey!==null&&displayKey!==filterKey()){selectRecords();return;}
     if(snapshot.selection===listSelection){
       if(filteredList()){
-        if(options.getTab()==='records'&&!$('appShell').hidden&&(snapshot.wantList||Array.isArray(packet.records)))await loadFiltered(true);
-        else if(options.getTab()!=='records'||$('appShell').hidden){listDue=false;lastListAt=Date.now();}
-      }else if(Array.isArray(packet.records)&&snapshot.small===Number($('showSmall').checked)){
-        records=packet.records;total=packet.total;totalRecords=packet.totalRecords??totalRecords;recordsReady=true;listDue=false;lastListAt=Date.now();renderRecords();
-      }
+        if(listVisible()&&(listNeedsRefresh()||Array.isArray(packet.records)))await loadList(true);
+      }else if(listVisible()&&Array.isArray(packet.records)&&snapshot.small===Number($('showSmall').checked)){
+        records=packet.records;total=packet.total;totalRecords=packet.totalRecords??totalRecords;loadedVersion=packet.listVersion;recordsReady=true;cacheOnly=false;listDue=false;lastListAt=Date.now();renderRecords();
+      }else if(listVisible()&&listNeedsRefresh())await loadList(true);
     }
-    if(packet.activeRecord&&(!filteredList()||records.some(r=>r.id===packet.activeRecord.id)))updateActiveRecord(packet.activeRecord);
-    renderHomeActive(packet.activeRecord&&!liveChannel.deleted.has(packet.activeRecord.id)?packet.activeRecord:null);
+    if(active&&records.some(r=>r.id===active.id))updateActiveRecord(active);
   }
   function selectKind(value){
     kind=value;
@@ -239,15 +325,13 @@ export function createRecords(options){
     monthFilter={year,month};$('applyMonth').setAttribute('aria-pressed','true');selectRecords();
   }
   async function more(){
-    if(filteredList())return loadFiltered(false);if(loading)return;loading=true;
-    const selection=listSelection,small=Number($('showSmall').checked);
-    try{const data=await api('list',small,records.length);if(selection!==listSelection)return;const list=liveChannel.appendList(small,data);records=list.records;total=list.total;totalRecords=list.totalRecords??totalRecords;recordsReady=true;renderRecords();}
-    catch(error){toast(error.message);}finally{loading=false;}
+    if(cacheOnly||rendering)return;
+    return loadList(false);
   }
   function bind(){
     if(bound)return;bound=true;
     document.addEventListener('pointerdown',e=>{if(!e.target.closest('.record-row'))revealRecordDelete(null);});
-    $('homeActiveCard').onclick=()=>{if(homeActiveRecord)openRecord(homeActiveRecord.id);};
+    $('homeActiveCard').onclick=()=>{if(homeActiveRecord)openRecord(homeActiveRecord.id,homeActiveRecord);};
     $('cancelDelete').onclick=dismissRecordDelete;
     $('confirm').addEventListener('cancel',e=>{e.preventDefault();dismissRecordDelete();});
     $('confirmDelete').onclick=deleteConfirmed;
@@ -265,6 +349,15 @@ export function createRecords(options){
     scroller.addEventListener('scroll',()=>{if(options.getTab()==='records'&&!$('appShell').hidden&&!loading&&!filterBusy&&!$('more').hidden&&scroller.scrollTop>0&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<=60)more();},{passive:true});
   }
   return{bind,refresh,pollRequest,receive,render:renderRecords,selectKind,selectMonth,cancelMonth:cancelMonthFilter,more,
+    open(){
+      const key=filterKey();if(displayKey!==null&&displayKey!==key){selectRecords();return;}
+      displayKey=key;renderRecords();warmList();if(listNeedsRefresh())loadList(true);
+    },
+    invalidate(){
+      ++listSelection;++filterRequest;filterBusy=loading=false;filteredLists.clear();liveChannel.lists=null;clearSnapshots();
+      records=[];total=totalRecords=0;loadedVersion=null;recordsReady=false;cacheOnly=false;listDue=true;renderRecords();
+    },
+    find:id=>homeActiveRecord?.id===id?homeActiveRecord:records.find(row=>row.id===id),
     syncHistory:syncDeleteConfirmation,hideDelete:()=>revealRecordDelete(null),
     get kind(){return kind;},get busy(){return loading;},
     snapshot:()=>({records:[...records],total,totalRecords,ready:recordsReady,filtered:filteredList()})};

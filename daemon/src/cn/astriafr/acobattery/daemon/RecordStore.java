@@ -99,7 +99,7 @@ final class RecordStore {
         }finally{db.endTransaction();}
         return new JSONObject().put("id",id).put("completed_wall",wall).put("cycles",jsonValue(cycles)).put("snapshot",snapshot);
     }
-    JSONObject performancePoints(long id,long cursor)throws Exception{
+    JSONObject performancePoints(long id,long cursor,int requestedLimit)throws Exception{
         JSONObject out=new JSONObject().put("ok",true);long end;
         try(Cursor c=db.rawQuery("SELECT end_elapsed-start_elapsed,active,performance_seconds FROM sessions WHERE id=?",new String[]{""+id})){
             if(!c.moveToFirst())throw new IOException("记录不存在或已删除");end=c.getLong(0);out.put("active",c.getInt(1)!=0).put("intervalMs",Math.round(c.getDouble(2)*1000));
@@ -108,9 +108,10 @@ final class RecordStore {
             out.put("meta",c.moveToFirst()?new JSONObject(c.getString(0)):JSONObject.NULL);
         }
         JSONArray points=new JSONArray(),walls=new JSONArray();long after=Math.max(0,cursor)-1;boolean more=false;
-        try(Cursor c=db.rawQuery("SELECT x,data,wall FROM performance_samples WHERE session=? AND x>? ORDER BY x LIMIT 8001",new String[]{""+id,""+after})){
+        int limit=Math.max(1,Math.min(8000,requestedLimit));
+        try(Cursor c=db.rawQuery("SELECT x,data,wall FROM performance_samples WHERE session=? AND x>? ORDER BY x LIMIT ?",new String[]{""+id,""+after,""+(limit+1)})){
             while(c.moveToNext()){
-                if(points.length()==8000){more=true;break;}
+                if(points.length()==limit){more=true;break;}
                 end=Math.max(end,c.getLong(0));points.put(new JSONArray(c.getString(1)));after=c.getLong(0);
                 if(!c.isNull(2))walls.put(new JSONArray().put(after).put(c.getLong(2)));
             }
@@ -124,18 +125,40 @@ final class RecordStore {
             new String[]{""+id,""+from,""+to,""+after})) {
             while(c.moveToNext()) {
                 if(result.length()==12000){more=true;break;}
-                JSONArray row=new JSONArray();
-                for(int i=0;i<11;i++)row.put(c.isNull(i)?JSONObject.NULL:(i==0||i==6||i==7?c.getLong(i):c.getDouble(i)));
-                // Index 11 is reserved for frontend-derived remaining energy.
-                row.put(JSONObject.NULL).put(c.isNull(11)?JSONObject.NULL:c.getInt(11)).put(c.isNull(12)?JSONObject.NULL:c.getLong(12));
-                row.put(c.isNull(13)?JSONObject.NULL:c.getDouble(13)).put(c.isNull(14)?JSONObject.NULL:c.getDouble(14));
-                result.put(row);last=c.getLong(0);
+                result.put(rawPoint(c));last=c.getLong(0);
             }
         }
         out.put("points",result).put("nextAfter",more?last:JSONObject.NULL);
     }
+    private static JSONArray rawPoint(Cursor c)throws JSONException {
+        JSONArray row=new JSONArray();
+        for(int i=0;i<11;i++)row.put(c.isNull(i)?JSONObject.NULL:(i==0||i==6||i==7?c.getLong(i):c.getDouble(i)));
+        // Index 11 is reserved for frontend-derived remaining energy.
+        row.put(JSONObject.NULL).put(c.isNull(11)?JSONObject.NULL:c.getInt(11)).put(c.isNull(12)?JSONObject.NULL:c.getLong(12));
+        return row.put(c.isNull(13)?JSONObject.NULL:c.getDouble(13)).put(c.isNull(14)?JSONObject.NULL:c.getDouble(14));
+    }
+    JSONArray nearestSample(long id,long from,long to,long x)throws JSONException {
+        long target=Math.max(from,Math.min(to,x));
+        JSONArray nearest=null;
+        String columns="SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall,memory_used,memory_total FROM samples WHERE session=?";
+        try(Cursor c=db.rawQuery(columns+" AND x>=? AND x<=? ORDER BY x DESC LIMIT 1",new String[]{""+id,""+from,""+target})){
+            if(c.moveToFirst())nearest=rawPoint(c);
+        }
+        try(Cursor c=db.rawQuery(columns+" AND x>? AND x<=? ORDER BY x LIMIT 1",new String[]{""+id,""+target,""+to})){
+            if(c.moveToFirst()&&(nearest==null||c.getLong(0)-target<target-nearest.getLong(0)))nearest=rawPoint(c);
+        }
+        return nearest;
+    }
     /** Full-record bounds keep vertical scales stable when the time window changes. */
     void signalRanges(JSONObject out,long id,long from,long to,boolean charge)throws Exception {
+        if(rangeId==id&&rangeValues!=null){
+            long count=rangeCount;
+            if(from>0||to<rangeEnd)try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM samples WHERE session=? AND x>=? AND x<=?",new String[]{""+id,""+from,""+to})){
+                c.moveToFirst();count=c.getLong(0);
+            }
+            out.put("rawCount",rangeCount).put("windowCount",count).put("ranges",rangeValues);
+            return;
+        }
         String[] keys={"rm","pct","current","voltage","power","temp","memory_used","memory_total"};
         StringBuilder sql=new StringBuilder("SELECT COUNT(*),SUM(CASE WHEN x>=? AND x<=? THEN 1 ELSE 0 END),MAX(x)");
         for(String key:keys) {
@@ -176,14 +199,14 @@ final class RecordStore {
         }return result;
     }
     /** Union of per-bucket extrema across all five signals; endpoints and gaps are retained. */
-    JSONArray points(long id,long from,long to,int budget)throws Exception {
+    JSONArray points(long id,long from,long to,int budget,boolean rawPreview)throws Exception {
         long end;
         try(Cursor c=db.rawQuery("SELECT MAX(x) FROM samples WHERE session=?",new String[]{""+id})){c.moveToFirst();end=c.isNull(0)?1:c.getLong(0);}
         to=Math.min(to,end+1);long width=Math.max(1,(to-from)/Math.max(1,budget/16));
         long queryFrom=from,queryTo=to;
         // Keep the nearest eligible sample outside either edge so a zoom window
         // between two discharge samples can still draw their connecting segment.
-        String eligible="(interval_ms IS NULL OR interval_ms>=20000)";
+        String eligible=rawPreview?"1":"(interval_ms IS NULL OR interval_ms>=20000)";
         try(Cursor c=db.rawQuery("SELECT (SELECT x FROM samples WHERE session=? AND x<? AND "+eligible+" ORDER BY x DESC LIMIT 1),(SELECT x FROM samples WHERE session=? AND x>? AND "+eligible+" ORDER BY x LIMIT 1)",
                 new String[]{""+id,""+from,""+id,""+to})) {
             c.moveToFirst();if(!c.isNull(0))queryFrom=c.getLong(0);if(!c.isNull(1))queryTo=c.getLong(1);
@@ -195,8 +218,8 @@ final class RecordStore {
                 double[] point=new double[16];for(int i=0;i<11;i++)point[i]=c.isNull(i)?Double.NaN:c.getDouble(i);
                 point[11]=Double.NaN;point[12]=c.isNull(11)?Double.NaN:c.getDouble(11);point[13]=c.isNull(12)?Double.NaN:c.getLong(12);
                 point[14]=c.isNull(13)?Double.NaN:c.getDouble(13);point[15]=c.isNull(14)?Double.NaN:c.getDouble(14);
-                if(Core.finite(point[7])&&point[7]<20000)continue;
-                if(point[5]>15||point[5]<0)point[5]=Double.NaN;
+                if(!rawPreview&&Core.finite(point[7])&&point[7]<20000)continue;
+                if(!rawPreview&&(point[5]>15||point[5]<0))point[5]=Double.NaN;
                 long g=((long)point[0]-from)/width;
                 if(first!=null&&g!=group) {flushBucket(result,bucket,first,last,lo,hi);bucket.clear();Arrays.fill(lo,null);Arrays.fill(hi,null);first=last=null;}
                 group=g;if(first==null)first=point;
@@ -205,6 +228,9 @@ final class RecordStore {
                     for(int i=1;i<=5;i++)if(Core.finite(last[i])!=Core.finite(point[i])){split=true;break;}
                     if(Core.finite(last[10])!=Core.finite(point[10]))split=true;
                     if(Core.finite(last[14])!=Core.finite(point[14]))split=true;
+                    if(rawPreview&&(Double.compare(last[12],point[12])!=0
+                        ||(((int)last[6]^(int)point[6])&Core.UNCLASSIFIED_CELLS)!=0
+                        ||Math.abs((point[13]-last[13])-(point[0]-last[0]))>2000))split=true;
                     if(split){bucket.put((long)last[0],last);bucket.put((long)point[0],point);}
                 }
                 last=point;
@@ -229,7 +255,7 @@ final class RecordStore {
         long x=r.elapsed-startElapsed;if(rangeId!=session||x<=rangeEnd||rangeValues==null)return;
         JSONObject next=new JSONObject(rangeValues.toString());
         String[] keys={"rm","pct","current","voltage","power","temp","ram","ramTotal"};
-        double[] values={r.rm,r.pct,state==1||gameContext?r.chargingCurrent():Double.NaN,r.voltage(),recordedPower,r.temp,state==0&&!gameContext?r.memoryUsedGB:Double.NaN,state==0&&!gameContext?r.memoryTotalGB:Double.NaN};
+        double[] values={r.rm,r.pct,state==1||gameContext?r.chargingCurrent():Double.NaN,r.displayVoltage(),recordedPower,r.temp,state==0&&!gameContext?r.memoryUsedGB:Double.NaN,state==0&&!gameContext?r.memoryTotalGB:Double.NaN};
         if(state==0&&!gameContext) {
             if(previous!=null&&r.elapsed-previous.elapsed<20000)Arrays.fill(values,Double.NaN);
             else if(recordedPower>15||recordedPower<0)values[4]=Double.NaN;
@@ -250,15 +276,26 @@ final class RecordStore {
         return o.put("ids",existing).put("records",identities);
     }
     JSONObject list(JSONArray p,int hidePct,long settingsVersion)throws Exception{JSONObject o=new JSONObject().put("ok",true);
-        boolean all=p.optString(0,"0").equals("1");int offset=Math.max(0,Math.min(1_000_000,p.optInt(1,0)));
+        boolean all=p.optString(0,"0").equals("1"),continuation=p.length()>5;
+        o.put("listVersion",settingsVersion);
+        if(continuation&&p.getLong(5)!=settingsVersion)return o.put("listChanged",true);
         int year=p.optInt(2,0),month=p.optInt(3,0);long from=0,to=0;
         if(year>=1970&&year<=9999&&month>=1&&month<=12){
             Calendar c=Calendar.getInstance();c.clear();c.set(year,month-1,1,0,0,0);from=c.getTimeInMillis();c.add(Calendar.MONTH,1);to=c.getTimeInMillis();
         }
         String filter=RecordFilter.where(all,hidePct,p.optInt(4,0),from,to);
-        o.put("records",rows("SELECT *,ABS(pct_end-pct_start) AS delta_pct FROM sessions"+filter+RecordOrder.SQL+" LIMIT 40 OFFSET ?",new String[]{""+offset}));
+        String select="SELECT *,ABS(pct_end-pct_start) AS delta_pct FROM sessions";
+        if(continuation){
+            long before=p.getLong(1);int rank=p.getInt(6);
+            if(before<=0||rank<0||rank>2)throw new IOException("记录分页游标无效");
+            String pageFilter=filter+(filter.isEmpty()?" WHERE ":" AND ")+RecordOrder.AFTER;
+            o.put("records",rows(select+pageFilter+RecordOrder.SQL+" LIMIT 40",new String[]{""+rank,""+rank,""+before}));
+        }else{
+            int offset=Math.max(0,Math.min(1_000_000,p.optInt(1,0)));
+            o.put("records",rows(select+filter+RecordOrder.SQL+" LIMIT 40 OFFSET ?",new String[]{""+offset}));
+        }
         try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM sessions"+filter,null)){c.moveToFirst();o.put("total",c.getInt(0));}
-        try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM sessions",null)){c.moveToFirst();o.put("totalRecords",c.getInt(0));}return o.put("listVersion",settingsVersion);
+        try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM sessions",null)){c.moveToFirst();o.put("totalRecords",c.getInt(0));}return o;
     }
     JSONObject history(String action,JSONArray p)throws Exception{JSONObject o=new JSONObject().put("ok",true);
         if(action.equals("battery_history_trend")){

@@ -79,6 +79,11 @@ public final class StartupDiagnosticsTest {
         status=healthy();status.getJSONObject("reading").put("temp",JSONObject.NULL).put("voltage",JSONObject.NULL);
         check(find(StartupFeedback.notices(null,status),"部分电池数据缺失").text.contains("电压、温度"),"Do not invent zeroes for missing data");
         status=healthy().put("recordingEnabled",false);check(StartupFeedback.notices(null,status).isEmpty(),"Manual stop is not a startup downgrade");
+        status=healthy().put("recordingEnabled",true).put("powerStateAvailable",false)
+            .put("readingRecoveryProblem","未读到剩余容量");
+        status.getJSONObject("reading").put("rm",JSONObject.NULL).put("onlineKnown",true);
+        notices=StartupFeedback.notices(null,status);
+        check(notices.size()==1&&find(notices,"电池读数正在重试").text.contains("进行中的记录"),"Transient RM loss must not suggest enabling recording or fixing power connection");
         String report="概要：数据库不可用\n错误代码：旧编号\n--- 诊断输出 ---\nCLASSPATH=private\nat stack.trace\n";
         String text=StartupFeedback.savedSummary(report);check(!text.contains("CLASSPATH")&&!text.contains("stack.trace"),"Legacy report leaked diagnostics");
         String full=StartupFeedback.compactReport(report);check(full.contains("stack.trace")&&!full.contains("旧编号")&&!full.contains("\n\n"),"Full legacy report must remain visible without numbers or blank lines");

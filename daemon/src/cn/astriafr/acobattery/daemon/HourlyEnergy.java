@@ -49,8 +49,8 @@ final class HourlyEnergy {
         private boolean resumed;
         RmMinutes(HourlyEnergy hours,long start){this.hours=hours;this.start=start;}
         void sample(long x,double rm,double voltage,int quality){
-            last=x;lastRm=rm;lastVoltage=voltage;resumed=(quality&8)!=0;
-            if(previous<0){previous=x;this.rm=rm;this.voltage=voltage;next=(x/60000+1)*60000;return;}
+            last=x;lastRm=rm;lastVoltage=(quality&Core.UNCLASSIFIED_CELLS)!=0?Double.NaN:voltage;resumed=(quality&8)!=0;
+            if(previous<0){previous=x;this.rm=rm;this.voltage=lastVoltage;next=(x/60000+1)*60000;return;}
             if(x>=next||resumed)settle();
         }
         private void settle(){

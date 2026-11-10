@@ -65,7 +65,7 @@ export class SettingsPanel{
   updateFast(enabled){
     if(typeof enabled==='boolean'&&!this.fastBusy)this.fastValue=enabled;
     this.fastButton.textContent=this.fastValue?'关闭':'开启';
-    this.fastButton.disabled=!this.ready||this.fastBusy||this.recordingValue===false;
+    this.fastButton.disabled=!this.ready||this.fastBusy;
     this.panel.querySelector('.fast-control').classList.toggle('mode-active',this.fastValue);
   }
   updatePowerDisplay(enabled,error=''){
@@ -134,6 +134,7 @@ export class SettingsPanel{
       if(!await this.askRecording(enabled))return;
       const data=await this.api('set_recording',enabled?1:0);
       this.recordingProblem=data.recordingProblem??'';
+      this.updateFast(data.fastEnabled);
       success=true;this.onSaved(data.settings);
     }catch(e){this.setStatus(e.message,true);}
     finally{this.recordingBusy=false;this.updateRecording(success?enabled:previous);}
@@ -235,7 +236,7 @@ export class SettingsPanel{
       const write=(async()=>{
         try{
           const data=await this.api('set_settings',...args,prune?1:0);
-          this.lastSaved=JSON.stringify(args);this.onSaved(data.settings);this.fill(data.settings);this.setStatus('');return true;
+          this.lastSaved=JSON.stringify(args);this.onSaved(data.settings,data);this.fill(data.settings);this.setStatus('');return true;
         }catch(error){failure=error;return false;}
       })();
       this.running=write;let saved;

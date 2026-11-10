@@ -22,7 +22,7 @@ public final class StartupFeedback {
         String reason=FriendlyError.fromOutput(raw,"");
         String action="重试；仍然失败时，复制错误报告以便排查。";
         if(raw!=null){
-            if(raw.contains("需要 Android 15"))return new Failure("当前 Android 版本不受支持。","请使用 Android 15 或更新系统。");
+            if(raw.contains("需要 Android 13"))return new Failure("当前 Android 版本不受支持。","请使用 Android 13 或更新系统。");
             if(raw.contains("不支持 ARM64"))return new Failure("当前设备架构不受支持。","请在 ARM64 设备上使用本应用。");
             if(raw.contains("未获得 root")||raw.contains("无法启动 root 授权")||raw.contains("等待 root 授权")||raw.contains("root 授权被拒绝"))return new Failure(raw.contains("超时")?"等待 root 授权超时。":"未能取得 root 权限。","在 root 管理器中允许 ACol 电池访问，然后重试。");
             if(raw.contains("签名")&&raw.contains("不一致"))return new Failure("已有数据目录与当前应用的签名不一致。","安装相同签名的安装包；重建目录前请先备份记录。");
@@ -105,7 +105,7 @@ public final class StartupFeedback {
     }
     static void appendDiagnostics(StringBuilder out,String stage,JSONObject data){
         if(data==null)return;out.append("【").append(stage).append("】\n");
-        for(String key:new String[]{"androidSdk","nativeCapabilities","capabilities","cutoffAvailable","cellCount","recordingProblem","screenListener","screenFallback","screenStateKnown","screenStateSource","screenError","usageError","error","powerInputDiagnostics","diagnosticsError"})
+        for(String key:new String[]{"androidSdk","nativeCapabilities","capabilities","cutoffAvailable","cellCount","recordingProblem","readingRecoveryProblem","screenListener","screenFallback","screenStateKnown","screenStateSource","screenError","usageError","error","powerInputDiagnostics","diagnosticsError"})
             if(data.has(key))out.append(key).append("：").append(data.opt(key)).append('\n');
         JSONObject reading=data.optJSONObject("reading");
         if(reading!=null)for(String key:new String[]{"onlineKnown","online","onlineSource","rmSource","rm","pct","voltageSource","currentSource","fv","driverFull","enabled","source","error"})
@@ -119,8 +119,13 @@ public final class StartupFeedback {
     public static List<Notice> notices(JSONObject probe,JSONObject status){
         JSONObject data=merge(probe,status),reading=data.optJSONObject("reading");List<Notice> out=new ArrayList<>();
         String problem=data.optString("recordingProblem","");
-        if(problem.isEmpty()&&reading!=null)problem=RecordingGate.problem(reading.optDouble("rm",Double.NaN),reading.optDouble("pct",Double.NaN));
-        if(!problem.isEmpty())out.add(new Notice("记录已暂停",problem+"。请在设置中开启记录总开关，届时会重新检查。"));
+        String missingReading=reading==null?"":RecordingGate.problem(reading.optDouble("rm",Double.NaN),reading.optDouble("pct",Double.NaN));
+        String retry=data.optString("readingRecoveryProblem","");
+        boolean recording=data.optBoolean("recordingEnabled"),game=data.optBoolean("fastEnabled");
+        if(!recording&&!problem.isEmpty())out.add(new Notice("记录已暂停",problem+"。请在设置中开启记录总开关，届时会重新检查。"));
+        else if(!data.has("recordingEnabled")&&!missingReading.isEmpty())out.add(new Notice("记录已暂停",missingReading+"。请在设置中开启记录总开关，届时会重新检查。"));
+        if(retry.isEmpty()&&(recording||game))retry=missingReading;
+        if(!retry.isEmpty())out.add(new Notice("电池读数正在重试",retry+"。后台会自动重试，进行中的记录将保留。"));
         int caps=data.has("capabilities")?data.optInt("capabilities"):data.optInt("nativeCapabilities",-1);
         if(caps>=0){
             if((caps&1)==0)out.add(new Notice("休眠采样受限","已改用普通定时等待，不能保证深度休眠期间准时采样。"));
@@ -131,7 +136,8 @@ public final class StartupFeedback {
             out.add(new Notice("屏幕监听受限",data.has("screenStateKnown")&&!data.optBoolean("screenStateKnown")?"暂时无法确认亮息屏状态，将保留已知状态并继续尝试读取。":"已改用广播和状态检测，亮息屏切换的识别可能延迟。"));
         else if(!data.optString("screenError").isEmpty())out.add(new Notice("屏幕通知受限","亮息屏切换的识别可能延迟。"));
         if(data.has("cutoffAvailable")&&!data.optBoolean("cutoffAvailable"))out.add(new Notice("截止电压调整不可用","未找到所需接口，已跳过此功能，其他功能可继续使用。"));
-        if(data.has("powerStateAvailable")&&!data.optBoolean("powerStateAvailable")||reading!=null&&reading.has("onlineKnown")&&!reading.optBoolean("onlineKnown"))
+        boolean connectionUnknown=reading!=null&&reading.has("onlineKnown")?!reading.optBoolean("onlineKnown"):data.has("powerStateAvailable")&&!data.optBoolean("powerStateAvailable");
+        if(connectionUnknown)
             out.add(new Notice("充电连接状态待确认","暂未读到可靠的供电连接状态，记录采样已暂停，后台会自动重试。已有记录保留，不会猜测为放电。"));
         else if(data.optBoolean("powerInputFallback")||(reading!=null&&Arrays.asList("android","battery_service").contains(reading.optString("onlineSource"))))
             out.add(new Notice("充电连接状态使用系统数据",reading!=null&&"battery_service".equals(reading.optString("onlineSource"))?"底层供电节点和电池广播不可用，已改用 BatteryService 系统供电状态。":"底层供电节点无法可靠读取，已改用 Android 电池广播判断充电器连接状态。"));

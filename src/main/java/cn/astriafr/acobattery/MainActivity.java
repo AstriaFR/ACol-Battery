@@ -25,7 +25,7 @@ import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     final ExecutorService worker=Executors.newSingleThreadExecutor();
-    StartupController startup;WebViewHost browser;ChartExport chartExport;
+    StartupController startup;WebViewHost browser;ChartExport chartExport;RecordListCache recordListCache;
     FrameLayout contentFrame;ErrorLogPages errorLogs;DataTransferUi dataTransfer;
     AlertDialog clearDataDialog;boolean clearingData,transferringData;
     volatile boolean destroyed;
@@ -48,6 +48,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state){
         super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.WHITE);getWindow().setNavigationBarColor(Color.WHITE);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        recordListCache=new RecordListCache(getCacheDir());
         startup=new StartupController(this);browser=new WebViewHost(this);chartExport=new ChartExport(this);browser.tileSettingsPending=isTileSettingsIntent(getIntent());
         dataTransfer=new DataTransferUi(this);if(dataTransfer.resume())return;
         if(getSharedPreferences("maintenance",MODE_PRIVATE).getBoolean("clearPending",false)){clearAllData();return;}
@@ -130,6 +131,7 @@ public final class MainActivity extends Activity {
         startup.showInitialization();startup.retry.setVisibility(View.GONE);if(startup.errorActions!=null)startup.errorActions.setVisibility(View.GONE);startup.phase("清除所有数据","正在停止独立后台并清除记录、设置和日志。");
         worker.execute(()->{
             try{
+                recordListCache.clear();
                 startup.openRoot();if(!startup.root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限，尚未清除数据。");
                 JSONObject result=new JSONObject(startup.root.command(startup.admin("clear-all-data"),10));if(!result.optBoolean("ok"))throw new IOException("后台数据清除未完成。");
                 startup.disconnect();

@@ -55,7 +55,7 @@ public abstract class BatteryTileService extends TileService {
         OperationTimeout.remaining(until);RootSession session=new RootSession();connection=session;
         Runnable timeout=session::close;ui.postDelayed(timeout,OperationTimeout.remaining(until));
         try{
-            String check="if [ -f /data/adb/aco_battery_app/initialized ] && [ ! -e /data/adb/aco_battery_app/update.pending ] && [ ! -e /data/adb/aco_battery_app/cleanup.request ] && [ \"$(cat /data/adb/aco_battery_app/runtime.version 2>/dev/null)\" = "+RootSession.quote(version)+" ]; then id -u; else echo SETUP; fi";
+            String check=RuntimeSetup.ownerCheck(this,false)+"; if "+RuntimeSetup.hasOwner()+" && [ -f /data/adb/aco_battery_app/initialized ] && [ ! -e /data/adb/aco_battery_app/update.pending ] && [ ! -e /data/adb/aco_battery_app/cleanup.request ] && [ \"$(cat /data/adb/aco_battery_app/runtime.version 2>/dev/null)\" = "+RootSession.quote(version)+" ]; then id -u; else echo SETUP; fi";
             String uid=session.command(check,Math.max(1,(OperationTimeout.remaining(until)+999)/1000));
             if(!uid.equals("0"))throw new IOException("请先打开应用完成初始化或更新");
             session.broker(message->{},until);return session;

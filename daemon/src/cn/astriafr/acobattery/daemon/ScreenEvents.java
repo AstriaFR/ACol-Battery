@@ -5,7 +5,7 @@ import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Handler;
 
-/** Keep API 36 references out of the class loaded on Android 15. */
+/** Keep API 36 references out of the class loaded on older Android versions. */
 final class ScreenEvents {
     static String register(DisplayManager manager,DisplayManager.DisplayListener listener,Handler handler){
         if(Build.VERSION.SDK_INT>=36){
