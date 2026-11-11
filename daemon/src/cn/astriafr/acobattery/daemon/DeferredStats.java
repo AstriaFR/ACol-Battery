@@ -581,7 +581,7 @@ final class DeferredStats {
         JSONArray found=rows("SELECT start_wall,start_elapsed,end_elapsed,active,kind,fast_seconds FROM sessions WHERE id=?",new String[]{""+id});
         if(found.length()==0)throw new IOException("记录不存在或已删除");JSONObject record=found.getJSONObject(0);
         if(!record.getString("kind").equals("discharge"))throw new IOException("分时耗电仅用于放电记录");
-        boolean game=record.optInt("fast_seconds")>0;
+        boolean game=record.optDouble("fast_seconds")>0;
         TimeZone zone=TimeZone.getDefault();long day=ScreenUsage.midnight(requested,zone),next=ScreenUsage.nextDay(day,zone);
         long start=record.getLong("start_wall"),end=start+Math.max(0,record.getLong("end_elapsed")-record.getLong("start_elapsed"));
         if(day>end||next<=start)throw new IOException("日期不在记录范围内");

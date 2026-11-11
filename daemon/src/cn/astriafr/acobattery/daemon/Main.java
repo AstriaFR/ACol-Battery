@@ -37,6 +37,8 @@ import static cn.astriafr.acobattery.daemon.DeferredStats.queryUsage;
 
 public final class Main {
     static final String SOCKET="cn.astriafr.aco_battery_app.v1";
+    private static final int SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
+    private static final long HOME_REFRESH_MS=1500;
     JSONObject settings;
     volatile boolean recordingEnabled,stopping;
     String recordingProblem="";
@@ -111,6 +113,7 @@ public final class Main {
     FileLock lock;
     final PerformanceCollector performance;
     final PowerIndicator powerIndicator;
+    private GaugeUpdate gaugeUpdate;
     final DeferredStats deferred;
     long performanceSession=-1,performanceMetaSession=-1;
     String performanceMetaText="";
@@ -157,18 +160,20 @@ public final class Main {
         if(args.length!=2)throw new IllegalArgumentException("module and data directory required");
         System.err.println("BatteryCurves: opening database");
         Main app=new Main(ctx,new File(args[0]),new File(args[1]));
+        app.gaugeUpdate=new GaugeUpdate(app.data,app.boot);
         System.load(args[0]+"/bin/libcurvewait.so");app.capabilities=initWait();
         app.framework=new FrameworkWatch(app::wakeCollector);app.framework.start();
         app.usageError=app.framework.usageError();
         if(!app.usageError.isEmpty()){app.usageErrorAt=System.currentTimeMillis();FallbackDiagnostics.record("应用使用统计服务",app.usageError);}
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 2.4 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 2.5 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
             catch(Throwable e){
                 if(app.framework!=null)app.framework.close();
+                synchronized(app.mutex){app.gaugeUpdate.restore();}
                 app.powerIndicator.close();
                 try{StartupFailure.record(Owner.BASE,attempt,e);}catch(Throwable reportError){e.addSuppressed(reportError);}
                 StartupFailure.print(e,System.err);System.exit(1);
@@ -230,7 +235,7 @@ public final class Main {
                 performanceMetaSession=id;
                 performanceMetaText=metaText;
             }
-        });
+        },powerIndicator::updateFps);
     }
 
     /** Independent record state; all swaps run under mutex, including API and collector work. */
@@ -263,7 +268,7 @@ public final class Main {
         if(gameContext)throw new IllegalStateException("Nested game recorder");
         saveTrack(normalContext);
         gameTrack.sampling.interactive=sampling.interactive;gameTrack.sampling.screenOnMs=sampling.screenOnMs;
-        gameTrack.sampling.screenOffMs=sampling.screenOffMs;gameTrack.sampling.fastMs=Core.gamePowerInterval(stableOnline,settings.optLong("fastSeconds",10),settings.optLong("chargeSeconds",2));
+        gameTrack.sampling.screenOffMs=sampling.screenOffMs;gameTrack.sampling.fastMs=powerIntervalMs();
         useTrack(gameTrack);gameContext=true;
         try{work.run();}finally{saveTrack(gameTrack);useTrack(normalContext);gameContext=false;}
     }
@@ -295,50 +300,84 @@ public final class Main {
         powerReady=true;stableOnline=r.online;powerError="";readingRecoveryProblem="";powerRetryAt=0;
         recoverTracks(r);
     }
-    boolean sharesChargingSample(){return recordingEnabled&&state==1&&session>=0;}
     void collectGame(Core.Reading reading,boolean screenBoundary,long now)throws Exception {
         if(!fastEnabled||candidateAt>=0)return;
-        boolean charging=stableOnline;
         if(gameTrack.session<0){
             Core.Reading first=reading!=null?reading:hardwareReading(header);requirePower(first);
             if(first.online!=stableOnline){candidate=first;candidateAt=now;return;}
             withGame(()->{begin(first);sampling.sampled(0,first.elapsed);});return;
         }
-        // While an ordinary charging record is active, its reads are the sole
-        // power source. Performance-only deadlines never trigger battery reads.
-        if(charging&&sharesChargingSample()&&reading==null){withGame(()->samplePerformance(now));return;}
         boolean boundary=reading!=null&&gameTrack.previous!=null&&reading.online!=gameTrack.previous.online;
-        if(!screenBoundary&&!boundary&&now<gameTrack.sampling.next&&(charging||now<gameTrack.fastStatsNext)){
+        long sampleTime=reading==null?now:Math.max(now,reading.elapsed);
+        boolean powerDue=screenBoundary||boundary||sampleTime>=gameTrack.sampling.next;
+        boolean statsDue=!stableOnline&&sampleTime>=gameTrack.fastStatsNext;
+        if(!powerDue&&!statsDue){
             withGame(()->samplePerformance(now));return;
         }
         Core.Reading r=reading!=null?reading:hardwareReading(header);latest=r;requirePower(r);
         if(r.online!=stableOnline){candidate=r;candidateAt=now;return;}
         withGame(()->{
-            if(screenBoundary||boundary||charging||now>=sampling.next){
+            if(powerDue){
                 append(r);
                 if(screenBoundary){sampleFastStats(r,true);if(timelineReady)timeline.apply(new Core.Event(r.wall,sampling.interactive?15:16,null));}
                 sampling.sampled(0,r.elapsed);
-            }else if(now>=fastStatsNext)sampleFastStats(r,false);
+            }else sampleFastStats(r,false);
             samplePerformance(now);
         });
     }
 
+    void collectStable(Core.Reading reading,boolean screenBoundary,long now)throws Exception {
+        boolean gameFirst=fastEnabled&&stableOnline&&recordingEnabled&&state==1&&session>=0;
+        if(gameFirst){
+            collectGame(reading,screenBoundary,now);
+            if(candidateAt>=0)return;
+        }
+        if(recordingEnabled&&(screenBoundary||now>=sampling.next)){
+            Core.Reading game=gameTrack.previous;
+            if(reading==null&&gameFirst&&Core.canReuseGameCharge(game,previous,Math.max(now,SystemClock.elapsedRealtime())))reading=game;
+            Core.Reading r=reading!=null?reading:hardwareReading(header);latest=r;reading=r;
+            requirePower(r);
+            if(r.online!=stableOnline){candidate=r;candidateAt=now;return;}
+            if(state==2){
+                if(!r.full&&Core.finite(r.current)&&r.current<-50){state=1;begin(r);}
+            }else{
+                append(r);
+                if(screenBoundary&&state==0&&timelineReady){
+                    // The display callback is authoritative even if UsageStats publishes the event later.
+                    timeline.apply(new Core.Event(r.wall,sampling.interactive?15:16,null));
+                }
+                if(state==1&&fullGate.update(r,sampling.expected)){finish("full_tail_confirmed");state=2;}
+            }
+            sampling.sampled(state,now);
+        }
+        if(!gameFirst)collectGame(recordingEnabled&&!stableOnline?null:reading,screenBoundary,now);
+    }
+
     static JSONObject decodeSettings(JSONArray p)throws Exception {
-        if(p.length()!=8&&p.length()!=12&&p.length()!=13&&p.length()!=14&&p.length()!=15)throw new IOException("设置项数量无效");
-        long[] v={5,30,560,1,300,450,50,60,2,30,10,1,2,2,10001};for(int i=0;i<p.length();i++)if(i!=13)v[i]=p.getLong(i);
+        if(p.length()!=8&&(p.length()<12||p.length()>16))throw new IOException("设置项数量无效");
+        long[] v={5,30,560,1,300,450,50,60,2,30,2,1,2,2,10001};for(int i=0;i<Math.min(v.length,p.length());i++)if(i!=10&&i!=13)v[i]=p.getLong(i);
+        double powerSeconds=p.length()>=12?p.getDouble(10):2;
         // The old game interval controlled both charts. Keep it for both on upgrade.
-        double performanceSeconds=p.length()>=14?p.getDouble(13):p.length()>=12?Math.min(20,v[10]):2;
+        double performanceSeconds=p.length()>=14?p.getDouble(13):powerSeconds;
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
         if(v[2]<1||v[2]>2000||v[3]<0||v[3]>1)throw new IOException("容量范围 0.01–20.00 Ah");
         if(v[4]<220||v[5]>480||v[4]>=v[5])throw new IOException("电压范围 2.20–4.80 V，下限须小于上限");
         if(v[6]<0||v[7]>80||v[6]>=v[7])throw new IOException("温度范围 −20–60℃，下限须小于上限");
-        if(v[8]<1||v[8]>10||v[9]<1||v[9]>120||p.length()>9&&!p.get(9).toString().matches("[0-9]+")||v[10]<1||v[10]>60||v[11]<0||v[11]>1)throw new IOException("亮屏间隔 1–10 分钟，息屏间隔 1–120 分钟，游戏采样间隔 1–60 秒，仅限整数");
+        if(v[8]<1||v[8]>10||v[9]<1||v[9]>120||p.length()>9&&!p.get(9).toString().matches("[0-9]+")||v[11]<0||v[11]>1)throw new IOException("亮屏间隔 1–10 分钟，息屏间隔 1–120 分钟，仅限整数");
         if(v[12]<1||v[12]>10||p.length()>=13&&!p.get(12).toString().matches("[0-9]+"))throw new IOException("充电间隔 1–10 秒，仅限整数");
-        if(!Core.finite(performanceSeconds)||performanceSeconds<0.5||performanceSeconds>20||Math.abs(performanceSeconds*10-Math.round(performanceSeconds*10))>1e-7)throw new IOException("性能采样间隔 0.5–20.0 秒，步进 0.1 秒");
+        validateSamplingInterval(powerSeconds,"功耗");
+        validateSamplingInterval(performanceSeconds,"性能");
         if(v[14]<0||v[14]>10001)throw new IOException("默认能量量程范围 0–100 Wh");
+        String gaugeOverride=p.length()==16?p.get(15).toString():"1";
+        if(!gaugeOverride.equals("0")&&!gaugeOverride.equals("1"))throw new IOException("电流计间隔覆盖设置无效");
         return new JSONObject().put("energyWh",v[14]==10001?JSONObject.NULL:v[14]/100.0).put("deletePct",v[0]).put("hidePct",v[1]).put("capacityAh",v[2]/100.0)
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
-            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",v[10]).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",performanceSeconds);
+            .put("tempMin",v[6]-20).put("tempMax",v[7]-20).put("screenOnMinutes",v[8]).put("screenOffMinutes",v[9]).put("fastSeconds",powerSeconds).put("fastAutoOff",v[11]==1).put("chargeSeconds",v[12]).put("performanceSeconds",performanceSeconds)
+            .put("gaugeIntervalOverride",gaugeOverride.equals("1"));
+    }
+    private static void validateSamplingInterval(double seconds,String label)throws IOException {
+        if(!Core.finite(seconds)||seconds<0.5||seconds>20||Math.abs(seconds*10-Math.round(seconds*10))>1e-7)
+            throw new IOException(label+"采样间隔 0.5–20.0 秒，步进 0.1 秒");
     }
     JSONObject defaultSettings()throws Exception {
         JSONObject defaults=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
@@ -355,7 +394,10 @@ public final class Main {
             if(c.moveToFirst())try {
                 JSONArray stored=new JSONArray(c.getString(0));
                 // Clamp only previously valid whole-second intervals above the new cap.
-                if(stored.length()>=14){double old=stored.getDouble(13);if(old>20&&old<=60&&old==Math.rint(old))stored.put(13,20);}
+                for(int index:new int[]{10,13})if(stored.length()>index){
+                    double old=stored.getDouble(index);
+                    if(old>20&&old<=60&&old==Math.rint(old))stored.put(index,20);
+                }
                 settings=decodeSettings(stored);
             }
             catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
@@ -364,13 +406,20 @@ public final class Main {
     String runtimeValue(String key){
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key=?",new String[]{key})){return c.moveToFirst()?c.getString(0):"";}
     }
+    long powerIntervalMs(){return Math.round(settings.optDouble("fastSeconds",2)*1000);}
+    private boolean gaugeIntervalOverride(){return settings.optBoolean("gaugeIntervalOverride",true);}
+    private void updateGaugeInterval(){
+        if(gaugeUpdate==null)return;
+        if(gaugeIntervalOverride()&&(fastEnabled||powerIndicator.state.enabled))gaugeUpdate.apply(powerIntervalMs());
+        else gaugeUpdate.restore();
+    }
     void configureSampling(boolean reschedule){
         long oldInterval=interval();
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
         sampling.screenOffMs=settings.optLong("screenOffMinutes",30)*60000;
         sampling.chargeMs=settings.optLong("chargeSeconds",2)*1000;
         sampling.fastMs=0;
-        long gameInterval=Core.gamePowerInterval(stableOnline,settings.optLong("fastSeconds",10),settings.optLong("chargeSeconds",2));
+        long gameInterval=powerIntervalMs();
         if(reschedule&&gameTrack.sampling.fastMs!=gameInterval)gameTrack.sampling.next=Math.max(SystemClock.elapsedRealtime(),(gameTrack.previous==null?0:gameTrack.previous.elapsed)+gameInterval);
         gameTrack.sampling.fastMs=gameInterval;
         if(reschedule)gameTrack.sampling.expected=Math.max(gameTrack.sampling.expected,gameInterval);
@@ -383,12 +432,13 @@ public final class Main {
             sampling.expected=Math.max(sampling.expected,nextInterval);
         }
         if(reschedule&&fastEnabled&&gameTrack.session>=0){
-            db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{gameInterval/1000,settings.optDouble("performanceSeconds",2),gameTrack.session});
+            db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{gameInterval/1000.0,settings.optDouble("performanceSeconds",2),gameTrack.session});
         }
     }
     void rememberFast(boolean enabled){
         db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('fast_discharge',?)",new Object[]{enabled?"1":"0"});
         fastEnabled=enabled;fastScreenOffAt=enabled&&!sampling.interactive?SystemClock.elapsedRealtime():-1;configureSampling(false);
+        updateGaugeInterval();
     }
     long fastAutoDeadline(){
         return fastEnabled&&settings.optBoolean("fastAutoOff",true)&&!sampling.interactive&&fastScreenOffAt>=0?fastScreenOffAt+600000:Long.MAX_VALUE;
@@ -441,11 +491,12 @@ public final class Main {
     }
     JSONObject saveSettings(JSONArray p)throws Exception {
         int count=p.length()-1;
-        if((count!=12&&count!=13&&count!=14&&count!=15)||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
+        if(count<12||count>16||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
         JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
         if(count==12)values.put(settings.optLong("chargeSeconds",2));
         if(values.length()==13)values.put(settings.optDouble("performanceSeconds",2));
         if(values.length()==14)values.put(settings.isNull("energyWh")?10001:Math.round(settings.optDouble("energyWh",0)*100));
+        if(values.length()==15)values.put(gaugeIntervalOverride()?1:0);
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
         try {
@@ -453,7 +504,10 @@ public final class Main {
             if(p.getInt(count)==1)removed=db.delete("sessions",smallRecordWhere(next),null);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
+        long oldPowerInterval=powerIntervalMs();
+        boolean oldGaugeOverride=gaugeIntervalOverride();
         settings=next;settingsVersion++;store.rangeId=-1;store.rangeValues=null;
+        if(oldPowerInterval!=powerIntervalMs()||oldGaugeOverride!=gaugeIntervalOverride())updateGaugeInterval();
         if(removed>0)usageSnapshots.clear();
         configureSampling(true);powerIndicator.state.refresh();wakeCollector();
         return new JSONObject().put("ok",true).put("settings",settings).put("removed",removed);
@@ -477,10 +531,48 @@ public final class Main {
         }
         return r;
     }
-    Core.Reading powerDisplayReading(){
+    Core.Reading powerDisplayReading(long intervalMs){
+        long now=SystemClock.elapsedRealtime();
+        Core.Reading game=gameTrack.previous;
+        if(fastEnabled&&game!=null&&candidateAt<0&&powerRetryAt==0&&now-game.elapsed<intervalMs)return game;
         Core.Reading fresh=latest;if(uiReading!=null&&(fresh==null||uiReading.elapsed>fresh.elapsed))fresh=uiReading;
-        if(fresh!=null&&SystemClock.elapsedRealtime()-fresh.elapsed<=1000)return fresh;
-        resolveCellProfile();return readGauge(ctx,cellCount,false);
+        if(fresh!=null&&now-fresh.elapsed<Math.min(1000,intervalMs)&&Core.finite(fresh.temp))return fresh;
+        resolveCellProfile();
+        Core.Reading reading=readGauge(ctx,cellCount,true);
+        readPercentage(ctx,reading);
+        return reading;
+    }
+    private PerformanceCollector.MonitorSample sampleMonitorPerformance(long now){
+        powerIndicator.state.performanceSampled(now,performanceCadence.interval);
+        try{
+            PerformanceCollector.MonitorSample sample=performance.monitor(powerIndicator.performance());
+            powerIndicator.updatePerformance(sample);
+            return sample;
+        }catch(Throwable failure){
+            powerIndicator.updatePerformance(null);
+            FallbackDiagnostics.record("性能监视器 CPU/GPU 采样",failure);
+            return null;
+        }
+    }
+    void updatePerformanceMonitor(long now){
+        if(stopping||!sampling.interactive)return;
+        if(powerIndicator.state.performanceDue(now))performance.sampleMonitorFps(sampleMonitorPerformance(now));
+        if(powerIndicator.state.batteryDue(now)){
+            long intervalMs=powerIntervalMs();
+            powerIndicator.state.batterySampled(now,intervalMs);
+            try{powerIndicator.updateBattery(powerDisplayReading(intervalMs));}
+            catch(Throwable failure){
+                powerIndicator.updateBattery(null);
+                FallbackDiagnostics.record("性能监视器电池采样",failure);
+            }
+        }
+    }
+    private void shareGameBattery(Core.Reading reading){
+        if(stopping||!sampling.interactive||!powerIndicator.state.enabled)return;
+        long intervalMs=powerIntervalMs();
+        if(SystemClock.elapsedRealtime()-reading.elapsed>=intervalMs)return;
+        powerIndicator.state.batterySampled(reading.elapsed,intervalMs);
+        powerIndicator.updateBattery(reading);
     }
     void wakeCollector(){
         if((capabilities&16)!=0)interruptWait();
@@ -489,6 +581,7 @@ public final class Main {
         else screenError="采样事件通知不可用，屏幕切换可能延迟";
     }
     void screenChanged(long now,boolean first,boolean changed){
+        powerIndicator.screen(sampling.interactive);
         if((first&&screenState.known)||changed)fastScreenOffAt=fastEnabled&&!sampling.interactive?now:-1;
         boolean captureChanged=deferred.captureSchedule.screen(screenState.available&&sampling.interactive,now);
         if(changed||!first&&captureChanged)wakeCollector();
@@ -548,6 +641,7 @@ public final class Main {
     }
     void collect(String attempt) throws Exception {
         synchronized(mutex) {
+            updateGaugeInterval();
             Core.Reading r=hardwareReading(header);latest=r;
             String problem=RecordingGate.problem(r.rm,r.pct);
             if(!problem.isEmpty()&&!fastEnabled){
@@ -580,7 +674,7 @@ public final class Main {
                 if(collecting)due=Math.min(due,deferred.captureSchedule.deadline);
                 if(powerRetryAt==0&&fastEnabled&&candidateAt<0){
                     if(gameTrack.session<0)due=Math.min(due,0);
-                    else if(!sharesChargingSample()){due=Math.min(due,gameTrack.sampling.next);if(!stableOnline)due=Math.min(due,gameTrack.fastStatsNext);}
+                    else{due=Math.min(due,gameTrack.sampling.next);if(!stableOnline)due=Math.min(due,gameTrack.fastStatsNext);}
                 }
                 if(powerRetryAt==0&&fastEnabled&&gameTrack.session>=0&&candidateAt<0)due=Math.min(due,performanceSession==gameTrack.session?performanceCadence.next:0);
                 if(!moduleWatch)due=Math.min(due,SystemClock.elapsedRealtime()+60000);
@@ -611,7 +705,6 @@ public final class Main {
                     boolean plugged=input.online;
                     boolean screenSample=sampling.takeScreenSample();
                     Core.Reading screenReading=screenSample?hardwareReading(header):null;
-                    Core.Reading turnReading=screenReading;
                     if(screenReading!=null){latest=screenReading;if(!screenReading.onlineKnown){powerUnavailable(now);continue;}if(screenReading.online!=plugged){candidateAt=-1;candidate=null;powerRetryAt=now+1000;continue;}}
                     if(plugged!=stableOnline) {
                         if(candidateAt<0){candidate=screenReading!=null?screenReading:hardwareReading(header);if(!candidate.onlineKnown){powerUnavailable(now);continue;}if(candidate.online!=plugged){candidate=null;powerRetryAt=now+1000;continue;}candidateAt=now;}
@@ -619,42 +712,21 @@ public final class Main {
                             if(recordingEnabled){append(candidate);finish(plugged?"plugged":"unplugged");}
                             stableOnline=plugged;state=plugged?1:0;
                             if(recordingEnabled)begin(candidate);
-                            turnReading=candidate;
+                            Core.Reading boundary=candidate;
                             candidate=null;candidateAt=-1;sampling.sampled(state,now);
+                            collectGame(boundary,screenSample,now);
                         }
                     } else {
                         candidateAt=-1;candidate=null;
-                        if(recordingEnabled&&(screenSample||now>=sampling.next)) {
-                            Core.Reading r=screenReading!=null?screenReading:hardwareReading(header);latest=r;turnReading=r;
-                            if(!r.onlineKnown){powerUnavailable(now);continue;}
-                            if(r.online!=stableOnline){candidate=r;candidateAt=now;continue;}
-                            if(state==2) {
-                                if(!r.full&&Core.finite(r.current)&&r.current<-50){state=1;begin(r);}
-                            } else {
-                                append(r);
-                                if(screenSample&&state==0){
-                                    // The display callback is authoritative at this boundary even if
-                                    // UsageStats publishes its matching screen event a little later.
-                                    if(timelineReady)timeline.apply(new Core.Event(r.wall,sampling.interactive?15:16,null));
-                                }
-                                if(state==1 && fullGate.update(r,sampling.expected)) {finish("full_tail_confirmed");state=2;}
-                            }
-                            sampling.sampled(state,now);
-                        }
+                        collectStable(screenReading,screenSample,now);
                     }
-                    if(candidateAt<0)collectGame(turnReading,screenSample,now);
                 }
             } catch(PowerUnavailable unavailable){
                 synchronized(mutex){powerUnavailable(SystemClock.elapsedRealtime());}
             } finally {
                 try{synchronized(mutex){
-                    long displayNow=SystemClock.elapsedRealtime();
                     deferred.captureAsync(false,0);
-                    if(!stopping&&powerIndicator.state.due(displayNow,sampling.interactive)){
-                        long seconds=settings.optLong("fastSeconds",10);
-                        try{powerIndicator.update(powerDisplayReading(),displayNow,seconds);}
-                        catch(Throwable failure){powerIndicator.unavailable(failure,displayNow,seconds);}
-                    }
+                    updatePerformanceMonitor(SystemClock.elapsedRealtime());
                 }}finally{releaseWait();}
             }
         }
@@ -662,6 +734,7 @@ public final class Main {
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
         framework.close();performance.close();powerIndicator.close();usageWorker.shutdownNow();
         synchronized(mutex) {
+            if(gaugeUpdate!=null)gaugeUpdate.restore();
             // Updating code or reconnecting framework proxies suspends ownership,
             // not the charge/discharge session. Completed samples are already durable.
             if(!Core.resumableStop(stopReason)){stopGame(null,stopReason);finish(stopReason);}
@@ -740,8 +813,9 @@ public final class Main {
             try(Cursor c=db.rawQuery("SELECT id,boot,kind,start_elapsed,end_elapsed,start_wall,fast_seconds,clock_adjusted FROM sessions WHERE active=1 ORDER BY id DESC",null)) {
                 while(c.moveToNext()) {
                     long id=c.getLong(0);
-                    if((c.getInt(6)>0)!=gameContext)continue;
-                    if(session<0&&Core.resumeSession(c.getString(1),boot,c.getString(2),c.getInt(6)>0,
+                    boolean game=c.getDouble(6)>0;
+                    if(game!=gameContext)continue;
+                    if(session<0&&Core.resumeSession(c.getString(1),boot,c.getString(2),game,
                             r.online,gameContext,c.getLong(3),c.getLong(4),r.elapsed)){
                         Core.Reading saved=lastSample(id,c.getLong(3),c.getLong(5));
                         if(saved!=null&&saved.elapsed>=c.getLong(3)&&saved.elapsed<=c.getLong(4)&&saved.elapsed<=r.elapsed){
@@ -825,7 +899,7 @@ public final class Main {
         if(!gameContext)db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;startWall=r.wall;clockAdjusted=false;
         try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000:0,state==0&&gameContext?settings.optDouble("performanceSeconds",2):0,state==0&&gameContext?"rm_minute":"rm"};
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000.0:0,state==0&&gameContext?settings.optDouble("performanceSeconds",2):0,state==0&&gameContext?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -917,14 +991,15 @@ public final class Main {
         if(newClock)clockAdjusted=true;
         store.updateRanges(session,startElapsed,state,gameContext,previous,r,recordedPower);
         previous=r;recoveryBoundary=false;powerGap=false;sampling.expected=interval();
-        if(fast)samplePerformance(r.elapsed);
+        if(fast){shareGameBattery(r);samplePerformance(r.elapsed);}
     }
     void samplePerformance(long now){
         if(!gameContext||!fastEnabled||session<0||stopping)return;
         if(performanceSession!=session){performanceSession=session;performanceCadence.reset();}
         if(!performanceCadence.due(now))return;
         performanceCadence.sampled(now);
-        performance.sample(session,startElapsed,sampling.interactive,performanceCadence.interval);
+        PerformanceCollector.MonitorSample shared=sampling.interactive&&powerIndicator.state.enabled?sampleMonitorPerformance(now):null;
+        performance.sample(session,startElapsed,sampling.interactive,performanceCadence.interval,shared);
     }
     void sampleFastStats(Core.Reading r,boolean flush)throws Exception{
         sampleFastStats(r,flush,false);
@@ -1106,8 +1181,11 @@ public final class Main {
         } catch(Exception e){e.printStackTrace();System.exit(1);}
     }
     void watchFrontend(LocalSocket socket,JSONArray args)throws Exception {
-        if(args!=null&&args.optInt(2,0)==1){watchBatteryInfo(socket,args.optInt(3,1)==1);return;}
-        boolean summaryOnly=args!=null&&args.optInt(2,0)==3;
+        int mode=args==null?0:args.optInt(2,0);
+        if(mode==1){watchBatteryInfo(socket,args.optInt(3,1)==1);return;}
+        if(mode==SETTINGS_WATCH_MODE){watchSettings(socket);return;}
+        boolean summaryOnly=mode==3||mode==HOME_WATCH_MODE||mode==SUMMARY_WATCH_MODE;
+        long refreshMs=mode==HOME_WATCH_MODE?HOME_REFRESH_MS:1000;
         boolean includeList=args==null||args.optInt(5,1)==1;
         long id=args==null?0:Math.max(0,args.optLong(0,0)),after=args==null?0:Math.max(0,args.optLong(1,0));
         long began=SystemClock.elapsedRealtime(),lastList=0,lastSettings=-1,normalId=-1,normalAfter=0;
@@ -1120,7 +1198,7 @@ public final class Main {
                 JSONObject previous=null;boolean changed=id!=preferred;
                 if(!summaryOnly&&changed&&id>0)previous=live(new JSONArray().put(id).put(after).put(0).put(0).put(preferred+1)).put("recordId",id);
                 if(changed){id=preferred;long start=id==gameTrack.session?gameTrack.startElapsed:startElapsed;after=id>0?Math.max(0,latest.elapsed-start-1):0;}
-                packet=live(new JSONArray().put(summaryOnly?0:Math.max(0,id)).put(after).put(0).put(0).put(preferred+1));
+                packet=live(new JSONArray().put(summaryOnly?0:Math.max(0,id)).put(after).put(0).put(0).put(preferred+1),mode!=SUMMARY_WATCH_MODE);
                 if(previous!=null)packet.put("previous",previous);
                 if(normalId>0&&normalId!=session){
                     packet.put("parallelPrevious",live(new JSONArray().put(normalId).put(normalAfter).put(0).put(0).put(preferred+1)));
@@ -1148,7 +1226,16 @@ public final class Main {
             omitRepeatedUsage(packet,sentUsage);
             for(String key:new String[]{"previous","parallel","parallelPrevious"})omitRepeatedUsage(packet.optJSONObject(key),sentUsage);
             socket.getOutputStream().write((packet.toString()+"\n").getBytes(StandardCharsets.UTF_8));
-            if(!more)Thread.sleep(Math.max(100,1000-(SystemClock.elapsedRealtime()-started)));
+            if(!more)Thread.sleep(Math.max(100,refreshMs-(SystemClock.elapsedRealtime()-started)));
+        }
+    }
+    private void watchSettings(LocalSocket socket)throws Exception {
+        long began=SystemClock.elapsedRealtime();
+        while(SystemClock.elapsedRealtime()-began<300000){
+            JSONObject packet;
+            synchronized(mutex){packet=new JSONObject().put("ok",true).put("status",status(false));}
+            socket.getOutputStream().write((packet.toString()+"\n").getBytes(StandardCharsets.UTF_8));
+            Thread.sleep(2000);
         }
     }
     void watchBatteryInfo(LocalSocket socket,boolean snapshot)throws Exception {
@@ -1191,12 +1278,11 @@ public final class Main {
         JSONObject o=new JSONObject().put("ok",true);
         if(action.equals("set_power_display")){
             if(stopping)throw new IOException("后台正在结束，请稍后重试。");
-            if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("实时功耗显示参数无效");
-            boolean enabled=p.getInt(0)==1,old=powerIndicator.state.enabled;
-            powerIndicator.enabled(enabled,enabled?powerDisplayReading():null);
-            try{db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('power_indicator',?)",new Object[]{enabled?"1":"0"});}
-            catch(RuntimeException failure){try{powerIndicator.enabled(old,old?powerDisplayReading():null);}catch(Exception rollback){failure.addSuppressed(rollback);}throw failure;}
-            powerIndicator.state.sampled(SystemClock.elapsedRealtime(),settings.optLong("fastSeconds",10));
+            if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("性能监视器参数无效");
+            boolean enabled=p.getInt(0)==1;
+            db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('power_indicator',?)",new Object[]{enabled?"1":"0"});
+            powerIndicator.enabled(enabled);
+            updateGaugeInterval();
             settingsVersion++;wakeCollector();
             return o.put("powerDisplayEnabled",enabled).put("powerDisplayError",powerIndicator.error()).put("settings",settings);
         }
@@ -1280,7 +1366,7 @@ public final class Main {
         to=Math.min(to,records.getJSONObject(0).getLong("end_elapsed")-records.getJSONObject(0).getLong("start_elapsed"));
         int budget=Math.max(240,Math.min(6000,p.optInt(3,1200)));
         boolean charge=records.getJSONObject(0).getString("kind").equals("charge");
-        boolean raw=charge||records.getJSONObject(0).optInt("fast_seconds",0)>0;
+        boolean raw=charge||records.getJSONObject(0).optDouble("fast_seconds",0)>0;
         if(!charge){
             attachUsage(o,id);
             if(!o.optBoolean("usagePending")&&!usageRequested.containsKey(id)&&deferred.hasLegacyIntervals(id))o.put("usagePending",true);
@@ -1294,15 +1380,16 @@ public final class Main {
         o.put("columns",new JSONArray(new String[]{"x","rm","pct","current","voltage","power","quality","interval_ms","cell1","cell2","temp","energy","online","wall","ram","ramTotal"}));
         return o;
     }
-    JSONObject status()throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.4").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+    JSONObject status()throws Exception {return status(true);}
+    private JSONObject status(boolean includeReading)throws Exception {
+        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.5").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
         o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",preferredSession()).put("normalSession",session).put("gameSession",gameTrack.session).put("capabilities",capabilities).put("cellCount",cellCount).put("listVersion",settingsVersion);
         o.put("tailProgress",fullGate.progress(SystemClock.elapsedRealtime()));
         o.put("interactive",screenState.known?sampling.interactive:JSONObject.NULL).put("sampleIntervalMs",interval());
-        o.put("gamePowerIntervalMs",Core.gamePowerInterval(stableOnline,settings.optLong("fastSeconds",10),settings.optLong("chargeSeconds",2)));
+        o.put("gamePowerIntervalMs",powerIntervalMs());
         boolean frameworkHealthy=framework.healthy();
         o.put("frameworkHealthy",frameworkHealthy).put("screenListener",screenListenerReady&&frameworkHealthy).put("screenError",screenError);
         o.put("screenFallback",!screenListenerReady).put("screenStateKnown",screenState.known).put("screenStateSource",screenState.source);
@@ -1310,6 +1397,7 @@ public final class Main {
         o.put("powerInputDiagnostics",powerInputDiagnostics);
         o.put("usageError",usageError).put("error",powerError.isEmpty()?runtimeError:powerError).put("readingRecoveryProblem",readingRecoveryProblem)
             .put("powerStateAvailable",powerError.isEmpty()&&(powerReady||!readingRecoveryProblem.isEmpty())).put("profile","OPLUS BCC19 / "+(cellCount>0?cellCount+"S":"detecting"));
+        if(!includeReading)return o;
         Core.Reading shown=latest;
         if(sampling.interactive) {
             if(uiReading==null||(latest!=null&&latest.elapsed>uiReading.elapsed))uiReading=latest;
@@ -1318,8 +1406,9 @@ public final class Main {
         }
         o.put("cellCount",cellCount);if(shown!=null)o.put("reading",readingJson(shown));return o;
     }
-    JSONObject live(JSONArray p)throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("status",status()).put("statsEpoch",statsEpoch).put("statsVersion",statsVersion);
+    JSONObject live(JSONArray p)throws Exception {return live(p,true);}
+    private JSONObject live(JSONArray p,boolean includeReading)throws Exception {
+        JSONObject o=new JSONObject().put("ok",true).put("status",status(includeReading)).put("statsEpoch",statsEpoch).put("statsVersion",statsVersion);
         boolean list=p.optInt(5,1)==1&&(p.optInt(2,0)==1||p.optLong(4,0)-1!=preferredSession());
         if(list) {
             JSONObject q=new JSONObject().put("action","list").put("args",new JSONArray().put(p.optInt(3,0)).put(0));
@@ -1337,7 +1426,7 @@ public final class Main {
         store.rawPoints(o,id,0,end,after);
         boolean changed=o.getJSONArray("points").length()>0;
         if(store.rangeId==id&&store.rangeEnd==end&&store.rangeValues!=null)o.put("ranges",store.rangeValues).put("rawCount",store.rangeCount);
-        else if(changed)store.signalRanges(o,id,0,end,record.getString("kind").equals("charge")||record.optInt("fast_seconds",0)>0);
+        else if(changed)store.signalRanges(o,id,0,end,record.getString("kind").equals("charge")||record.optDouble("fast_seconds",0)>0);
         if(record.getString("kind").equals("discharge"))attachUsage(o,id);
         return o;
     }

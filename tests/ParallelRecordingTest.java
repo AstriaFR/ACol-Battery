@@ -35,16 +35,15 @@ public final class ParallelRecordingTest {
         catch(Exception expected){check("interrupted".equals(expected.getMessage()));}
         check(main.session==10&&main.previous==normalPrevious&&main.gameTrack.session==21&&!main.gameContext);
         main.settings.put("chargeSeconds",2);main.stableOnline=true;main.state=1;
-        main.withGame(()->{check(main.sampling.fastMs==2000&&main.session==21);});
+        main.withGame(()->{check(main.sampling.fastMs==3000&&main.session==21);});
         check(main.session==10&&main.sampling==normalSampling&&main.state==1);
-        // Even expired power/minute deadlines must not cause a second battery read during charging.
+        // A minute deadline and an ordinary charging sample do not advance the game power schedule.
         main.fastEnabled=true;main.recordingEnabled=true;main.stopping=true;main.candidateAt=-1;
-        main.gameTrack.sampling.next=0;main.gameTrack.fastStatsNext=0;
-        main.collectGame(null,false,10000);check(main.session==10&&main.gameTrack.session==21);
-        check(main.sharesChargingSample());
-        main.recordingEnabled=false;check(!main.sharesChargingSample());
-        main.recordingEnabled=true;main.session=-1;check(!main.sharesChargingSample());
-        main.session=10;
+        main.gameTrack.previous.online=true;main.gameTrack.fastStatsNext=0;
+        Core.Reading charging=new Core.Reading();charging.online=true;charging.elapsed=2200;
+        main.collectGame(null,false,2200);
+        main.collectGame(charging,false,2200);
+        check(main.session==10&&main.gameTrack.session==21&&main.gameTrack.sampling.next==3200);
         main.stableOnline=false;main.state=0;
         main.withGame(()->{check(main.session==21&&main.sampling.fastMs==3000);});
         Core.Reading off=new Core.Reading(),on=new Core.Reading();on.online=true;

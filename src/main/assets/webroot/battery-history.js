@@ -1,4 +1,4 @@
-import{Chart}from'./chart.js?v=acol-2.2s';
+import{Chart,systemTimeLabel}from'./chart.js?v=acol-2.2s';
 import{bindExport,exportTime}from'./chart-export.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 export const healthMetrics=[{key:'cycles',index:1,name:'循环次数',axis:'循环次数',unit:'次',color:'#5479c4',digits:0},{key:'qmax',index:2,name:'Qmax',axis:'Qmax',unit:'mAh',color:'#b47b35',digits:0},{key:'fcc',index:3,name:'满充容量',axis:'满充容量',unit:'mAh',color:'#26957d',digits:0}];
@@ -29,7 +29,7 @@ class HealthChart extends Chart{
   inspect(...args){
     super.inspect(...args);if(this.marker===null||this.tooltip.hidden)return;
     const row=this.points.find(p=>p[0]===this.marker);if(!row)return;
-    this.tooltip.textContent=batteryHistoryDate(this.startWall+row[0])+ '\n'+this.signals().filter(s=>this.enabled.has(s.key)).map(s=>`${s.name}  ${number(row[s.index],s.unit)}`).join('\n');this.positionTooltip();
+    this.tooltip.textContent=systemTimeLabel(this.startWall+row[0],true,true)+'\n'+this.signals().filter(s=>this.enabled.has(s.key)).map(s=>`${s.name}  ${number(row[s.index],s.unit)}`).join('\n');this.positionTooltip();
   }
 }
 const number=(v,unit='',digits=0)=>finite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:digits})+(unit?' '+unit:''):'—';

@@ -31,7 +31,9 @@ public final class AppBridgeTest {
         check(AppBridge.parse(client+"settle_usage 1")[1].equals("settle_usage"));
         rejected(client+"battery_history_record; id");
         check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 2 10001 0").length==18);
-        check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 0.5 10001 0").length==18);
+        check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 0.7 1 2 0.5 10001 0").length==18);
+        check(AppBridge.parse(client+"set_settings 5 30 560 1 300 450 50 60 2 120 0.7 1 2 0.5 10001 0 0").length==19);
+        rejected(client+"set_settings 5 30 560 1 300 450 50 60 2 120 0.75 1 2 0.5 10001 0");
         rejected(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 0.55 10001 0");
         rejected(client+"set_recording 0.5");
         check(AppBridge.parse(client+"set_recording 0")[1].equals("set_recording"));

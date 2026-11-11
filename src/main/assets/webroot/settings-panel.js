@@ -34,7 +34,7 @@ export class SettingsPanel{
     this.form.addEventListener('submit',e=>{e.preventDefault();document.activeElement?.blur();this.flush();});
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key);
-      if(!['capacityAuto','fastAutoOff'].includes(key)){
+      if(field.type!=='checkbox'){
         field.readOnly=true;field.inputMode='none';field.setAttribute('aria-haspopup','dialog');
         field.addEventListener('pointerdown',e=>e.preventDefault());
         (field.closest('.setting-input')||field).addEventListener('click',()=>this.edit(key));
@@ -59,12 +59,14 @@ export class SettingsPanel{
     if(this.recordingBusy||typeof enabled!=='boolean')return;
     if(typeof problem==='string')this.recordingProblem=problem;
     this.recordingValue=enabled;this.recording.checked=enabled;this.recording.disabled=false;
-    document.getElementById('recordingHint').textContent=enabled?'后台持续记录，退出 App 不停止。':this.recordingProblem?`${this.recordingProblem}，记录已关闭。开启时重新检查。`:'已停止记录，重新开启后建立新记录。';
+    const hint=document.getElementById('recordingHint'),text=enabled?'后台持续记录，退出 App 不停止。':this.recordingProblem?`${this.recordingProblem}，记录已关闭。开启时重新检查。`:'已停止记录，重新开启后建立新记录。';
+    if(hint.textContent!==text)hint.textContent=text;
     this.updateFast();
   }
   updateFast(enabled){
     if(typeof enabled==='boolean'&&!this.fastBusy)this.fastValue=enabled;
-    this.fastButton.textContent=this.fastValue?'关闭':'开启';
+    const label=this.fastValue?'关闭':'开启';
+    if(this.fastButton.textContent!==label)this.fastButton.textContent=label;
     this.fastButton.disabled=!this.ready||this.fastBusy;
     this.panel.querySelector('.fast-control').classList.toggle('mode-active',this.fastValue);
   }
@@ -77,7 +79,7 @@ export class SettingsPanel{
     if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
     this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
     try{
-      if(!await this.askChange('恢复默认设置？','恢复设置项和跟随系统主题；游戏性能统计与功耗悬浮显示将关闭，记录总开关将开启。已有记录和备份不会删除。'))return false;
+      if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，记录总开关将开启。已有记录和备份会保留。'))return false;
       if(!await this.flush())throw Error('当前设置未能保存，请重试。');
       let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
       for(const field of this.form.elements)field.disabled=true;
@@ -155,7 +157,8 @@ export class SettingsPanel{
   edit(key,push=true){
     if(!this.ready||this.keypad.open)return;
     const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',energyWh:'默认能量量程',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
-    const field=this.form.elements.namedItem(key),decimal=['energyWh','capacityAh','voltageMin','voltageMax','performanceSeconds'].includes(key),signed=key.startsWith('temp'),digits=key==='performanceSeconds'?1:2;
+    const field=this.form.elements.namedItem(key),digits=key==='fastSeconds'||key==='performanceSeconds'?1:2;
+    const decimal=digits===1||['energyWh','capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
     this.editor={key,field,draft:field.value,fresh:true,decimal,signed,digits};
     document.getElementById('keypadTitle').textContent=names[key];
     const unit=key.endsWith('Pct')?'%':key==='energyWh'?'Wh':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
@@ -200,7 +203,7 @@ export class SettingsPanel{
         value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);
         // Publish the confirmed value before joining the shared save loop, so a
         // later checkbox change cannot send an older interval back to the daemon.
-        e.field.value=e.key==='performanceSeconds'?value[e.key].toFixed(1):String(value[e.key]);this.dirty=true;
+        e.field.value=e.key==='fastSeconds'||e.key==='performanceSeconds'?value[e.key].toFixed(1):String(value[e.key]);this.dirty=true;
         if(!await this.flush())throw Error('设置未能保存，请重试。');
         if(this.editor===e)this.dismissEditor();
       }catch(error){this.editorError(error.message);}
@@ -255,7 +258,7 @@ export class SettingsPanel{
     const result={};
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key);
-      if(['capacityAuto','fastAutoOff'].includes(key)){result[key]=field.checked;continue;}
+      if(field.type==='checkbox'){result[key]=field.checked;continue;}
       if(key==='energyWh'&&field.value.trim()===''){result[key]=null;field.removeAttribute('aria-invalid');continue;}
       const good=field.value.trim()!==''&&field.checkValidity();field.setAttribute('aria-invalid',String(!good));
       if(!good)throw Error('请输入完整数值。');
@@ -266,8 +269,8 @@ export class SettingsPanel{
   fill(value){
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key),v=value[key];
-      if(['capacityAuto','fastAutoOff'].includes(key))field.checked=v;
-      else field.value=v===null||v===undefined?'':key==='performanceSeconds'?v.toFixed(1):['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
+      if(field.type==='checkbox')field.checked=v;
+      else field.value=v===null||v===undefined?'':key==='fastSeconds'||key==='performanceSeconds'?v.toFixed(1):['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
       field.removeAttribute('aria-invalid');
     }
   }

@@ -21,12 +21,12 @@ public final class GameSamplingTest {
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.wall=1000000+elapsed;r.rm=5000;r.pct=80;
         r.current=300;r.cellCount=2;r.cell1=3900;r.cell2=4000;return r;
     }
-    static JSONArray settings(int power,double performance)throws JSONException{return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
+    static JSONArray settings(double power,double performance)throws JSONException{return new JSONArray(new Object[]{5,30,560,1,300,450,50,60,2,15,power,1,2,performance});}
     static void save(Main m,JSONArray values)throws Exception{
         try{m.saveSettings(new JSONArray(values.toString()).put(0));}
         catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
     }
-    static void schedule(int power,double performance)throws Exception{
+    static void schedule(double power,double performance)throws Exception{
         Main m=open(Files.createTempDirectory("acol-game-clock-").toFile());
         try{
             m.settings=Main.decodeSettings(settings(power,performance));m.fastEnabled=true;m.state=0;m.configureSampling(false);
@@ -42,13 +42,14 @@ public final class GameSamplingTest {
                 m.collectGame(reading(now),false,now);
                 if(m.performanceCadence.last!=last)perfCount++;
             }
-            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+game)==1+60/power);
+            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+game)==1+60000/Math.round(power*1000));
             check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+ordinary)==1);
             check(perfCount==1+60000/Math.round(performance*1000));
             check(m.gameTrack.fastStatsNext==stats+60000); // Power sampling still settles RM once per minute.
             check(count(m,"SELECT COUNT(*) FROM sessions")==2);
-            check(count(m,"SELECT fast_seconds FROM sessions WHERE id="+game)==power);
-            try(Cursor c=m.db.rawQuery("SELECT performance_seconds FROM sessions WHERE id=?",new String[]{""+game})){check(c.moveToFirst()&&Math.abs(c.getDouble(0)-performance)<1e-9);}
+            try(Cursor c=m.db.rawQuery("SELECT fast_seconds,performance_seconds FROM sessions WHERE id=?",new String[]{""+game})){
+                check(c.moveToFirst()&&Math.abs(c.getDouble(0)-power)<1e-9&&Math.abs(c.getDouble(1)-performance)<1e-9);
+            }
             check(m.store.performancePoints(game,0,8000).getLong("intervalMs")==Math.round(performance*1000));
             JSONObject raw=new JSONObject();m.store.rawPoints(raw,game,0,60000,-1);
             check(raw.getJSONArray("points").getJSONArray(0).getLong(13)==1000000+base);
@@ -72,29 +73,56 @@ public final class GameSamplingTest {
             long perfNext=m.performanceCadence.next;
             save(m,settings(3,5));check(m.session==id);check(m.performanceCadence.next==perfNext);check(m.gameTrack.fastStatsNext==stats);
             check(m.gameTrack.sampling.next==now+3000);check(m.sampling.next==now+120000);check(count(m,"SELECT COUNT(*) FROM samples")==2);
-            check(new JSONArray(m.runtimeValue("module_settings")).length()==15);
+            check(new JSONArray(m.runtimeValue("module_settings")).length()==16);
+            save(m,settings(3,5).put(10001).put(0));check(!m.settings.getBoolean("gaugeIntervalOverride"));
             JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,3,1,2]");
-            save(m,legacy);check(m.settings.getInt("performanceSeconds")==5);
+            save(m,legacy);check(m.settings.getInt("performanceSeconds")==5);check(!m.settings.getBoolean("gaugeIntervalOverride"));
             check(AppBridge.parse(AppBridge.ROOT+"bin/curve-client set_settings 5 30 560 1 300 450 50 60 2 15 3 1 2 5 0").length==17);
             m.db.execSQL("ALTER TABLE sessions DROP COLUMN performance_seconds");m.db.setVersion(10);
         }finally{close(m);}
         m=open(directory);
         try{
             check(m.settings.getInt("performanceSeconds")==5);
+            check(!m.settings.getBoolean("gaugeIntervalOverride"));
             check(count(m,"SELECT performance_seconds FROM sessions WHERE fast_seconds>0")==3); // Old rows used one shared interval.
+        }finally{close(m);}
+    }
+    static void chargingReuse()throws Exception{
+        Main m=open(Files.createTempDirectory("acol-game-charge-").toFile());
+        try{
+            m.settings=Main.decodeSettings(settings(0.5,5));
+            m.recordingEnabled=true;m.fastEnabled=true;m.stableOnline=true;m.state=1;m.configureSampling(false);
+            long base=SystemClock.elapsedRealtime()+10000;
+            Core.Reading first=reading(base);first.online=true;first.current=-300;
+            m.begin(first);m.sampling.sampled(1,base);m.collectGame(first,false,base);
+            long charge=m.session,game=m.gameTrack.session;
+            Core.Reading cached=reading(base+1600);cached.online=true;cached.current=-350;
+            m.collectGame(cached,false,cached.elapsed);
+            m.collectStable(null,false,base+2000);
+            check(m.previous==cached&&m.gameTrack.previous==cached);
+            check(m.sampling.next==base+4000&&m.gameTrack.sampling.next==base+2100);
+            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+charge)==2);
+            check(count(m,"SELECT COUNT(*) FROM samples WHERE session="+game)==2);
+            check(count(m,"SELECT MAX(x) FROM samples WHERE session="+charge)==1600);
         }finally{close(m);}
     }
     public static void main(String[] args)throws Exception{
         JSONObject defaults=Main.decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
-        check(defaults.getInt("performanceSeconds")==2);check(defaults.getInt("screenOffMinutes")==30);check(defaults.getInt("chargeSeconds")==2);
+        check(defaults.getDouble("fastSeconds")==2);check(defaults.getInt("performanceSeconds")==2);check(defaults.getInt("screenOffMinutes")==30);check(defaults.getInt("chargeSeconds")==2);
+        check(defaults.getBoolean("gaugeIntervalOverride"));
         JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,7,1,2]");
         check(Main.decodeSettings(legacy).getInt("performanceSeconds")==7);
-        for(double value:new double[]{0.5,0.6,1.1,2,19.9,20})check(Math.abs(Main.decodeSettings(settings(10,value)).getDouble("performanceSeconds")-value)<1e-9);
-        for(Object bad:new Object[]{0,0.4,20.1,60,1.05}){
-            JSONArray v=settings(10,10);v.put(13,bad);
-            try{Main.decodeSettings(v);throw new AssertionError("Invalid performance interval accepted");}catch(java.io.IOException expected){}
+        check(Main.decodeSettings(legacy).getBoolean("gaugeIntervalOverride"));
+        for(double value:new double[]{0.5,0.6,1.1,2,19.9,20}){
+            JSONObject decoded=Main.decodeSettings(settings(value,value));
+            check(Math.abs(decoded.getDouble("fastSeconds")-value)<1e-9);
+            check(Math.abs(decoded.getDouble("performanceSeconds")-value)<1e-9);
         }
-        schedule(60,0.5);schedule(1,20);schedule(7,1.1);edits();
-        System.out.println("Game sampling: independent clocks, 0.5-20 s performance bounds, fractional intervals, settings/schema upgrade, unchanged session and minute RM accounting passed");
+        for(int index:new int[]{10,13})for(Object bad:new Object[]{0,0.4,20.1,60,1.05}){
+            JSONArray v=settings(10,10);v.put(index,bad);
+            try{Main.decodeSettings(v);throw new AssertionError("Invalid sampling interval accepted");}catch(java.io.IOException expected){}
+        }
+        schedule(20,0.5);schedule(0.5,20);schedule(7,1.1);chargingReuse();edits();
+        System.out.println("Game sampling: independent clocks, 0.5-20 s bounds, fractional intervals, settings/schema upgrade, unchanged session and minute RM accounting passed");
     }
 }

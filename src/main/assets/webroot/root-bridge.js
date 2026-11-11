@@ -38,6 +38,16 @@ window.__acoDeliver=message=>{
   }
 };
 export function exec(command){return send(command);}
+export function validateApiArgs(action,args){
+  if(action==='daily_usage'){
+    if(args.length!==3||args.slice(0,2).some(a=>!/^\d+$/.test(String(a)))||!/^[A-Za-z0-9_-]{1,4096}$/.test(String(args[2])))throw Error('使用情况参数无效');
+    return;
+  }
+  for(const [index,arg] of args.entries()){
+    const format=action==='set_settings'&&(index===10||index===13)?/^\d{1,2}(?:\.\d)?$/:/^\d+$/;
+    if(!format.test(String(arg)))throw Error('参数无效');
+  }
+}
 export function spawn(command,args=[]){return send([command,...args].join(' '),true);}
 export function fullScreen(enabled){AcoNative.fullScreen(!!enabled);}
 export function readAppIcons(packages){

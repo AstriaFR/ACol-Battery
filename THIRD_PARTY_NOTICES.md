@@ -22,6 +22,10 @@ Copyright 2026 AstriaFR.
 
 修改后内部名称为 `ACol CJK Rounded`，PostScript 名称为 `AColCJKRounded-Bold`，不使用原保留字体名作为子集名称。子集继续按 SIL OFL 分发，不适用应用代码的 GPL 3.0 许可。
 
+## Roboto
+
+性能监视器使用 [Roboto](https://github.com/google/fonts/tree/main/ofl/roboto) 窄体粗字重的数字和符号轮廓（`wdth=75`、`wght=700`）。字形轮廓按 SIL OFL 分发，版权和许可见 [acol-monitor-OFL.txt](src/main/assets/webroot/assets/acol-monitor-OFL.txt)。
+
 ## 网页许可文件
 
 网页目录保留 [GNU GPL 3.0 许可文本](src/main/assets/webroot/LICENSE-GPL-3.0.txt)，与项目根目录许可一致。

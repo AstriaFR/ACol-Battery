@@ -10,6 +10,20 @@ public final class SamplingTest {
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.rm=5000;r.pct=100;
         r.online=true;Core.applyTail(r,4450,1,1);r.current=-20;r.vmin=r.vmax=4400;r.temp=30;return r;
     }
+    static void reuseGameCharge(){
+        Core.Reading game=tail(2000),last=tail(1500);
+        check(Core.canReuseGameCharge(game,last,2000));
+        check(Core.canReuseGameCharge(game,last,2500));
+        check(!Core.canReuseGameCharge(game,last,2501));
+        check(!Core.canReuseGameCharge(game,last,1999));
+        check(!Core.canReuseGameCharge(game,game,2200));
+        check(!Core.canReuseGameCharge(game,tail(2050),2200));
+        game.online=false;check(!Core.canReuseGameCharge(game,last,2200));
+        game.online=true;game.onlineKnown=false;check(!Core.canReuseGameCharge(game,last,2200));
+        game.onlineKnown=true;game.error="电流读取失败";check(!Core.canReuseGameCharge(game,last,2200));
+        game.error="";game.rm=Double.NaN;check(!Core.canReuseGameCharge(game,last,2200));
+        check(!Core.canReuseGameCharge(null,last,2200));
+    }
     static void chargeTail(){
         Core.Sampling sampling=new Core.Sampling();
         for(int seconds=1;seconds<=10;seconds++){
@@ -241,13 +255,25 @@ public final class SamplingTest {
             node->{throw new AssertionError("valid primary pack voltage fell through: "+node);});
         check(dual.displayVoltage()==2900&&Double.isNaN(dual.temp));
     }
+    static void cpuUsage(){
+        long[] before={100,50}, busy={120,50}, mostlyIdle={120,65};
+        check(PerformanceCollector.coreUsage(before,busy)==100);
+        check(PerformanceCollector.coreUsage(before,mostlyIdle)==25);
+        check(Double.isNaN(PerformanceCollector.coreUsage(null,busy)));
+        check(Double.isNaN(PerformanceCollector.coreUsage(before,before)));
+        check(Double.isNaN(PerformanceCollector.coreUsage(before,new long[]{120,80})));
+        java.util.Map<Integer,long[]> previous=java.util.Map.of(0,before,1,before);
+        java.util.Map<Integer,long[]> current=java.util.Map.of(0,busy,1,mostlyIdle);
+        check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0,1),previous,current)==62.5);
+        check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0),previous,java.util.Map.of(0,busy,1,before))==50);
+    }
     public static void main(String[] args)throws Exception{
         MemoryStats memory=MemoryStats.parse("MemTotal: 11392228 kB\nMemFree: 824840 kB\nMemAvailable: 4639988 kB\n");
         check(memory!=null&&memory.totalBytes==11665641472L&&memory.usedBytes==6914293760L);
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();
-        System.out.println("Sampling: independent tail rules, exact boundaries, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
+        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();cpuUsage();
+        System.out.println("Sampling: 500 ms charging reuse, tail rules, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

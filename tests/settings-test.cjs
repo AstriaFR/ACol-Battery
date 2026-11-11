@@ -7,35 +7,59 @@ async function samplingSettings(){
 const root=path.join(__dirname,'../src/main/assets/webroot/');
  const {DEFAULT_SETTINGS,encodeSettings,settingsKeys}=await import(pathToFileURL(path.join(root,'config.js')).href);
  const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
- assert.equal(encodeSettings(DEFAULT_SETTINGS).length,15);
+ globalThis.window={};
+ const {validateApiArgs}=await import(pathToFileURL(path.join(root,'root-bridge.js')).href);
+ assert.equal(encodeSettings(DEFAULT_SETTINGS).length,16);
  assert.equal(encodeSettings(DEFAULT_SETTINGS)[14],10001);
  for(const value of [0,0.01,25.34,100])assert.equal(encodeSettings({...DEFAULT_SETTINGS,energyWh:value})[14],Math.round(value*100));
  for(const value of [-0.01,100.01,1.001])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,energyWh:value}));
- assert.equal(DEFAULT_SETTINGS.fastSeconds,10);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,30);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
+ assert.equal(DEFAULT_SETTINGS.fastSeconds,2);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,30);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
+ assert.equal(DEFAULT_SETTINGS.gaugeIntervalOverride,true);
+ assert.equal(encodeSettings(DEFAULT_SETTINGS)[15],1);
+ assert.equal(encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:false})[15],0);
+ assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:1}));
  for(const value of [1,30,60,120])assert.equal(encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value})[9],value);
  for(const value of [0,121,1.5])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value}));
- for(const key of ['fastSeconds']){
-  for(const value of [1,7,60])assert.equal(encodeSettings({...DEFAULT_SETTINGS,[key]:value})[key==='fastSeconds'?10:13],value);
-  for(const value of [0,61,1.5,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,[key]:value}));
+ for(const [key,index] of [['fastSeconds',10],['performanceSeconds',13]]){
+  for(const value of [0.5,0.6,1.1,2,19.9,20])assert.equal(encodeSettings({...DEFAULT_SETTINGS,[key]:value})[index],value);
+  for(const value of [0,0.4,20.1,60,1.05,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,[key]:value}));
  }
- for(const value of [0.5,0.6,1.1,2,19.9,20])assert.equal(encodeSettings({...DEFAULT_SETTINGS,performanceSeconds:value})[13],value);
- for(const value of [0,0.4,20.1,60,1.05,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,performanceSeconds:value}));
+ const request=[...encodeSettings({...DEFAULT_SETTINGS,fastSeconds:0.6,performanceSeconds:0.7}),0];
+ assert.doesNotThrow(()=>validateApiArgs('set_settings',request));
+ for(const [index,value] of [[10,0.65],[12,3.5],[13,0.75],[13,'0.7;id']]){
+  assert.throws(()=>validateApiArgs('set_settings',request.with(index,value)),/参数无效/);
+ }
+ assert.throws(()=>validateApiArgs('set_recording',[0.7]),/参数无效/);
  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
  const names=new Set([...html.matchAll(/<input[^>]*\bname="([^"]+)"/g)].map(m=>m[1]));
  for(const key of settingsKeys)assert.ok(names.has(key),`Missing settings input ${key}`);
  assert.ok(html.includes('功耗采样间隔'));assert.ok(html.includes('性能采样间隔'));
+ assert.ok(html.indexOf('name="fastSeconds"')<html.indexOf('name="gaugeIntervalOverride"'));
+ assert.ok(html.indexOf('name="gaugeIntervalOverride"')<html.indexOf('name="performanceSeconds"'));
  for(const key of ['fastSeconds','performanceSeconds']){
-  let accepted=false,dismissed=false,hint='';const fields={fastSeconds:10,performanceSeconds:10};
+  let accepted=false,dismissed=false,hint='',saved;
+  const draft=key==='performanceSeconds'?'0.7':'0.6',index=key==='performanceSeconds'?13:10;
   const nodes={keypadTitle:{textContent:key==='fastSeconds'?'功耗采样间隔':'性能采样间隔'},keypadApply:{disabled:false}};
   globalThis.document={getElementById:id=>nodes[id]};
   const panel=Object.create(SettingsPanel.prototype);
-  panel.editor={key,draft:'3',field:{value:'10'}};
-  panel.values=()=>({...DEFAULT_SETTINGS,...fields,[key]:Number(panel.editor.field.value)});
-  panel.askChange=async(title,text)=>{hint=text;return accepted};panel.flush=async()=>true;
+  panel.ready=true;panel.editor={key,draft,field:{value:'10'}};
+  panel.values=()=>({...DEFAULT_SETTINGS,[key]:Number(panel.editor.field.value)});
+  panel.askChange=async(title,text)=>{hint=text;return accepted};
+  panel.api=async(action,...args)=>{
+   assert.equal(action,'set_settings');validateApiArgs(action,args);saved=args[index];return{settings:panel.values()};
+  };
+  panel.onSaved=()=>{};panel.fill=()=>{};panel.setStatus=()=>{};
   panel.editorError=text=>{throw Error(text)};panel.dismissEditor=()=>{dismissed=true};
-  await panel.commitEditor();assert.equal(panel.editor.field.value,'10');assert.ok(!dismissed);assert.ok(hint.includes('3 秒'));
-  accepted=true;await panel.commitEditor();assert.equal(panel.editor.field.value,key==='performanceSeconds'?'3.0':'3');assert.ok(dismissed);assert.ok(hint.includes('继续当前记录'));
+  await panel.commitEditor();assert.equal(panel.editor.field.value,'10');assert.equal(saved,undefined);assert.ok(!dismissed);assert.ok(hint.includes(`${draft} 秒`));
+  accepted=true;await panel.commitEditor();assert.equal(panel.editor.field.value,draft);assert.equal(saved,Number(draft));assert.ok(dismissed);assert.ok(hint.includes('继续当前记录'));
  }
+ const fields=Object.fromEntries(settingsKeys.map(key=>[key,{
+  type:typeof DEFAULT_SETTINGS[key]==='boolean'?'checkbox':'number',value:'',checked:false,
+  setAttribute(){},removeAttribute(){},checkValidity:()=>true,get valueAsNumber(){return Number(this.value);}
+ }]));
+ const panel=Object.create(SettingsPanel.prototype);panel.form={elements:{namedItem:key=>fields[key]}};
+ panel.fill(DEFAULT_SETTINGS);assert.equal(fields.gaugeIntervalOverride.checked,true);
+ fields.gaugeIntervalOverride.checked=false;assert.equal(encodeSettings(panel.values())[15],0);
 }
 
 async function recordingControl(){

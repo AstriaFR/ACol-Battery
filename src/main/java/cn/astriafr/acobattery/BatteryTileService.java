@@ -25,7 +25,7 @@ public abstract class BatteryTileService extends TileService {
     private volatile boolean destroyed;
     private boolean listening,busy;private int queued=-1;private long generation;
     private final Runnable refresh=()->request(0);
-    private String label(){return gameMode()?"游戏性能统计":"功耗悬浮显示";}
+    private String label(){return gameMode()?"游戏性能统计":"性能监视器";}
     @Override public void onStartListening(){super.onStartListening();listening=true;generation++;request(0);}
     @Override public void onStopListening(){
         super.onStopListening();listening=false;generation++;ui.removeCallbacks(refresh);if(!busy)disconnect();

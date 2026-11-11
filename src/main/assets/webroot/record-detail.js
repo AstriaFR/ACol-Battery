@@ -8,6 +8,7 @@ import{loadSelection,saveSelection}from'./preferences.js?v=acol-2.2s';
 import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,recordEndWall,fmt,stamp,pad2,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
 import{createRecordDrain}from'./record-usage.js?v=acol-2.2s';
 import{bindExport,recordCsv}from'./chart-export.js?v=acol-2.2s';
+import{SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
 const fullRecordEnd=Number.MAX_SAFE_INTEGER,previewBudget=1200;
 
@@ -176,7 +177,7 @@ export function createRecordDetail(options){
   function showDetail(data,preserve=false,live=false){
     followRedrawPending=false;
     detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
-    if(!data.loading)liveChannel.setMode(r.active?0:3);
+    if(!data.loading)liveChannel.setMode(r.active?0:SUMMARY_WATCH_MODE);
     if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
     if(data.loading)$('apps').hidden=true;
     $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
@@ -362,7 +363,7 @@ export function createRecordDetail(options){
           else{followRedrawPending=followLive;chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}renderDetailNote(detail);renderFollow();renderChartInfo();}
         }
         renderSummary(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
-        if(activeChanged){liveChannel.setMode(detail.record.active?0:3);syncRemainingExplanation();}
+        if(activeChanged){liveChannel.setMode(detail.record.active?0:SUMMARY_WATCH_MODE);syncRemainingExplanation();}
       }
     }
     if(current(token))startRemaining();

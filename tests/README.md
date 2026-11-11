@@ -25,7 +25,8 @@
 - 记录：`RecordFilterTest`、`RecordingGateTest`、`RecoveryTest`、`RecoveryDatabaseTest`。
 - 初始化与连接：`StartupDiagnosticsTest`、`ProcessResponseTest`、`RootSessionStartupTest`、`AppBridgeTest`、`FrameworkWatchTest`。启动失败与降级报告统一在 `StartupDiagnosticsTest` 中维护，命令截止时间与进程响应统一在 `ProcessResponseTest` 中维护，前后台命令路由由 `AppBridgeTest` 检查。
 - 数据与运行文件：`DatabaseRebuildTest`、`SafeDatabaseDeviceTest`、`DataTransferTest`、`MaintenanceTest`、`RuntimePayloadTest`、`RuntimeTransactionTest`。
-- 独立功耗显示：`PowerDisplayStateTest`。
+- 性能监视器：`PowerDisplayStateTest`，覆盖独立采样间隔和固定字符格的数字格式。
+- 电流计间隔：`GaugeUpdateTest`，用隔离节点检查同次开机内的后台重启、写入中断与恢复。
 
 `DeferredStatsTest` 在真实 Android 的独立临时数据库中验证事件批量留存、打开页面后增量结算、缓存幂等性、迟到事件修复、游戏充电边界和进行中旧记录的累计值衔接，不接触正式数据。
 

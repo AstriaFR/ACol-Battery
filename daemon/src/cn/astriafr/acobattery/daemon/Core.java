@@ -40,11 +40,13 @@ public final class Core {
         return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot)&&start>=0&&end>=start&&now>=end
             &&(fast?wasFast&&"discharge".equals(kind):!wasFast&&(online?"charge":"discharge").equals(kind));
     }
-    public static long gamePowerInterval(boolean online,long gameSeconds,long chargeSeconds){
-        return (online?chargeSeconds:gameSeconds)*1000;
-    }
     public static boolean gameDischargeInterval(Reading before,Reading after){
         return before.onlineKnown&&after.onlineKnown&&!before.online&&!after.online;
+    }
+    static boolean canReuseGameCharge(Reading game,Reading lastCharge,long now){
+        return game!=null&&game.onlineKnown&&game.online&&game.valid()&&game.error.isEmpty()
+            &&game.elapsed<=now&&now-game.elapsed<=500
+            &&(lastCharge==null||game.elapsed>lastCharge.elapsed);
     }
     public static boolean resumableStop(String reason) {
         return "service_updated".equals(reason)||"framework_restarted".equals(reason);
@@ -124,7 +126,7 @@ public final class Core {
         public long screenOnMs=120000,screenOffMs=1800000,chargeMs=3000,fastMs;
         public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
-        public void restoreExpected(long saved) { expected=Math.max(1000,Math.min(MAX_INTERVAL_MS,saved)); }
+        public void restoreExpected(long saved) { expected=Math.max(fastMs>0?500:1000,Math.min(MAX_INTERVAL_MS,saved)); }
         public boolean screen(boolean on,long now) {
             if(interactive==on)return false;
             interactive=on;screenSample=true;next=now;return true;

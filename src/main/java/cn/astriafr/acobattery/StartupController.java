@@ -116,7 +116,7 @@ final class StartupController {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.4 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.5 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(app);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,app.dp(32),0,app.dp(12));layout.addView(stage);
         detail=new TextView(app);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(app.dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(app.dp(5),1);layout.addView(detail);
         progress=new ProgressBar(app,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,app.dp(4));line.topMargin=app.dp(24);layout.addView(progress,line);

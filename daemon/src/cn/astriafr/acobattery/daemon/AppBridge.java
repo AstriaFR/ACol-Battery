@@ -46,7 +46,7 @@ public final class AppBridge {
         else if(command.startsWith(cutoff)){route="cutoff";command=command.substring(cutoff.length());}
         else throw new IllegalArgumentException("不支持的操作");
         String[] words=command.trim().split(" +");
-        if(words.length<1||words.length>17)throw new IllegalArgumentException("参数无效");
+        if(words.length<1||words.length>(words[0].equals("set_settings")?18:17))throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
             if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
@@ -55,8 +55,8 @@ public final class AppBridge {
             }else if(action.equals("error_log")){
                 if(words.length!=2||!words[1].matches("[0-9]{13,20}-[0-9a-f-]{36}"))throw new IllegalArgumentException("日志参数无效");
             }else for(int i=1;i<words.length;i++){
-                boolean performance=action.equals("set_settings")&&i==14;
-                if(!words[i].matches(performance?"[0-9]{1,2}(?:\\.[0-9])?":"[0-9]{1,20}"))throw new IllegalArgumentException("参数无效");
+                boolean decimalInterval=action.equals("set_settings")&&(i==11||i==14);
+                if(!words[i].matches(decimalInterval?"[0-9]{1,2}(?:\\.[0-9])?":"[0-9]{1,20}"))throw new IllegalArgumentException("参数无效");
             }
         }else{
             boolean valid=words.length==1&&action.equals("status")||words.length==2&&action.equals("plan")&&words[1].equals("stock")

@@ -105,7 +105,7 @@ public final class RecoveryDatabaseTest {
         try{m.saveSettings(request);}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.session==id);check(m.sampling.interval(1)==10000);check(value(m,"SELECT active FROM sessions")==1);
         check(value(m,"SELECT COUNT(*) FROM samples")==1);check(value(m,"SELECT COUNT(*) FROM sessions")==1);
-        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==15);
+        check(new org.json.JSONArray(m.runtimeValue("module_settings")).length()==16);
         try{m.saveSettings(new org.json.JSONArray(old.toString()).put(0));}catch(UnsatisfiedLinkError hostOnly){check(hostOnly.getMessage().contains("interruptWait"));}
         check(m.settings.getInt("chargeSeconds")==10); // Old frontend saves cannot erase the new setting.
         String command=AppBridge.ROOT+"bin/curve-client set_settings 5 30 560 1 300 450 50 60 2 15 10 1 2 0";

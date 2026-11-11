@@ -14,15 +14,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 
 /** One bounded, asynchronous snapshot per fast sample. No polling loop or child processes. */
 final class PerformanceCollector implements AutoCloseable {
+    private static final long FPS_WINDOW_NANOS=TimeUnit.MILLISECONDS.toNanos(500);
     interface Sink { void accept(long session,long start,long wall,JSONArray row,JSONObject meta) throws Exception; }
     private final Sink sink;
+    private final BiConsumer<MonitorSample,Double> monitorFps;
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{
         Thread t=new Thread(r,"curve-performance");t.setDaemon(true);t.setPriority(Thread.MIN_PRIORITY);return t;
     });
-    private final AtomicBoolean pending=new AtomicBoolean();
+    private final AtomicBoolean recordingPending=new AtomicBoolean();
+    private final AtomicBoolean monitorPending=new AtomicBoolean();
     private volatile boolean closed;
     private List<Cluster> clusters;
     private Gpu gpu;
@@ -37,56 +41,160 @@ final class PerformanceCollector implements AutoCloseable {
     private long newestFrame;
     private JSONObject meta;
     private final Object hardwareLock=new Object();
-    private JSONObject frequencySnapshot;
-    private long frequencyAt=-1000;
+    private HardwareSnapshot hardwareSnapshot;
+    private List<Integer> monitorCpus;
+    private final Map<Integer,Integer> policyByCpu=new HashMap<>();
+    private final Map<Integer,File> independentCpuDirectories=new HashMap<>();
     private long memoryTotalBytes;
 
-    PerformanceCollector(Sink sink){this.sink=sink;}
+    private static final class HardwareSnapshot {
+        final long elapsed,wall;
+        final Set<Integer> online;
+        final Map<Integer,long[]> cpu;
+        final double[] policyMHz;
+        final double gpuMHz, gpuUsage;
+        // Accessed only by the worker, including when both consumers share this snapshot.
+        boolean fpsSampled;
+        double fps;
+
+        HardwareSnapshot(long elapsed,long wall,Set<Integer> online,Map<Integer,long[]> cpu,double[] policyMHz,double gpuMHz,double gpuUsage){
+            this.elapsed=elapsed;this.wall=wall;this.online=online;this.cpu=cpu;this.policyMHz=policyMHz;
+            this.gpuMHz=gpuMHz;this.gpuUsage=gpuUsage;
+        }
+
+        boolean online(int id){return online.isEmpty()?cpu.containsKey(id):online.contains(id);}
+    }
+
+    static final class MonitorSample {
+        private final HardwareSnapshot hardware;
+        final double cpuMHz, gpuMHz, gpuUsage;
+        final double[] cpuUsage;
+        final boolean[] online;
+        volatile double fps;
+
+        MonitorSample(HardwareSnapshot hardware,double cpuMHz,double[] cpuUsage,boolean[] online,double fps){
+            this.hardware=hardware;this.cpuMHz=cpuMHz;this.cpuUsage=cpuUsage;this.online=online;
+            gpuMHz=hardware.gpuMHz;gpuUsage=hardware.gpuUsage;this.fps=fps;
+        }
+    }
+
+    PerformanceCollector(Sink sink,BiConsumer<MonitorSample,Double> monitorFps){this.sink=sink;this.monitorFps=monitorFps;}
     void sample(long session,long start,boolean screen){sample(session,start,screen,60000);}
-    void sample(long session,long start,boolean screen,long interval){
-        if(closed||!pending.compareAndSet(false,true))return; // Skip overload; never queue old observations.
-        try{worker.execute(()->{
+    void sample(long session,long start,boolean screen,long interval){sample(session,start,screen,interval,null);}
+    void sample(long session,long start,boolean screen,long interval,MonitorSample shared){
+        boolean scheduled=submit(recordingPending,()->{
             try{
-                long elapsed=SystemClock.elapsedRealtime(),wall=System.currentTimeMillis();
-                JSONObject frequency=frequencies();
-                Map<Integer,long[]> cpu=cpuTimes();Set<Integer> online=cpuList(read("/sys/devices/system/cpu/online"));
+                HardwareSnapshot hardware=shared==null?hardware():shared.hardware;
+                long elapsed=hardware.elapsed,wall=hardware.wall;
+                boolean same=previousSession==session;
+                if(same&&elapsed<=previousAt)return;
                 double maxTemperature=maximumCpuGpuTemperature();
                 MemoryStats memory=MemoryStats.parse(read("/proc/meminfo"));
                 if(memory!=null&&memory.totalBytes!=memoryTotalBytes){memoryTotalBytes=memory.totalBytes;meta=null;}
-                boolean same=previousSession==session;
-                JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(JSONObject.NULL)
-                    .put(frequency.opt("gpuMHz")).put(number(gpu.utilization())).put(JSONObject.NULL).put(JSONObject.NULL)
+                // CPU/GPU are captured before Binder calls, so slow rendering services cannot delay them.
+                double fps=screen?sampleFps(hardware):Double.NaN;
+                if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
+                if(shared!=null&&!closed)monitorFps.accept(shared,fps);
+                JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(number(fps))
+                    .put(number(hardware.gpuMHz)).put(number(hardware.gpuUsage)).put(JSONObject.NULL).put(JSONObject.NULL)
                     .put(!same||elapsed-previousAt>Math.max(5000,interval*3)?1:0).put(same?elapsed-previousAt:0);
-                JSONArray cpuFrequencies=frequency.getJSONArray("clusters");
                 for(int i=0;i<clusters.size();i++){
                     Cluster c=clusters.get(i);
-                    row.put(cpuFrequencies.getJSONObject(i).opt("mhz"));
-                    row.put(number(same?cpuUsage(c.cpus,online,previousCpu,cpu):Double.NaN));
+                    row.put(number(hardware.policyMHz[i]));
+                    row.put(number(same?cpuUsage(c.cpus,hardware.online,previousCpu,hardware.cpu):Double.NaN));
                 }
                 row.put(number(maxTemperature));
                 row.put(memory==null?JSONObject.NULL:memory.usedGB());
-                // CPU/GPU are captured before Binder calls, so slow rendering services cannot delay them.
-                double fps=screen?fps():Double.NaN;
-                if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
-                row.put(1,number(fps));
-                previousCpu=cpu;previousAt=elapsed;previousSession=session;previousScreen=screen;
+                previousCpu=hardware.cpu;previousAt=elapsed;previousSession=session;previousScreen=screen;
                 if(!closed)sink.accept(session,start,wall,row,metadata());
             }catch(Throwable e){System.err.println("Performance snapshot skipped: "+e.getClass().getSimpleName());}
-            finally{pending.set(false);}
-        });}catch(RejectedExecutionException e){pending.set(false);}
+        });
+        if(!scheduled)sampleMonitorFps(shared);
+    }
+    void sampleMonitorFps(MonitorSample sample){
+        if(sample!=null)submit(monitorPending,()->{
+            double fps=sampleFps(sample.hardware);
+            if(!closed)monitorFps.accept(sample,fps);
+        });
+    }
+    private boolean submit(AtomicBoolean pending,Runnable work){
+        if(closed||!pending.compareAndSet(false,true))return false;
+        try{
+            worker.execute(()->{
+                try{if(!closed)work.run();}
+                finally{pending.set(false);}
+            });
+            return true;
+        }catch(RejectedExecutionException e){pending.set(false);return false;}
+    }
+    private double sampleFps(HardwareSnapshot hardware){
+        if(!hardware.fpsSampled){hardware.fps=fps();hardware.fpsSampled=true;}
+        return hardware.fps;
     }
     @Override public void close(){closed=true;worker.shutdownNow();}
-    private JSONObject frequencies()throws JSONException{
+    private HardwareSnapshot hardware(){
         synchronized(hardwareLock){
             long now=SystemClock.elapsedRealtime();
-            if(frequencySnapshot!=null&&now-frequencyAt<250)return frequencySnapshot;
+            // Close requests from the monitor and recorder share one driver read.
+            if(hardwareSnapshot!=null&&now-hardwareSnapshot.elapsed<50)return hardwareSnapshot;
+            long wall=System.currentTimeMillis();
             if(clusters==null){gpu=discoverGpu();clusters=discoverCpu();}
             Set<Integer> online=cpuList(read("/sys/devices/system/cpu/online"));
-            JSONArray values=new JSONArray();
-            for(Cluster c:clusters)values.put(new JSONObject().put("label",c.label).put("mhz",number(c.frequency(online))));
-            frequencySnapshot=new JSONObject().put("elapsed",now).put("clusters",values).put("gpuMHz",number(gpu.frequency()));
-            frequencyAt=now;return frequencySnapshot;
+            double[] frequencies=new double[clusters.size()];
+            for(int i=0;i<frequencies.length;i++)frequencies[i]=clusters.get(i).frequency(online);
+            hardwareSnapshot=new HardwareSnapshot(now,wall,online,cpuTimes(),frequencies,gpu.frequency(),gpu.utilization());
+            return hardwareSnapshot;
         }
+    }
+
+    MonitorSample monitor(MonitorSample previous){
+        HardwareSnapshot current=hardware();
+        if(previous!=null&&previous.hardware==current)return previous;
+        if(monitorCpus==null||monitorCpus.isEmpty())discoverMonitorCpus(current);
+        double maximum=Double.NaN;
+        double[] usage=new double[monitorCpus.size()];
+        boolean[] online=new boolean[usage.length];
+        for(int i=0;i<usage.length;i++){
+            int id=monitorCpus.get(i);
+            online[i]=current.online(id);
+            usage[i]=Double.NaN;
+            if(!online[i]||previous==null||!previous.hardware.online(id))continue;
+            usage[i]=coreUsage(previous.hardware.cpu.get(id),current.cpu.get(id));
+            if(!(usage[i]>=1))continue;
+            File directory=independentCpuDirectories.get(id);
+            double frequency=directory==null?Double.NaN:readCpuMHz(directory+"/cpuinfo_cur_freq",directory+"/scaling_cur_freq");
+            Integer policy=policyByCpu.get(id);
+            if(!Double.isFinite(frequency)&&policy!=null)frequency=current.policyMHz[policy];
+            if(frequency>0&&(!Double.isFinite(maximum)||frequency>maximum))maximum=frequency;
+        }
+        return new MonitorSample(current,maximum,usage,online,previous==null?Double.NaN:previous.fps);
+    }
+
+    private void discoverMonitorCpus(HardwareSnapshot current){
+        Set<Integer> present=cpuList(read("/sys/devices/system/cpu/present"));
+        present.addAll(current.online);present.addAll(current.cpu.keySet());
+        for(int i=0;i<clusters.size();i++){
+            for(int id:clusters.get(i).cpus){present.add(id);policyByCpu.putIfAbsent(id,i);}
+        }
+        monitorCpus=new ArrayList<>(present);
+        for(int id:monitorCpus){
+            File directory=new File("/sys/devices/system/cpu/cpu"+id+"/cpufreq");
+            Integer policy=policyByCpu.get(id);
+            try{
+                // Most per-core paths are symlinks to the policy directory.
+                if(policy==null||!directory.getCanonicalFile().equals(clusters.get(policy).directory.getCanonicalFile())){
+                    independentCpuDirectories.put(id,directory);
+                }
+            }catch(IOException ignored){
+                if(policy==null)independentCpuDirectories.put(id,directory);
+            }
+        }
+    }
+
+    static double coreUsage(long[] before,long[] after){
+        if(before==null||after==null)return Double.NaN;
+        long total=after[0]-before[0],idle=after[1]-before[1];
+        return total>0&&idle>=0&&idle<=total?(total-idle)*100.0/total:Double.NaN;
     }
     private JSONObject metadata()throws JSONException{
         if(meta!=null)return meta;
@@ -163,7 +271,9 @@ final class PerformanceCollector implements AutoCloseable {
     }
     private static final class Cluster {
         final List<Integer> cpus;final String label,source,fallback;final double maxMHz;
+        final File directory;
         Cluster(Set<Integer> ids,String dir){
+            directory=new File(dir);
             cpus=new ArrayList<>(ids);label="CPU "+cpus.get(0)+(cpus.size()>1?"–"+cpus.get(cpus.size()-1):"");
             source=existing(dir+"/cpuinfo_cur_freq",dir+"/scaling_cur_freq");fallback=dir+"/scaling_cur_freq";
             maxMHz=first(read(existing(dir+"/cpuinfo_max_freq",dir+"/scaling_max_freq")))/1000;
@@ -172,9 +282,13 @@ final class PerformanceCollector implements AutoCloseable {
             boolean any=false;for(int cpu:cpus)if(online.contains(cpu)){any=true;break;}
             if(!any&&!online.isEmpty())return 0;
             // Linux cpufreq policies share a clock; their online cores have the same policy frequency.
-            double value=first(read(source));if(!Double.isFinite(value)||value<=0)value=first(read(fallback));
-            return value>0?value/1000:Double.NaN;
+            return readCpuMHz(source,fallback);
         }
+    }
+    private static double readCpuMHz(String source,String fallback){
+        double value=first(read(source));
+        if(!(value>0)&&!source.equals(fallback))value=first(read(fallback));
+        return value>0?value/1000:Double.NaN;
     }
     private static List<Cluster> discoverCpu(){
         List<Cluster> out=new ArrayList<>();File[] policies=new File("/sys/devices/system/cpu/cpufreq").listFiles();
@@ -199,11 +313,12 @@ final class PerformanceCollector implements AutoCloseable {
     }
     static double cpuUsage(List<Integer> ids,Set<Integer> online,Map<Integer,long[]> before,Map<Integer,long[]> after){
         double sum=0;int count=0;
-        for(int id:ids){long[] a=before.get(id),b=after.get(id);
-            if(a==null||b==null)continue;long total=b[0]-a[0],idle=b[1]-a[1];
-            if(total<0||idle<0||idle>total)continue;
-            if(total==0){if(online.contains(id))continue;count++;continue;}
-            sum+=(total-idle)*100.0/total;count++;
+        for(int id:ids){
+            long[] a=before.get(id),b=after.get(id);
+            if(a==null||b==null)continue;
+            double usage=coreUsage(a,b);
+            if(Double.isFinite(usage)){sum+=usage;count++;}
+            else if(!online.contains(id)&&a[0]==b[0]&&a[1]==b[1])count++;
         }
         // Missing online cores invalidate the cluster instead of biasing the mean downwards.
         for(int id:ids)if(online.contains(id)&&(!before.containsKey(id)||!after.containsKey(id)))return Double.NaN;
@@ -299,13 +414,27 @@ final class PerformanceCollector implements AutoCloseable {
     }
     static double frameRate(long[] times,long now){
         if(times.length==0)return Double.NaN;
-        if(now-times[times.length-1]>1000000000L)return 0; // Valid, stale frame history means no new presented frames.
-        int first=0;while(first<times.length&&times[first]<now-1000000000L)first++;
+        long windowStart=now-FPS_WINDOW_NANOS;
+        int first=0;
+        while(first<times.length&&times[first]<=windowStart)first++;
         int count=times.length-first;
-        if(times.length>=120&&first==0&&count>1){ // The ring may cover less than 1 s at high frame rates.
-            long span=times[times.length-1]-times[0];return span>0?(count-1)*1e9/span:Double.NaN;
+        if(first==0&&count>=3){
+            // SurfaceFlinger may retain less history than the requested window.
+            long latest=times[count-1];
+            double period=(latest-times[0])/(double)(count-1);
+            // Allow for dump latency, but count frames normally once the layer stops updating.
+            if(period>0&&now-latest<=Math.max(TimeUnit.MILLISECONDS.toNanos(50),3*period)){
+                return TimeUnit.SECONDS.toNanos(1)/period;
+            }
         }
-        return count;
+        return count*(TimeUnit.SECONDS.toNanos(1)/(double)FPS_WINDOW_NANOS);
+    }
+    static boolean emptyHistoryCanBeIdle(String report,long lastPresented,long now){
+        if(lastPresented<=0||now-lastPresented<FPS_WINDOW_NANOS)return false;
+        int end=report.indexOf('\n');
+        // A successful --latency report starts with the display period even without frame rows.
+        try{return Long.parseLong((end<0?report:report.substring(0,end)).trim())>0;}
+        catch(NumberFormatException invalid){return false;}
     }
     private double fps(){
         long elapsed=SystemClock.elapsedRealtime();if(elapsed<fpsRetry)return Double.NaN;
@@ -314,15 +443,19 @@ final class PerformanceCollector implements AutoCloseable {
             boolean changed=!pkg.equals(layerPackage);
             if(changed){layer="";layerPackage=pkg;newestFrame=0;}
             long now=System.nanoTime();
+            boolean cachedIdle=false;
             if(!layer.isEmpty()){
-                long[] frames=frameTimes(dump("--latency",layer),now);
+                String history=dump("--latency",layer);
+                now=System.nanoTime();
+                long[] frames=frameTimes(history,now);
                 if(frames.length>0){
                     long latest=frames[frames.length-1];
                     if(latest>newestFrame||elapsed-layerChecked<10000){newestFrame=latest;return frameRate(frames,now);}
-                }
+                    cachedIdle=now-latest>=FPS_WINDOW_NANOS;
+                }else cachedIdle=emptyHistoryCanBeIdle(history,newestFrame,now);
             }
             // Discover only on foreground changes, missing layers, or stale cached layers. No per-tick --list.
-            if(!changed&&elapsed-layerChecked<5000)return Double.NaN;
+            if(!changed&&elapsed-layerChecked<5000)return cachedIdle?0:Double.NaN;
             layerChecked=elapsed;List<String> names=new ArrayList<>();
             for(String line:dump("--list").split("\n")){
                 String name=layerName(line),lower=name.toLowerCase(Locale.ROOT);
@@ -334,9 +467,12 @@ final class PerformanceCollector implements AutoCloseable {
             for(int i=0;i<Math.min(3,names.size());i++){
                 long[] frames=frameTimes(dump("--latency",names.get(i)),System.nanoTime());
                 if(frames.length>0&&frames[frames.length-1]>latest){latest=frames[frames.length-1];best=names.get(i);chosen=frames;}
-                if(i==0&&names.get(i).contains("SurfaceView")&&latest>now-1000000000L)break;
+                if(i==0&&names.get(i).contains("SurfaceView")&&latest>now-FPS_WINDOW_NANOS)break;
             }
-            layer=best;newestFrame=latest;return frameRate(chosen,System.nanoTime());
+            long sampledAt=System.nanoTime();
+            // Retain an idle layer after history eviction, but prefer a layer with newly presented frames.
+            if(cachedIdle&&latest<=sampledAt-FPS_WINDOW_NANOS&&names.contains(layer))return 0;
+            layer=best;newestFrame=latest;return frameRate(chosen,sampledAt);
         }catch(Throwable e){layer="";flinger=null;fpsRetry=elapsed+10000;return Double.NaN;}
     }
 }

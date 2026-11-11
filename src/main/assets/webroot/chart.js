@@ -128,18 +128,20 @@ export function actualAxis(s,scale){
   return{title:`${s.axis} ${unit}`,label:percent=>((scale.base+(scale.full-scale.base)*percent/100)/factor).toFixed(digits)};
 }
 export function timeLabel(ms){
-  const whole=Math.max(0,Math.floor(ms/1000)),h=Math.floor(whole/3600),m=Math.floor(whole%3600/60),s=whole%60;
+  const tenths=Math.max(0,Math.floor(ms/100)),whole=Math.floor(tenths/10),h=Math.floor(whole/3600),m=Math.floor(whole%3600/60),s=whole%60;
   const label=h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;
-  return label;
+  return `${label}.${tenths%10}`;
 }
 export function elapsedMinuteLabel(ms){
   const minutes=Math.max(0,Math.floor(ms/60000));
   return `${Math.floor(minutes/60)}:${String(minutes%60).padStart(2,'0')}`;
 }
-export function systemTimeLabel(wall,precise=false){
+export function systemTimeLabel(wall,precise=false,withYear=false){
   if(!valid(wall))return'—';const date=new Date(wall);if(!Number.isFinite(date.getTime()))return'—';
   const pad=value=>String(value).padStart(2,'0'),clock=`${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  return precise?`${pad(date.getMonth()+1)}/${pad(date.getDate())} ${clock}:${pad(date.getSeconds())}`:clock;
+  if(!precise)return clock;
+  const day=`${withYear?`${date.getFullYear()}/`:''}${pad(date.getMonth()+1)}/${pad(date.getDate())}`;
+  return `${day} ${clock}:${pad(date.getSeconds())}.${Math.floor(date.getMilliseconds()/100)}`;
 }
 export function sampleSystemWall(row,kind,wallByX){
   const wall=kind==='performance'?wallByX?.get(row[0]):row[13];

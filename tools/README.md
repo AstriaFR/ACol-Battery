@@ -36,7 +36,7 @@ APK 与 SHA-256 校验文件输出到 `dist/`，不自动安装或上传。
 
 ## 可选字体处理
 
-仓库包含构建所需的字体资源和生成后的 `PowerGlyphs.java`，普通构建不必重新生成。修改字体时，额外安装：
+仓库包含构建所需的字标字体资源。修改这些字体时，额外安装：
 
 ```sh
 python -m pip install -r tools/requirements-fonts.txt
@@ -44,14 +44,12 @@ python -m pip install -r tools/requirements-fonts.txt
 
 - `subset-brand-font.py`：输入 Nunito 原始字体，生成字标字体子集。
 - `subset-cjk-font.py`：输入源泉圆体原始粗体，生成中文标题字体子集。
-- `generate-power-glyphs.py`：从项目字标字体生成 root 功耗显示路径；支持 `--font` 和 `--output`。
 
 这些工具按脚本所在位置定位项目，不要求从项目上级目录执行。例如：
 
 ```sh
 python tools/subset-brand-font.py /path/to/Nunito.ttf
 python tools/subset-cjk-font.py /path/to/GenSenRounded-Bold.otf
-python tools/generate-power-glyphs.py
 ```
 
 重新生成资源时保留原字体版权及 OFL 许可文件，相关来源见项目的 `THIRD_PARTY_NOTICES.md`。

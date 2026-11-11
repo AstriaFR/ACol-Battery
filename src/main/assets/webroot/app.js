@@ -4,8 +4,8 @@ import{createRecords}from'./records.js?v=acol-2.2s';
 import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
-import{exec,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.2s';
-import{LiveChannel}from'./live-channel.js?v=acol-2.2s';
+import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.2s';
+import{LiveChannel,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
@@ -32,6 +32,8 @@ document.addEventListener('pointerdown',e=>{
 document.addEventListener('selectionchange',()=>{const selection=getSelection();if(selection?.rangeCount)selection.removeAllRanges();});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
 const liveChannel=new LiveChannel();
+liveChannel.setMode(HOME_WATCH_MODE);
+const HOME_REFRESH_MS=1500;
 let lastStatus=null,pollTimer,liveBusy=false,queuedPoll=false,usageNavigation=0;
 let detailPage,batteryHistory,usageDetails,pendingPanel;
 const batteryHistoryRoots={'battery-history':'batteryHistoryPanel','battery-history-detail':'batteryHistoryDetail','battery-history-trend':'batteryTrendPanel'};
@@ -45,9 +47,7 @@ function syncTheme(){
 }
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4500);}
 async function api(action,...args){
-  if(action==='daily_usage'){
-    if(args.length!==3||args.slice(0,2).some(a=>!/^\d+$/.test(String(a)))||!/^[A-Za-z0-9_-]{1,4096}$/.test(String(args[2])))throw Error('使用情况参数无效');
-  }else if(args.some(a=>!/^\d+$/.test(String(a))))throw Error('参数无效');
+  validateApiArgs(action,args);
   if(action==='status')return liveChannel.status();
   if(action==='live'){const packet=await liveChannel.live(args);if(!args[0]||'record'in packet)return packet;}
   const result=await exec(`${command} ${action} ${args.join(' ')}`);
@@ -162,14 +162,14 @@ async function activateTab(tab){
   usageNavigation++;closePendingPanel();usageDetails?.close();
   batteryHistory?.close();batteryPanel.close();
   settingsPanel.closeEditor();
-  liveChannel.setMode(3);
+  liveChannel.setMode(tab==='home'?HOME_WATCH_MODE:tab==='settings'?SETTINGS_WATCH_MODE:SUMMARY_WATCH_MODE);
   await detailPage?.close();
   $('appShell').hidden=false;
   showTab(tab);
   if(tab==='home')homeUsage.prioritize(null);
   syncTheme();
   if(tab==='records')recordsView.open();
-  if(tab==='settings'){prepareCutoff();await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);}
+  if(tab==='settings'){prepareCutoff();await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);schedulePoll(0);}
   else refresh();
 }
 async function requestTab(tab){
@@ -232,7 +232,7 @@ async function openBatteryHistory(state,push=false){
   closePendingPanel();
   usageDetails?.close();batteryPanel.close();settingsPanel.closeEditor();
   await detailPage?.close();if(navigation!==usageNavigation)return;
-  clearTimeout(pollTimer);liveChannel.setMode(3);liveChannel.close();$('appShell').hidden=true;
+  clearTimeout(pollTimer);liveChannel.setMode(SUMMARY_WATCH_MODE);liveChannel.close();$('appShell').hidden=true;
   if(push)history.pushState(state,'',pageUrl(state.page));
   document.title=(state.page==='battery-history'?'电池历史记录':state.page==='battery-history-trend'?'电池健康趋势':'电池快照')+' · ACol 电池';
   if(!batteryHistory){
@@ -253,11 +253,13 @@ async function pollLive(){
   if(document.hidden||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy||detailPage?.busy||recordsView.busy){schedulePoll(200);return;}
   liveBusy=true;queuedPoll=false;
+  const mode=liveChannel.mode,settingsOnly=mode===SETTINGS_WATCH_MODE;
   const started=performance.now(),snapshot=detailPage?.pollRequest()??{id:0,after:0},listSnapshot=recordsView.pollRequest(),infoMode=batteryPanel.active;
   const{id,after,token}=snapshot,{small}=listSnapshot;let failed=false;
   try{
     let packet=await api('live',id,after,0,small,(lastStatus?.session??-1)+1,0);
-    if(infoMode!==batteryPanel.active||batteryHistory?.active)return;
+    if(mode!==liveChannel.mode||infoMode!==batteryPanel.active||batteryHistory?.active)return;
+    if(settingsOnly){lastStatus=packet.status;renderStatus(lastStatus,true);return;}
     if(infoMode){batteryPanel.update(packet);return;}
     const initial=packet,points=[...(packet.points??[])];
     while(id&&valid(packet.nextAfter)&&detailPage.current(token,id)){
@@ -268,17 +270,22 @@ async function pollLive(){
     await recordsView.receive(packet,listSnapshot);
     await detailPage?.receive(packet,snapshot);
   }catch(error){
-    if(infoMode!==batteryPanel.active)return;failed=true;
+    if(mode!==liveChannel.mode||infoMode!==batteryPanel.active)return;failed=true;
     if(infoMode)batteryPanel.error(error.message);else{$('warning').textContent=connectionMessage(error.message);detailPage?.failure();}
   }finally{
-    liveBusy=false;const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:1000;
+    liveBusy=false;
+    const currentMode=liveChannel.mode;
+    const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:
+      currentMode===HOME_WATCH_MODE?HOME_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
     schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
   }
 }
-function renderStatus(s){
+function renderStatus(s,settingsOnly=false){
   applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);$('openCutoff').setAttribute('aria-disabled',String(s.cutoffAvailable===false));
-  const r=s.reading??{};
+  if(settingsOnly)return;
   syncTheme();
+  if($('homePage').hidden||$('appShell').hidden)return;
+  const r=s.reading??{};
   document.querySelector('.live').dataset.flow=s.state===0?'discharge':'charge';
   $('livePct').textContent=valid(r.pct)?fmt(r.pct):'—';$('liveRm').textContent=fmt(r.rm);
   const cells=r.cellCount??s.cellCount;
@@ -313,7 +320,7 @@ async function openUsage(state,push=null){
   if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
   if(navigation!==usageNavigation)return;
   closePendingPanel();
-  batteryHistory?.close();batteryPanel.close();settingsPanel.closeEditor();liveChannel.setMode(3);await detailPage?.close();
+  batteryHistory?.close();batteryPanel.close();settingsPanel.closeEditor();liveChannel.setMode(SUMMARY_WATCH_MODE);await detailPage?.close();
   if(navigation!==usageNavigation)return;
   $('appShell').hidden=true;
   const pageState=usageState({...state,day});

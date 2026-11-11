@@ -125,7 +125,8 @@ const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMi
 async function chartTimes(){
  const{Chart,systemTimeLabel,sampleSystemWall,chartSystemWall,wallTimeTicks,elapsedTimeTicks,elapsedMinuteLabel,timeAxisLabels}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
  const start=new Date(2026,10,2,23,59,30).getTime(),row=Array(14).fill(null);row[0]=60000;row[6]=0;row[13]=start+3600000;
- assert.equal(systemTimeLabel(start),'23:59');assert.equal(systemTimeLabel(start,true),'11/02 23:59:30');
+ assert.equal(systemTimeLabel(start),'23:59');assert.equal(systemTimeLabel(start,true),'11/02 23:59:30.0');
+ assert.equal(systemTimeLabel(start+99,true,true),'2026/11/02 23:59:30.0');
  assert.equal(systemTimeLabel(start+60000),'00:00');assert.equal(systemTimeLabel(null),'—');
  assert.equal(elapsedMinuteLabel(59000),'0:00');assert.equal(elapsedMinuteLabel(5*60000),'0:05');
  assert.equal(elapsedMinuteLabel(65*60000+59000),'1:05');assert.equal(elapsedMinuteLabel(27*3600000),'27:00');
@@ -174,17 +175,17 @@ async function chartTimes(){
  const chart=Object.assign(Object.create(Chart.prototype),{points:[row],window:[0,120000],left:0,right:0,width:120,kind:'charge',startWall:start,tooltip:{},markerLine:{style:{}},positionTooltip(){},enabled:new Set(),signals:()=>[],cellCount:1,
    draw(){throw Error('Moving an inspection marker must not redraw the plot');}});
  Chart.prototype.inspect.call(chart,60,0,true);
- assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(row[13],true)+'\n计时  1:00\n'));
- delete row[13];Chart.prototype.inspect.call(chart,60,0,true);assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(start+60000,true)+'\n计时  1:00'));
+ assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(row[13],true)+'\n计时  1:00.0\n'));
+ delete row[13];Chart.prototype.inspect.call(chart,60,0,true);assert.ok(chart.tooltip.textContent.startsWith('时间  '+systemTimeLabel(start+60000,true)+'\n计时  1:00.0\n'));
  const reads=[];chart.readRawInspection=(from,to,target)=>new Promise(resolve=>reads.push({from,to,target,resolve}));
  chart.inspect(60,0,true);chart.inspect(66,0,true);
  assert.equal(reads.length,1,'dragging coalesces the raw sample reads while IPC is busy');
  const flush=()=>new Promise(setImmediate);
  reads[0].resolve(row);await flush();
  assert.equal(reads[1].target,66000);assert.equal(chart.tooltip.textContent,'正在读取采样点…','an older result must not replace the current tooltip');
- const exact=[...row];exact[0]=65000;reads[1].resolve(exact);await flush();
- assert.equal(chart.marker,65000);assert.match(chart.tooltip.textContent,/计时  1:05/);
- assert.equal(chart.markerLine.hidden,false);assert.equal(chart.markerLine.style.transform,'translateX(65px)');
+ const exact=[...row];exact[0]=65500;exact[13]=new Date(2026,7,3,10,4,5,789).getTime();reads[1].resolve(exact);await flush();
+ assert.equal(chart.marker,65500);assert.match(chart.tooltip.textContent,/^时间  08\/03 10:04:05\.7\n计时  1:05\.5\n/);
+ assert.equal(chart.markerLine.hidden,false);assert.equal(chart.markerLine.style.transform,'translateX(65.5px)');
  chart.clearInspect();assert.equal(chart.markerLine.hidden,true);
 }
 
