@@ -228,7 +228,7 @@ final class RecordStore {
                 if(first!=null&&g!=group) {flushBucket(result,bucket,first,last,lo,hi);bucket.clear();Arrays.fill(lo,null);Arrays.fill(hi,null);first=last=null;}
                 group=g;if(first==null)first=point;
                 if(last!=null) {
-                    boolean split=false;
+                    boolean split=((int)point[6]&Core.REBOOT_GAP)!=0;
                     for(int i=1;i<=5;i++)if(Core.finite(last[i])!=Core.finite(point[i])){split=true;break;}
                     if(Core.finite(last[10])!=Core.finite(point[10]))split=true;
                     if(Core.finite(last[14])!=Core.finite(point[14]))split=true;

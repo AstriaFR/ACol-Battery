@@ -293,8 +293,15 @@ final class DeferredStats {
                     }
                     long dt=current.x-previous.x;if(dt<=0)continue;
                     boolean gap=(current.quality&9)!=0||Math.abs(current.wall-previous.wall-dt)>2000;
+                    boolean rebooted=(current.quality&Core.REBOOT_GAP)!=0;
                     boolean unknown=((current.quality|previous.quality)&16)!=0;
-                    if(current.wall<=previous.wall){timeline.seed(current.screen,false);eventIndex=0;while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)timeline.apply(events.get(eventIndex++));}
+                    if(rebooted||current.wall<=previous.wall){
+                        timeline.seed(current.screen,false);eventIndex=0;
+                        while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall){
+                            Core.Event event=events.get(eventIndex++);
+                            if(!rebooted)timeline.apply(event);
+                        }
+                    }
                     int first=eventIndex;while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)eventIndex++;
                     ScreenUsage.Builder spans=new ScreenUsage.Builder();Map<String,Long> split;
                     if(gap||unknown){split=Collections.singletonMap(Core.OTHER,dt);for(int i=first;i<eventIndex;i++)timeline.apply(events.get(i));if(gap)depletion.reset();}
@@ -302,7 +309,7 @@ final class DeferredStats {
                     ScreenUsage.Builder mapped=!gap&&!unknown?spans.onRecordClock(previous.wall,current.wall,wallStart+previous.x,wallStart+current.x):null;
                     if(mapped!=null){split=new LinkedHashMap<>();for(ScreenUsage.AppSpan span:mapped.apps)split.put(span.pkg,split.getOrDefault(span.pkg,0L)+span.end-span.start);}
                     boolean discharging=!game||current.discharge;
-                    if(discharging){
+                    if(discharging&&!rebooted){
                         double loss=gap?Double.NaN:depletion.consume(previous.rm,current.rm,dt,current.maxGap);
                         double energy=Core.dischargeEnergyMwh(previous.voltage,current.voltage,loss);
                         for(Map.Entry<String,Long> part:split.entrySet())result.apps.computeIfAbsent(part.getKey(),pkg->new UsageTotal()).add(part.getValue(),dt,loss,energy);

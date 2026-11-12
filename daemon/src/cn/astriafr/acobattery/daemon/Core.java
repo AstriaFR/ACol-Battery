@@ -5,6 +5,7 @@ import java.util.*;
 /** Hardware-independent rules. All time arguments are monotonic milliseconds. */
 public final class Core {
     static final int UNCLASSIFIED_CELLS=32;
+    static final int REBOOT_GAP=64;
     public static final class Reading {
         public long elapsed, wall;
         public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
@@ -35,11 +36,18 @@ public final class Core {
         return microampHours>=0&&microampHours<=Integer.MAX_VALUE?microampHours/1000.0:Double.NaN;
     }
     static boolean sameBoot(String savedBoot,String boot){return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot);}
-    /** elapsedRealtime survives a framework restart, but never a kernel reboot. */
     public static boolean resumeSession(String savedBoot,String boot,String kind,boolean wasFast,
             boolean online,boolean fast,long start,long end,long now) {
-        return sameBoot(savedBoot,boot)&&start>=0&&end>=start&&now>=end
+        if(savedBoot==null||savedBoot.isEmpty()||boot==null||boot.isEmpty()||now<0||end<0||end<start||end-start<0)return false;
+        return (sameBoot(savedBoot,boot)?now>=end:!fast&&!wasFast)
             &&(fast?wasFast&&"discharge".equals(kind):!wasFast&&(online?"charge":"discharge").equals(kind));
+    }
+    static Long rebaseSessionStart(long start,long end,long lastWall,Reading current){
+        long duration=end-start;
+        long wallGap=lastWall>0&&current.wall>lastWall?current.wall-lastWall:0;
+        long gap=Math.max(Math.max(1,current.elapsed),wallGap);
+        // Keep sample offsets relative to the same record start in the new boot's clock.
+        return duration<0||duration>Long.MAX_VALUE-gap?null:current.elapsed-(duration+gap);
     }
     public static boolean gameDischargeInterval(Reading before,Reading after){
         return before.onlineKnown&&after.onlineKnown&&!before.online&&!after.online;

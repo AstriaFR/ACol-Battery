@@ -234,6 +234,9 @@ const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/
  chart.kind='charge';const gap=[row(0,0),row(200,200,1),row(400,0)];
  assert.equal(hit(100,125,gap),false,'charging gaps must not be joined');
  chart.kind='discharge';assert.equal(hit(100,125,gap),true,'ordinary discharge intentionally reconnects gaps');
+ const reboot=[row(0,0),row(200,200,64|9),row(400,0)];
+ assert.equal(hit(100,125,reboot),false,'a reboot boundary must interrupt the discharge curve');
+ assert.equal(hit(200,200,reboot),true,'the first real sample after reboot stays visible');
  assert.equal(ctx.transform,2);assert.equal(ctx.lineWidth,1);assert.equal(ctx.states.length,0);
 }
 

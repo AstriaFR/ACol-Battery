@@ -175,7 +175,6 @@ public final class Main {
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
             catch(Throwable e){
                 if(app.framework!=null)app.framework.close();
-                synchronized(app.mutex){app.restoreGaugeInterval();}
                 app.powerIndicator.close();
                 try{StartupFailure.record(Owner.BASE,attempt,e);}catch(Throwable reportError){e.addSuppressed(reportError);}
                 StartupFailure.print(e,System.err);System.exit(1);
@@ -437,11 +436,8 @@ public final class Main {
     long powerIntervalMs(){return Math.round(settings.optDouble("fastSeconds",DEFAULT_GAME_SECONDS)*1000);}
     private boolean gaugeIntervalOverride(){return settings.optBoolean("gaugeIntervalOverride",false);}
     private void updateGaugeInterval(){
-        if(gaugeUpdate==null)return;
-        if(gaugeIntervalOverride()&&(fastEnabled||powerIndicator.state.enabled))gaugeUpdate.apply(powerIntervalMs());
-        else restoreGaugeInterval();
+        if(gaugeUpdate!=null&&gaugeIntervalOverride()&&(fastEnabled||powerIndicator.state.enabled))gaugeUpdate.apply(powerIntervalMs());
     }
-    private void restoreGaugeInterval(){if(gaugeUpdate!=null)gaugeUpdate.restore(!gaugeIntervalOverride());}
     void configureSampling(boolean reschedule){
         long oldInterval=interval();
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
@@ -678,12 +674,13 @@ public final class Main {
     }
     void collect(String attempt) throws Exception {
         synchronized(mutex) {
+            if(gaugeUpdate!=null)gaugeUpdate.recoverPending();
             updateGaugeInterval();
             Core.Reading r=hardwareReading(header);latest=r;
             String problem=RecordingGate.problem(r.rm,r.pct);
             if(!problem.isEmpty()&&!fastEnabled){
                 boolean resumable=false;
-                if(recordingEnabled)try(Cursor saved=db.rawQuery("SELECT 1 FROM sessions WHERE active=1 AND fast_seconds=0 AND boot=? LIMIT 1",new String[]{boot})){
+                if(recordingEnabled)try(Cursor saved=db.rawQuery("SELECT 1 FROM sessions WHERE active=1 AND fast_seconds=0 AND boot<>'' LIMIT 1",null)){
                     resumable=saved.moveToFirst();
                 }
                 if(!resumable){RecordingGate.pause(data,problem);recordingProblem=problem;recordingEnabled=false;}
@@ -771,7 +768,6 @@ public final class Main {
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
         framework.close();performance.close();powerIndicator.close();usageWorker.shutdownNow();
         synchronized(mutex) {
-            restoreGaugeInterval();
             // Updating code or reconnecting framework proxies suspends ownership,
             // not the charge/discharge session. Completed samples are already durable.
             if(!Core.resumableStop(stopReason)){stopGame(null,stopReason);finish(stopReason);}
@@ -842,7 +838,7 @@ public final class Main {
         requirePower(r);
         session=-1;previous=null;fullGate.reset();depletion.reset();timelineReady=false;
         fastStatsPrevious=null;fastStatsNext=Long.MAX_VALUE;recoveryBoundary=false;
-        JSONObject progress=null;
+        JSONObject progress=null;boolean rebooted=false;
         try{String value=runtimeValue(gameContext?"game_progress_v1":"session_progress_v1");if(gameContext&&value.isEmpty())value=runtimeValue("session_progress_v1");if(!value.isEmpty())progress=new JSONObject(value);}
         catch(JSONException e){System.err.println("Recorder checkpoint unavailable; using committed samples.");}
         db.beginTransaction();
@@ -852,13 +848,19 @@ public final class Main {
                     long id=c.getLong(0);
                     boolean game=c.getDouble(6)>0;
                     if(game!=gameContext)continue;
-                    if(session<0&&Core.resumeSession(c.getString(1),boot,c.getString(2),game,
-                            r.online,gameContext,c.getLong(3),c.getLong(4),r.elapsed)){
-                        Core.Reading saved=lastSample(id,c.getLong(3),c.getLong(5));
-                        if(saved!=null&&saved.elapsed>=c.getLong(3)&&saved.elapsed<=c.getLong(4)&&saved.elapsed<=r.elapsed){
-                            session=id;startElapsed=c.getLong(3);startWall=c.getLong(5);clockAdjusted=c.getInt(7)!=0;state=gameContext?0:r.online?1:0;
+                    String savedBoot=c.getString(1),kind=c.getString(2);
+                    boolean sameBoot=Core.sameBoot(savedBoot,boot);
+                    long savedStart=c.getLong(3),savedEnd=c.getLong(4),wallStart=c.getLong(5);
+                    if(session<0&&Core.resumeSession(savedBoot,boot,kind,game,r.online,gameContext,savedStart,savedEnd,r.elapsed)){
+                        Core.Reading saved=lastSample(id,savedStart,wallStart);
+                        Long resumedStart=sameBoot?Long.valueOf(savedStart):saved==null?null:Core.rebaseSessionStart(savedStart,savedEnd,saved.wall,r);
+                        if(resumedStart!=null&&saved!=null&&saved.elapsed>=savedStart&&saved.elapsed<=savedEnd){
+                            session=id;startElapsed=resumedStart;startWall=wallStart;clockAdjusted=c.getInt(7)!=0;state=gameContext?0:r.online?1:0;
+                            rebooted=!sameBoot;
+                            if(rebooted)saved.elapsed=startElapsed+(saved.elapsed-savedStart);
                             if(state==1)fullGate.vendorLogSeen=(""+id).equals(runtimeValue("charge_log_session"));
-                            if(progress!=null&&progress.optLong("session",-1)==id&&boot.equals(progress.optString("boot"))){
+                            boolean hasCheckpoint=sameBoot&&progress!=null&&progress.optLong("session",-1)==id&&boot.equals(progress.optString("boot"));
+                            if(hasCheckpoint){
                                 Core.Reading checkpoint=restoreReading(progress.optJSONObject("previous"));
                                 if(checkpoint!=null&&checkpoint.elapsed==saved.elapsed&&checkpoint.elapsed<=r.elapsed)saved=checkpoint;
                                 depletion.restore(progress.optDouble("credit",0));
@@ -873,8 +875,7 @@ public final class Main {
                                 }
                             }
                             previous=saved;recoveryBoundary=true;
-                            sampling.restoreExpected(progress!=null&&progress.optLong("session",-1)==id
-                                ?progress.optLong("expectedMs",interval()):interval());
+                            sampling.restoreExpected(hasCheckpoint?progress.optLong("expectedMs",interval()):interval());
                             // Older collectors did not persist the minute accounting anchor.
                             // Start that anchor here instead of double-counting an old minute.
                             if(gameContext&&fastStatsPrevious==null){fastStatsPrevious=r;fastStatsNext=r.elapsed+60000;}
@@ -882,14 +883,17 @@ public final class Main {
                             continue;
                         }
                     }
-                    db.execSQL("UPDATE sessions SET active=0,reason=? WHERE id=?",new Object[]{boot.equals(c.getString(1))?"collector_restart":"reboot",id});
+                    String reason=sameBoot?"collector_restart":"reboot";
+                    if(!game&&(r.online?"discharge":"charge").equals(kind))reason=r.online?"plugged":"unplugged";
+                    db.execSQL("UPDATE sessions SET active=0,reason=? WHERE id=?",new Object[]{reason,id});
                     db.delete("sessions","id=? AND "+smallRecordWhere(settings),new String[]{""+id});
                     settingsVersion++;
                 }
             }
             if(session>=0){
+                if(rebooted)db.execSQL("UPDATE sessions SET boot=?,start_elapsed=? WHERE id=?",new Object[]{boot,startElapsed,session});
                 if(gameContext)saveGameIntervals(session);
-                append(r);
+                append(r,rebooted);
             }
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
@@ -900,9 +904,9 @@ public final class Main {
         state=gameContext?0:r.online?1:0;begin(r);
     }
     Core.Reading lastSample(long id,long start,long wall){
-        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,cell1,cell2,temp,online,quality FROM samples WHERE session=? ORDER BY x DESC LIMIT 1",new String[]{""+id})){
+        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,cell1,cell2,temp,online,quality,wall FROM samples WHERE session=? ORDER BY x DESC LIMIT 1",new String[]{""+id})){
             if(!c.moveToFirst())return null;
-            Core.Reading r=new Core.Reading();r.elapsed=start+c.getLong(0);r.wall=wall+c.getLong(0);
+            Core.Reading r=new Core.Reading();r.elapsed=start+c.getLong(0);r.wall=c.isNull(10)?wall+c.getLong(0):c.getLong(10);
             r.rm=c.isNull(1)?Double.NaN:c.getDouble(1);r.pct=c.isNull(2)?Double.NaN:c.getDouble(2);
             r.current=c.isNull(3)?Double.NaN:-c.getDouble(3);r.vmin=r.vmax=c.isNull(4)?Double.NaN:c.getDouble(4);
             r.cell1=c.isNull(5)?Double.NaN:c.getDouble(5);r.cell2=c.isNull(6)?Double.NaN:c.getDouble(6);
@@ -979,6 +983,9 @@ public final class Main {
         fastStatsPrevious=null;fastStatsNext=Long.MAX_VALUE;
     }
     void append(Core.Reading r)throws Exception {
+        append(r,false);
+    }
+    private void append(Core.Reading r,boolean rebooted)throws Exception {
         latest=r;if(!r.onlineKnown||session<0)return;
         long dt=previous==null?0:r.elapsed-previous.elapsed;
         if(previous!=null&&dt<=0)return;
@@ -986,15 +993,16 @@ public final class Main {
         boolean resumed=recoveryBoundary||powerGap;
         boolean newClock=!clockAdjusted&&(Math.abs(r.wall-(startWall+r.elapsed-startElapsed))>2000);
         if(resumed)quality|=9; // Bit 8 labels a resumed boundary; short discharge intervals are still ignored.
-        if(previous!=null&&dt>sampling.maxGap()){quality|=1;missed=Math.max(0,dt/sampling.expected-1);}
+        if(rebooted)quality|=Core.REBOOT_GAP;
+        else if(previous!=null&&dt>sampling.maxGap()){quality|=1;missed=Math.max(0,dt/sampling.expected-1);}
         if(!r.valid() || !r.error.isEmpty())quality|=4;
         if(r.cellCount==0)quality|=Core.UNCLASSIFIED_CELLS;
         boolean fast=state==0&&gameContext;
         boolean powerBoundary=fast&&previous!=null&&(!previous.onlineKnown||previous.online!=r.online);
         double loss=0;
         if(state==0&&previous!=null&&!fast) {
-            if(powerGap){depletion.reset();loss=Double.NaN;}else loss=depletion.consume(previous.rm,r.rm,dt,sampling.maxGap());
-            if(!Core.finite(loss))quality|=2;
+            if(powerGap||rebooted){depletion.reset();loss=Double.NaN;}else loss=depletion.consume(previous.rm,r.rm,dt,sampling.maxGap());
+            if(!rebooted&&!Core.finite(loss))quality|=2;
         }
         double energy=state==0&&previous!=null&&(quality&3)==0
             ?Core.dischargeEnergyMwh(previous.voltage(),r.voltage(),loss):Double.NaN;
@@ -1007,7 +1015,7 @@ public final class Main {
         try {
             if(newClock)db.execSQL("UPDATE sessions SET clock_adjusted=1 WHERE id=?",new Object[]{session});
             db.execSQL("INSERT OR IGNORE INTO samples(session,x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall,memory_used,memory_total) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.displayVoltage()),nullable(recordedPower),quality,state==0&&previous!=null?dt:null,nullable(r.cell1),nullable(r.cell2),nullable(r.temp),r.online?1:0,r.wall,nullable(state==0&&!fast?r.memoryUsedGB:Double.NaN),nullable(state==0&&!fast?r.memoryTotalGB:Double.NaN)});
+                new Object[]{session,r.elapsed-startElapsed,nullable(r.rm),nullable(r.pct),state==1||fast?nullable(r.chargingCurrent()):null,nullable(r.displayVoltage()),nullable(recordedPower),quality,state==0&&previous!=null&&!rebooted?dt:null,nullable(r.cell1),nullable(r.cell2),nullable(r.temp),r.online?1:0,r.wall,nullable(state==0&&!fast?r.memoryUsedGB:Double.NaN),nullable(state==0&&!fast?r.memoryTotalGB:Double.NaN)});
             if(state==1&&r.online&&r.vendorLogRead&&!fullGate.vendorLogSeen)
                 db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('charge_log_session',?)",new Object[]{""+session});
             if(powerBoundary){
@@ -1018,7 +1026,7 @@ public final class Main {
                 sampleFastStats(ending,true,resumed);
                 depletion.reset();timelineReady=false;fastStatsPrevious=r;fastStatsNext=r.elapsed+60000;
             }else if(fast)sampleFastStats(r,resumed,resumed);
-            else if(state==0&&previous!=null&&!deferred.owns(session))attribute(previous,r,loss,(quality&3)!=0,energy);
+            else if(state==0&&previous!=null&&!rebooted&&!deferred.owns(session))attribute(previous,r,loss,(quality&3)!=0,energy);
             if(state==0&&!fast&&deferred.owns(session))deferred.raw(session,startElapsed,r,newClock?quality|16:quality,sampling.maxGap());
             db.execSQL("UPDATE sessions SET end_elapsed=?,pct_end=?,rm_end=?,missed=missed+?,anomalies=anomalies+? WHERE id=?",
                 new Object[]{r.elapsed,nullable(r.pct),nullable(r.rm),missed,(quality&6)!=0?1:0,session});

@@ -16,7 +16,6 @@ final class GaugeUpdate {
     private final Path active,value;
     private final File journal;
     private final String boot;
-    private long applied=-1;
 
     GaugeUpdate(File data,String boot){this(NODE,new File(data,"gauge-update.state"),boot);}
 
@@ -47,8 +46,7 @@ final class GaugeUpdate {
             Change pending=readJournal();
             State before=read();
             if(pending!=null){
-                if(applied==intervalMs&&pending.interval==intervalMs&&before.matches(true,intervalMs))return;
-                restore(pending,before);
+                completePending(pending,before);
                 before=read();
             }
             if(before.matches(true,intervalMs))return;
@@ -59,25 +57,26 @@ final class GaugeUpdate {
                 if(before.value!=intervalMs)write(value,intervalMs);
                 write(active,1);
                 if(!read().matches(true,intervalMs))throw new IOException();
-                applied=intervalMs;
             }catch(IOException|RuntimeException ignored){
-                try{restore(change,read());}catch(IOException|RuntimeException ignoredRollback){}
+                restore(change,read());
+                return;
             }
+            Files.deleteIfExists(journal.toPath());
         }catch(IOException|RuntimeException ignored){}
     }
 
-    void restore(boolean keepApplied){
+    void recoverPending(){
         if(boot.isEmpty())return;
         try {
             Change change=readJournal();
-            if(change==null)return;
-            State current=read();
-            if(keepApplied&&!change.driverDefault&&current.matches(true,change.interval)){
-                // Turning off future overrides leaves a successfully applied interval in place.
-                Files.deleteIfExists(journal.toPath());
-                applied=-1;
-            }else restore(change,current);
+            if(change!=null)completePending(change,read());
         }catch(IOException|RuntimeException ignored){}
+    }
+
+    private void completePending(Change change,State current)throws IOException {
+        // A matching override is committed even if the process exited before clearing its journal.
+        if(!change.driverDefault&&current.matches(true,change.interval))Files.deleteIfExists(journal.toPath());
+        else restore(change,current);
     }
 
     void restoreDriverDefault(){
@@ -132,7 +131,6 @@ final class GaugeUpdate {
     }
 
     private void restore(Change change,State current)throws IOException {
-        applied=-1;
         State original=change.original;
         // The target value can be visible before force_active has been written.
         boolean ours=current.value==change.interval&&(current.active||!original.active);

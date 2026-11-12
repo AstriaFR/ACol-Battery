@@ -61,8 +61,8 @@ public final class RecoveryDatabaseTest {
         for(boolean reboot:new boolean[]{false,true}){
             File dir=Files.createTempDirectory("acol-recovery-split-").toFile();Main first=open(dir,"boot-a");
             first.state=0;first.begin(reading(10000,5000,false));long old=first.session;release(first);
-            Main next=open(dir,reboot?"boot-b":"boot-a");next.recover(reading(reboot?1000:11000,4999,!reboot));
-            check(next.session!=old);check(next.state==(reboot?0:1));check(value(next,"SELECT COUNT(*) FROM sessions WHERE active=1")==1);release(next);
+            Main next=open(dir,reboot?"boot-b":"boot-a");next.recover(reading(reboot?1000:11000,4999,true));
+            check(next.session!=old);check(next.state==1);check(value(next,"SELECT COUNT(*) FROM sessions WHERE active=1")==1);release(next);
         }
         File dir=Files.createTempDirectory("acol-recovery-full-").toFile();Main first=open(dir,"boot-a");
         first.state=1;first.begin(reading(10000,5000,true));first.finish("full_tail_confirmed");release(first);
@@ -73,6 +73,26 @@ public final class RecoveryDatabaseTest {
         logged.begin(observed);long loggedId=logged.session;check(logged.fullGate.vendorLogSeen);release(logged);
         Main restored=open(logDir,"boot-a");restored.recover(reading(12000,5001,true));
         check(restored.session==loggedId&&restored.fullGate.vendorLogSeen&&restored.fullGate.electricalDuration()==600000);release(restored);
+    }
+    static void rebootResume()throws Exception {
+        for(boolean online:new boolean[]{false,true}){
+            File dir=Files.createTempDirectory("acol-recovery-reboot-").toFile();Main first=open(dir,"boot-a");
+            Core.Reading initial=reading(10000,5000,online),before=reading(40000,4990,online);
+            first.state=online?1:0;first.begin(initial);first.append(before);long id=first.session;release(first);
+            Core.Reading after=reading(1000,4980,online);after.wall=before.wall+30000;
+            Main next=open(dir,"boot-b");next.recover(after);
+            long resumedX=before.elapsed-initial.elapsed+after.wall-before.wall;
+            check(next.session==id&&next.startWall==initial.wall);
+            check(value(next,"SELECT COUNT(*) FROM sessions")==1);
+            check(value(next,"SELECT x FROM samples ORDER BY x DESC LIMIT 1")==resumedX);
+            check(value(next,"SELECT COUNT(*) FROM samples WHERE (quality&"+Core.REBOOT_GAP+")!=0 AND interval_ms IS NULL")==1);
+            if(!online)check(value(next,"SELECT power IS NULL FROM samples ORDER BY x DESC LIMIT 1")==1);
+            release(next);
+            Main twice=open(dir,"boot-b");Core.Reading later=reading(after.elapsed+1000,4970,online);later.wall=after.wall+1000;
+            twice.recover(later);check(twice.session==id);
+            check(value(twice,"SELECT x FROM samples ORDER BY x DESC LIMIT 1")==resumedX+later.elapsed-after.elapsed);
+            release(twice);
+        }
     }
     static void damagedCheckpointAndRollback()throws Exception {
         File dir=Files.createTempDirectory("acol-recovery-rollback-").toFile();Main first=open(dir,"boot-a");
@@ -136,7 +156,7 @@ public final class RecoveryDatabaseTest {
         Class<?> activityThread=Class.forName("android.app.ActivityThread");
         Object thread=activityThread.getMethod("systemMain").invoke(null);
         context=(android.content.Context)activityThread.getMethod("getSystemContext").invoke(thread);
-        sameBootAndLegacy();fastMinuteAnchor();splitAndTail();damagedCheckpointAndRollback();samplingSettings();standaloneGameWaitsForReadings();
+        sameBootAndLegacy();fastMinuteAnchor();splitAndTail();rebootResume();damagedCheckpointAndRollback();samplingSettings();standaloneGameWaitsForReadings();
         System.out.println("SQLite recovery: legacy upgrade, repeated resume, game minute accounting, power transition, kernel reboot, completed tail, charging, corrupt checkpoint and transaction rollback passed");
         System.exit(0);
     }

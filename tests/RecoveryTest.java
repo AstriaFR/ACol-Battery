@@ -1,6 +1,6 @@
 package cn.astriafr.acobattery.daemon;
 
-/** Recovery decisions must not merge separate boots, power states or modes. */
+/** Ordinary recovery can cross boots while keeping power state and sample order. */
 public final class RecoveryTest {
     static void check(boolean value){if(!value)throw new AssertionError();}
     static boolean resume(String saved,String boot,String kind,boolean wasFast,boolean online,boolean fast,long end,long now){
@@ -25,7 +25,10 @@ public final class RecoveryTest {
         check(resume("boot-a","boot-a","charge",false,true,false,2000,2300));
         check(resume("boot-a","boot-a","discharge",true,false,true,2000,2300));
         check(resume("boot-a","boot-a","discharge",true,true,true,2000,2300));
-        check(!resume("boot-a","boot-b","discharge",false,false,false,2000,2300));
+        check(resume("boot-a","boot-b","discharge",false,false,false,2000,500));
+        check(resume("boot-a","boot-b","charge",false,true,false,2000,500));
+        check(!resume("boot-a","boot-b","charge",false,false,false,2000,500));
+        check(!resume("boot-a","boot-b","discharge",true,false,true,2000,500));
         check(!resume("boot-a","boot-a","discharge",false,true,false,2000,2300));
         check(!resume("boot-a","boot-a","charge",false,false,false,2000,2300));
         check(!resume("boot-a","boot-a","discharge",true,false,false,2000,2300));
@@ -35,6 +38,12 @@ public final class RecoveryTest {
         check(!resume("","","discharge",false,false,false,2000,2300));
         check(!resume(null,null,"discharge",false,false,false,2000,2300));
         check(resume("boot-a","boot-a","discharge",false,false,false,2000,2000));
+        Core.Reading bootReading=new Core.Reading();bootReading.elapsed=500;bootReading.wall=12000;
+        long start=Core.rebaseSessionStart(1000,2000,9000,bootReading);
+        check(bootReading.elapsed-start==(2000-1000)+(12000-9000));
+        check(Core.resumeSession("boot-b","boot-b","discharge",false,false,false,start,500,600));
+        bootReading.wall=7000;
+        check(bootReading.elapsed-Core.rebaseSessionStart(1000,2000,9000,bootReading)==(2000-1000)+bootReading.elapsed);
         check(Core.resumableStop("service_updated"));check(Core.resumableStop("framework_restarted"));
         for(String reason:new String[]{"recording_stopped","app_uninstalled","plugged","unplugged","full_tail_confirmed","fast_stopped"})
             check(!Core.resumableStop(reason));

@@ -22,21 +22,22 @@ public final class GaugeUpdateTest {
             GaugeUpdate first=new GaugeUpdate(dir,journal.toFile(),"boot-a");
             first.apply(2000);
             state(active,value,"1","2000");
-            check(Files.exists(journal),"Original state must survive process exit");
+            check(!Files.exists(journal),"Successful overrides do not leave a restore journal");
 
+            Files.writeString(journal,"boot-a 0 10000 2000"); // A completed write from the previous version.
             GaugeUpdate restarted=new GaugeUpdate(dir,journal.toFile(),"boot-a");
-            restarted.apply(2000);
+            restarted.recoverPending();
             state(active,value,"1","2000");
+            check(!Files.exists(journal),"A completed override must survive a recorder restart");
             restarted.apply(1500);
             state(active,value,"1","1500");
-            restarted.restore(false);
-            state(active,value,"0","10000");
-            check(!Files.exists(journal),"Successful restore must clear the journal");
+            restarted.restoreDriverDefault();
+            state(active,value,"0","1500");
 
             // The process died after force_val changed and before force_active changed.
             Files.writeString(journal,"boot-a 0 10000 500");
             Files.writeString(value,"500");
-            new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
+            new GaugeUpdate(dir,journal.toFile(),"boot-a").recoverPending();
             state(active,value,"0","10000");
 
             if(System.getProperty("os.name","").startsWith("Windows")){
@@ -50,17 +51,19 @@ public final class GaugeUpdateTest {
 
             // Respect an interval changed by another client or carried by a new kernel boot.
             first.apply(500);
+            Files.writeString(journal,"boot-a 0 10000 500");
             Files.writeString(value,"3000");
-            restarted.restore(false);
+            restarted.recoverPending();
             state(active,value,"1","3000");
             check(!Files.exists(journal),"External changes release ownership");
             first.apply(500);
-            new GaugeUpdate(dir,journal.toFile(),"boot-b").restore(false);
+            Files.writeString(journal,"boot-a 0 10000 500");
+            new GaugeUpdate(dir,journal.toFile(),"boot-b").recoverPending();
             state(active,value,"1","500");
             check(!Files.exists(journal),"Discard journal from an earlier boot");
 
             restarted.apply(1500);
-            new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
+            new GaugeUpdate(dir,journal.toFile(),"boot-a").recoverPending();
             state(active,value,"1","1500");
             check(!Files.exists(journal),"A disabled switch must retain the applied interval across restarts");
 
@@ -78,7 +81,7 @@ public final class GaugeUpdateTest {
                     state(active,value,"1","2000");
                     check(Files.exists(journal),"An interrupted default reset must be retryable");
                 }finally{Files.setAttribute(active,"dos:readonly",false);}
-                new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
+                new GaugeUpdate(dir,journal.toFile(),"boot-a").recoverPending();
                 state(active,value,"0","2000");
                 check(!Files.exists(journal),"Retry must release forcing");
             }

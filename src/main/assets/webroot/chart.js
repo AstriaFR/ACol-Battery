@@ -1,6 +1,7 @@
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
+const rebootGap=64;
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
@@ -373,7 +374,7 @@ export class Chart{
   }
   hitCurve(pixel,y,visible){
     if(pixel<this.left||pixel>this.width-this.right||y<this.top-2||y>this.bottom+2)return false;
-    const connected=this.kind==='discharge'&&!this.fast,ctx=this.ctx;
+    const gapMask=this.kind==='discharge'&&!this.fast?rebootGap:3,ctx=this.ctx;
     ctx.save();
     try{
       // Pointer coordinates are CSS pixels, independent of the display density.
@@ -386,7 +387,7 @@ export class Chart{
           ctx.beginPath();this.traceSignal(ctx,segment,s,scale);return ctx.isPointInStroke(pixel,y);
         };
         for(const row of visible){
-          if(!valid(row[s.index])||!connected&&(row[6]&3)){
+          if(!valid(row[s.index])||(row[6]&gapMask)){
             if(hit())return true;segment=[];
             if(!valid(row[s.index]))continue;
           }
@@ -442,7 +443,8 @@ export class Chart{
   showInspection(row,y){
     this.marker=row[0];this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
-    this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${row[6]&8?' · 后台衔接':row[6]&~unclassifiedCells?' · 数据异常':''}\n`+
+    const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~unclassifiedCells?' · 数据异常':'';
+    this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${quality}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
@@ -514,7 +516,7 @@ export class Chart{
     if(lo!==-110){ctx.beginPath();ctx.moveTo(this.left,bottom);ctx.lineTo(w-this.right,bottom);ctx.stroke();}
     // The 110% grid line retains the same weight as other minor grid lines.
     if(hi!==110){ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(w-this.right,top);ctx.stroke();}
-    const connected=this.kind==='discharge'&&!this.fast;
+    const gapMask=this.kind==='discharge'&&!this.fast?rebootGap:3;
     selected.forEach(s=>{
       const scale=scales.get(s.key)??this.scaleFor(s);
       const map=p=>[this.left+(p[0]-this.window[0])/(this.window[1]-this.window[0])*pw,mapY(scalePercent(p[s.index],scale))];
@@ -526,7 +528,7 @@ export class Chart{
         this.traceSignal(ctx,segment,s,scale);
         ctx.stroke();if(segment.length===1){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
       };
-      for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(!connected&&(p[6]&3))flush();segment.push(map(p));}flush();ctx.restore();
+      for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(p[6]&gapMask)flush();segment.push(map(p));}flush();ctx.restore();
     });
     if(!visible.length||!selected.length){ctx.fillStyle=cssColor('--plot-label','#64748b');ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
     this.refreshInspection();

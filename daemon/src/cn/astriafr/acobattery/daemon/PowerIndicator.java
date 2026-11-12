@@ -31,10 +31,10 @@ final class PowerIndicator implements AutoCloseable {
     private static final int FPS_COLOR=Color.rgb(155,213,255);
     private static final int BACKGROUND=Color.argb(140,19,20,23);
     private static final int BATTERY_TRACK=Color.argb(48,248,248,248);
-    private static final int BATTERY_LOW=Color.rgb(255,91,94), BATTERY_CHARGING=Color.rgb(103,232,145);
+    private static final int BATTERY_CHARGING=Color.rgb(103,232,145);
     private static final int USAGE_TRACK=Color.argb(80,210,221,235);
-    private static final int USAGE_BLUE=Color.rgb(109,199,255), USAGE_YELLOW=Color.rgb(250,218,82);
-    private static final int USAGE_ORANGE=Color.rgb(255,153,68), USAGE_RED=Color.rgb(255,91,94);
+    private static final int USAGE_BLUE=Color.rgb(109,199,255), YELLOW=Color.rgb(250,218,82);
+    private static final int ORANGE=Color.rgb(255,153,68), RED=Color.rgb(255,91,94);
     final PowerDisplayState state;
     private final Handler ui=new Handler(Looper.getMainLooper());
     private Paint paint;
@@ -172,10 +172,17 @@ final class PowerIndicator implements AutoCloseable {
         double watts=battery==null?Double.NaN:battery.watts;
         double temperature=battery==null?Double.NaN:battery.temperature;
         String power=PowerDisplayState.power(watts),temp=PowerDisplayState.temperature(temperature);
-        x=drawSignedField(canvas,power,watts,true,cell,x,baseline);
+        x=drawSignedField(canvas,power,watts,true,cell,x,baseline,warningColor(-watts,8,10,12));
         x=drawUnit(canvas,"W",x,baseline)+FIELD_GAP;
-        x=drawSignedField(canvas,temp,temperature,false,cell,x,baseline);
+        x=drawSignedField(canvas,temp,temperature,false,cell,x,baseline,warningColor(temperature,45,48,50));
         drawUnit(canvas,"°C",x,baseline);
+    }
+
+    private static int warningColor(double value,double yellow,double orange,double red){
+        if(!Double.isFinite(value))return FOREGROUND;
+        if(value>red)return RED;
+        if(value>orange)return ORANGE;
+        return value>yellow?YELLOW:FOREGROUND;
     }
 
     private float drawFrequency(Canvas canvas,double mhz,float cell,float x,float baseline){
@@ -198,11 +205,11 @@ final class PowerIndicator implements AutoCloseable {
         return x+cells*cell;
     }
 
-    private float drawSignedField(Canvas canvas,String field,double value,boolean plus,float cell,float x,float baseline){
+    private float drawSignedField(Canvas canvas,String field,double value,boolean plus,float cell,float x,float baseline,int color){
         if(!field.equals("—")){
-            drawField(canvas,PowerDisplayState.sign(value,plus),1,cell,x+(4-field.length())*cell,baseline);
+            drawField(canvas,PowerDisplayState.sign(value,plus),1,cell,x+(4-field.length())*cell,baseline,color);
         }
-        return drawField(canvas,field,4,cell,x+cell,baseline);
+        return drawField(canvas,field,4,cell,x+cell,baseline,color);
     }
 
     private float drawUnit(Canvas canvas,String unit,float x,float baseline){
@@ -223,7 +230,7 @@ final class PowerIndicator implements AutoCloseable {
         paint.setColor(USAGE_TRACK);
         canvas.drawRect(left,bottom-BAR_HEIGHT,right,bottom,paint);
         if(!(usage>0&&usage<=100))return;
-        paint.setColor(usage>=90?USAGE_RED:usage>=75?USAGE_ORANGE:usage>=60?USAGE_YELLOW:USAGE_BLUE);
+        paint.setColor(usage>=90?RED:usage>=75?ORANGE:usage>=60?YELLOW:USAGE_BLUE);
         float height=Math.max(.5f,BAR_HEIGHT*(float)(usage/100));
         canvas.drawRect(left,bottom-height,right,bottom,paint);
     }
@@ -265,7 +272,7 @@ final class PowerIndicator implements AutoCloseable {
     private void drawBatteryIcon(Canvas canvas,float x,BatteryValues battery){
         beginIcon(canvas,x);
         double level=battery==null?Double.NaN:battery.level;
-        int color=battery!=null&&battery.charging?BATTERY_CHARGING:level<10?BATTERY_LOW:FOREGROUND;
+        int color=battery!=null&&battery.charging?BATTERY_CHARGING:level<10?RED:FOREGROUND;
         paint.setColor(color);
         paint.setStrokeWidth(.85f);
         canvas.drawRoundRect(.5f,1.8f,8.7f,7.2f,.75f,.75f,paint);
