@@ -90,7 +90,7 @@ final class WebViewHost {
                         }
                     });
                     return;
-                }catch(RuntimeException unavailable){android.util.Log.w("AColWebView","Theme visual-state callback unavailable",unavailable);}
+                }catch(RuntimeException ignored){}
             }
             commitThemeBars(dark);
         });

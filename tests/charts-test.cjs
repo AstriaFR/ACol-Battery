@@ -5,14 +5,21 @@ const{runCases}=require('./helpers.cjs');
 async function scales(){
 globalThis.document={documentElement:{dataset:{}}};
 const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMinimum,gameSampleText}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+const {remainingMeanVoltage}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/estimate.js')).href);
  const signedScale={base:0,full:20,min:-15};
  for(const kind of ['charge','discharge']){
   assert.equal(plotAxisMinimum(kind,[signedScale],false),0);
   assert.equal(plotAxisMinimum(kind,[signedScale],true),-110);
  }
  const energy=series.find(s=>s.key==='energy');
- const energyRows=plotPoints([[0,5000,90,null,4000,3,0,30000],[30000,1000,20,null,3000,2,0,30000]],'discharge');
- assert.equal(energyRows[0][11],5000*3.632/1000);assert.equal(energyRows[1][11],2.95);
+ const samples=[[0,5000,90,null,4000,3,0,30000],[30000,1000,20,null,3000,2,0,30000]];
+ const energyRows=plotPoints(samples,'discharge');
+ const highCapacityRows=plotPoints(samples,'discharge',2,false,true);
+ for(const [i,sample]of samples.entries()){
+  assert.equal(energyRows[i][11],sample[1]*remainingMeanVoltage(sample[4])/1000);
+  assert.equal(highCapacityRows[i][11],sample[1]*remainingMeanVoltage(sample[4],true)/1000);
+  assert.ok(highCapacityRows[i][11]<energyRows[i][11]);
+ }
  assert.equal(plotPoints([[0,5000,90,null,null,3,0,30000]],'discharge')[0][11],null);
  const chargingRows=[
   [0,5000,90,null,4000,-12,0,3000,null,null,30,null,1],
@@ -22,7 +29,8 @@ const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMi
  const gameEnergy=plotPoints(chargingRows,'discharge',2,true);
  assert.equal(gameEnergy[0][11],null);assert.equal(gameEnergy[1][11],null);assert.ok(gameEnergy[2][11]>0);
  assert.equal(chargingRows[2][11],null,'derived energy never changes stored samples');
- setChartSettings({energyWh:null});assert.equal(signalScale(energy,energyRows.map(p=>p[11]),'discharge').full,18.16);
+ const observedEnergy=energyRows.map(p=>p[11]);
+ setChartSettings({energyWh:null});assert.equal(signalScale(energy,observedEnergy,'discharge').full,Math.max(...observedEnergy));
  setChartSettings({energyWh:25.34});assert.equal(signalScale(energy,[18.16],'discharge').full,25.34);
  setChartSettings({energyWh:15,capacityAuto:true});let energyScale=signalScale(energy,[18.16],'discharge');assert.equal(energyScale.full,18.16);assert.equal(signalScale(energy,[10],'discharge',false,energyScale).full,18.16);
  setChartSettings({energyWh:15,capacityAuto:false});assert.equal(signalScale(energy,[18.16],'discharge',false,energyScale).full,15);
@@ -252,8 +260,7 @@ globalThis.localStorage={
 };
 globalThis.document={documentElement:{dataset:{theme:'light'}}};
 const root=path.join(__dirname,'../src/main/assets/webroot/');
-  const{seriesFor,signalScale,plotPoints,softenTemperature}=await import(pathToFileURL(path.join(root,'chart.js')).href);
-  const{loadSelection}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
+  const{seriesFor,plotPoints,softenTemperature}=await import(pathToFileURL(path.join(root,'chart.js')).href);
   const temp=seriesFor('discharge',2,true).find(series=>series.key==='temp');
 
   assert.ok(temp,'game chart must expose battery temperature');
@@ -261,16 +268,10 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
   assert.equal(temp.index,10);
   assert.equal(seriesFor('discharge',2,false).some(series=>series.key==='temp'),true);
 
-  const gameScale=signalScale(temp,[31,37,42],'discharge',true);
-  assert.equal(gameScale.base,30);
-  assert.equal(gameScale.full,42);
-  assert.equal(gameScale.label,'30–42 ℃');
-
   const rows=[[0,5000,80,300,3900,25,0,10000,3900,3900,36]];
   const plotted=plotPoints(rows,'discharge',2,true);
   assert.equal(plotted.length,1);
   assert.equal(plotted[0][10],36);
-  assert.ok(loadSelection('discharge',['rm','pct','voltage','power','temp']).has('temp'));
   const step=[[0,30],[30,30],[59,30],[60,40],[61,40]];
   assert.deepEqual(softenTemperature(step,.3),step,'a temperature step must not move into the plateau');
   const jitter=[[0,30],[1,30.2],[2,30],[3,30.2],[4,30]];

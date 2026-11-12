@@ -104,10 +104,16 @@ final class ErrorLogPages {
     }
     void detail(JSONObject item){
         if(busy)return;busy=true;int token=generation;status.setText("正在读取报告…");app.worker.execute(()->{
+            boolean background=item.optString("origin").equals("root");
             String report;
-            try{report=item.optString("origin").equals("root")?app.startup.root.api("error_log "+item.getString("id")).getString("report"):local.read(item.getString("id"));}
+            try{report=background?app.startup.root.api("error_log "+item.getString("id")).getString("report"):local.read(item.getString("id"));}
             catch(Exception error){report="报告读取失败："+error.getMessage();}
-            String text=report;app.runOnUiThread(()->{if(!active||token!=generation||app.destroyed)return;busy=false;status.setText("");app.startup.openReport(text,true);app.startup.errorTitle.setText("错误日志详情");});
+            String title=item.optString("title","错误报告"),source="来源："+(background?"后台":"应用");
+            if(!report.equals(title)&&!report.startsWith(title+"\n"))source+=" · "+title;
+            String time=report.startsWith("时间：")||report.contains("\n时间：")?"":
+                "时间："+new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z",Locale.US).format(new Date(item.optLong("time")))+"\n";
+            String text=source+"\n"+time+report;
+            app.runOnUiThread(()->{if(!active||token!=generation||app.destroyed)return;busy=false;status.setText("");app.startup.openReport(text,true);app.startup.errorTitle.setText("错误日志详情");});
         });
     }
 }

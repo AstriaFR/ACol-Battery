@@ -8,6 +8,7 @@ import cn.astriafr.acobattery.common.*;
 import static cn.astriafr.acobattery.daemon.BatteryService.*;
 /** One shared connection: lifecycle transactions remain owned by the recorder. */
 final class RecordStore {
+    static final String SAMPLING_DEFAULTS_MIGRATION="sampling_defaults_14184";
     final SQLiteDatabase db;
     long rangeId=-1,rangeEnd=-1,rangeCount;
     JSONObject rangeValues;
@@ -28,6 +29,9 @@ final class RecordStore {
         db.execSQL("CREATE TABLE IF NOT EXISTS battery_history_deleted(source_session INTEGER PRIMARY KEY) WITHOUT ROWID");
     }
     void upgrade(){correctDischargePower();ensureSampleColumns();}
+    static void markSamplingDefaultsMigrated(SQLiteDatabase db){
+        db.execSQL("INSERT OR IGNORE INTO runtime(key,value) VALUES(?,'1')",new Object[]{SAMPLING_DEFAULTS_MIGRATION});
+    }
     void correctDischargePower() {
         db.beginTransaction();
         try {

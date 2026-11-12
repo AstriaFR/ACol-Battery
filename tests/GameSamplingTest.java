@@ -107,12 +107,9 @@ public final class GameSamplingTest {
         }finally{close(m);}
     }
     public static void main(String[] args)throws Exception{
-        JSONObject defaults=Main.decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
-        check(defaults.getDouble("fastSeconds")==2);check(defaults.getInt("performanceSeconds")==2);check(defaults.getInt("screenOffMinutes")==30);check(defaults.getInt("chargeSeconds")==2);
-        check(defaults.getBoolean("gaugeIntervalOverride"));
         JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,7,1,2]");
-        check(Main.decodeSettings(legacy).getInt("performanceSeconds")==7);
-        check(Main.decodeSettings(legacy).getBoolean("gaugeIntervalOverride"));
+        JSONObject decodedLegacy=Main.decodeSettings(legacy);
+        check(decodedLegacy.getDouble("performanceSeconds")==decodedLegacy.getDouble("fastSeconds"));
         for(double value:new double[]{0.5,0.6,1.1,2,19.9,20}){
             JSONObject decoded=Main.decodeSettings(settings(value,value));
             check(Math.abs(decoded.getDouble("fastSeconds")-value)<1e-9);

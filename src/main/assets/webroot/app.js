@@ -5,7 +5,7 @@ import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
 import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.2s';
-import{LiveChannel,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
+import{LiveChannel,DETAIL_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
@@ -33,7 +33,7 @@ document.addEventListener('selectionchange',()=>{const selection=getSelection();
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
 const liveChannel=new LiveChannel();
 liveChannel.setMode(HOME_WATCH_MODE);
-const HOME_REFRESH_MS=1500;
+const LIVE_READING_REFRESH_MS=1500;
 let lastStatus=null,pollTimer,liveBusy=false,queuedPoll=false,usageNavigation=0;
 let detailPage,batteryHistory,usageDetails,pendingPanel;
 const batteryHistoryRoots={'battery-history':'batteryHistoryPanel','battery-history-detail':'batteryHistoryDetail','battery-history-trend':'batteryTrendPanel'};
@@ -276,7 +276,7 @@ async function pollLive(){
     liveBusy=false;
     const currentMode=liveChannel.mode;
     const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:
-      currentMode===HOME_WATCH_MODE?HOME_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
+      currentMode===HOME_WATCH_MODE||currentMode===DETAIL_WATCH_MODE?LIVE_READING_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
     schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
   }
 }
@@ -309,9 +309,8 @@ function renderStatus(s,settingsOnly=false){
   if(recording&&s.readingRecoveryProblem)warnings.push(`${s.readingRecoveryProblem}，后台正在重试。`);
   if(s.powerStateAvailable===false&&recording||r.onlineKnown===false)warnings.push('充电连接状态待确认，采样暂停并自动重试。');
   else{if(s.error)warnings.push('采样异常。');if(r.error)warnings.push('电池数据读取失败。');}if(s.usageError&&s.state===0&&recording)warnings.push('应用统计暂不可用。');
-  if(s.screenFallback)warnings.push('屏幕监听不可用，已启用状态回退检测，亮息屏切换可能延迟。');
-  else if(s.screenError)warnings.push('屏幕事件通知受限，亮息屏切换可能延迟。');
-  if(s.screenStateKnown===false)warnings.push('屏幕状态暂不可用，等待状态恢复。');
+  if((s.screenStateAvailable??s.screenStateKnown)===false)warnings.push('屏幕状态暂不可用，等待状态恢复。');
+  else if(s.screenEventApi==='state_poll'||s.screenError)warnings.push('屏幕事件通知受限，亮息屏切换可能延迟。');
   $('warning').textContent=warnings.join('\n');
 }
 async function openUsage(state,push=null){

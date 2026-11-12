@@ -1,5 +1,5 @@
 const prefix='battery_curves.legend.';
-const defaults={charge:['current','voltage','power','temp'],discharge:['rm','pct','voltage','power','temp'],game:['rm','pct','voltage','power','temp']};
+const defaults={charge:['current','voltage','power','temp'],discharge:['rm','pct','voltage','power','temp','energy'],game:['rm','pct','voltage','power','temp','energy']};
 export function loadSelection(kind,available){
   const allowed=new Set(available);
   try{

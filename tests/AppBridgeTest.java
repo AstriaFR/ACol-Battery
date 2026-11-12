@@ -22,6 +22,8 @@ public final class AppBridgeTest {
         String client=AppBridge.ROOT+"bin/curve-client ";
         String[] defaults=AppBridge.parse(client+"default_settings");
         check(defaults.length==2&&defaults[0].equals("api")&&defaults[1].equals("default_settings"));
+        check(AppBridge.parse(client+"reset_settings")[1].equals("reset_settings"));
+        rejected(client+"reset_settings 1");
         check(AppBridge.parse(client+"battery_history_record")[1].equals("battery_history_record"));
         check(AppBridge.parse(client+"battery_history_trend 0 0")[1].equals("battery_history_trend"));
         check(AppBridge.parse(client+"export_points 1 0 0")[1].equals("export_points"));

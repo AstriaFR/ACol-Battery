@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
 /** Optional OPLUS gauge publishing interval. Called under the recorder mutex. */
@@ -36,7 +37,8 @@ final class GaugeUpdate {
     private static final class Change {
         final State original;
         final long interval;
-        Change(State original,long interval){this.original=original;this.interval=interval;}
+        final boolean driverDefault;
+        Change(State original,long interval,boolean driverDefault){this.original=original;this.interval=interval;this.driverDefault=driverDefault;}
     }
 
     void apply(long intervalMs){
@@ -50,9 +52,9 @@ final class GaugeUpdate {
                 before=read();
             }
             if(before.matches(true,intervalMs))return;
-            Change change=new Change(before,intervalMs);
+            Change change=new Change(before,intervalMs,false);
             // Save the pre-write state before either proc node can change.
-            Owner.write(journal,boot+" "+(before.active?1:0)+" "+before.value+" "+intervalMs);
+            writeJournal(change);
             try {
                 if(before.value!=intervalMs)write(value,intervalMs);
                 write(active,1);
@@ -64,12 +66,38 @@ final class GaugeUpdate {
         }catch(IOException|RuntimeException ignored){}
     }
 
-    void restore(){
+    void restore(boolean keepApplied){
         if(boot.isEmpty())return;
         try {
             Change change=readJournal();
-            if(change!=null)restore(change,read());
+            if(change==null)return;
+            State current=read();
+            if(keepApplied&&!change.driverDefault&&current.matches(true,change.interval)){
+                // Turning off future overrides leaves a successfully applied interval in place.
+                Files.deleteIfExists(journal.toPath());
+                applied=-1;
+            }else restore(change,current);
         }catch(IOException|RuntimeException ignored){}
+    }
+
+    void restoreDriverDefault(){
+        if(boot.isEmpty())return;
+        try {
+            State current=read();
+            // Keep force_val intact. With force_active off, the driver uses its current votes.
+            Change reset=new Change(new State(false,current.value),current.value,true);
+            writeJournal(reset);
+            restore(reset,current);
+        }catch(IOException|RuntimeException ignored){}
+    }
+
+    private void writeJournal(Change change)throws IOException {
+        Path destination=journal.toPath();
+        Path temporary=destination.resolveSibling(journal.getName()+".next");
+        State original=change.original;
+        String text=boot+" "+(original.active?1:0)+" "+original.value+" "+change.interval+(change.driverDefault?" default":"");
+        Files.write(temporary,text.getBytes(StandardCharsets.UTF_8));
+        Files.move(temporary,destination,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
     }
 
     private Change readJournal()throws IOException {
@@ -80,8 +108,9 @@ final class GaugeUpdate {
             Files.deleteIfExists(journal.toPath());
             return null;
         }
-        if(fields.length!=4)throw new IOException();
-        return new Change(parseState(fields[1],fields[2]),parseValue(fields[3]));
+        boolean driverDefault=fields.length==5&&fields[4].equals("default");
+        if(fields.length!=4&&!driverDefault)throw new IOException();
+        return new Change(parseState(fields[1],fields[2]),parseValue(fields[3]),driverDefault);
     }
 
     private State read()throws IOException {

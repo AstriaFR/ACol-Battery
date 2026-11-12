@@ -6,6 +6,7 @@ const cutoffTheme=ThemeController.applyStored({followParent:embedded});
 if(!embedded)installPageDepth();
 const exec=command=>embedded?window.parent.__acoCutoffExec(command):localExec(command);
 const command = '/system/bin/sh /data/adb/aco_battery_app/runtime/cutoff.sh';
+const LOW_VOLTAGE_MV=2600;
 const $ = id => document.getElementById(id);
 const homeUrl=new URL('../index.html',location.href).href,cutoffUrl=location.href;
 const fromSettings=new URLSearchParams(location.search).get('from')==='settings',parentUrl=fromSettings?homeUrl+'#settings':homeUrl;
@@ -65,6 +66,11 @@ function voltage(id, value, forced) {
 }
 function render(state, replaceInputs = false) {
   lastState = state;
+  for (const id of ['shutdownInput', 'termInput']) {
+    const input=$(id);
+    input.min=state.minMv??2600;
+    input.max=state.maxMv??3400;
+  }
   voltage('shutdownLive', state.shutdown, state.shutdownForced);
   voltage('termLive', state.term, state.termForced);
   if (!edited || replaceInputs) {
@@ -81,16 +87,18 @@ async function refresh() {
   catch (e) { if(token===lifecycle)message(e.message, true); }
   finally { setBusy(false);if(embedded&&pageActive&&token!==lifecycle)refresh(); }
 }
+function validVoltage(input,value=input.value){
+  return /^\d{4}$/.test(value)&&Number(value)>=Number(input.min)&&Number(value)<=Number(input.max);
+}
 async function plan(action) {
   if (busy || !lastState || dialog.open || lowVoltageDialog.open) return;
   let args = 'plan stock';
   if (action === 'set') {
-    const shutdown = $('shutdownInput').value;
-    const term = $('termInput').value;
-    if (![shutdown, term].every(v => /^\d{4}$/.test(v) && Number(v) >= 2600 && Number(v) <= 3400)) {
-      message('请输入 2600–3400 mV 的整数电压。', true); return;
+    const shutdown=$('shutdownInput'),term=$('termInput');
+    if (!validVoltage(shutdown)||!validVoltage(term)) {
+      message(`请输入 ${term.min}–${term.max} mV 的整数电压。`, true); return;
     }
-    args = `plan set ${shutdown} ${term}`;
+    args = `plan set ${shutdown.value} ${term.value}`;
   }
   setBusy(true);
   message('');
@@ -141,12 +149,11 @@ function pressKey(key){
 }
 function commitKeypad(){
   const editor=keypadEditor;if(!editor)return;
-  const value=Number(editor.draft);
-  if(!/^\d{4}$/.test(editor.draft)||value<Number(editor.input.min)||value>Number(editor.input.max)){
+  if(!validVoltage(editor.input,editor.draft)){
     $('cutoffKeypadError').textContent=`请输入 ${editor.input.min}–${editor.input.max} mV 的整数。`;
     $('cutoffKeypadError').hidden=false;return;
   }
-  editor.input.value=String(value);editor.input.dispatchEvent(new Event('input',{bubbles:true}));dismissKeypad();
+  editor.input.value=editor.draft;editor.input.dispatchEvent(new Event('input',{bubbles:true}));dismissKeypad();
 }
 for(const button of keypadDialog.querySelectorAll('[data-key]'))button.onclick=()=>pressKey(button.dataset.key);
 $('cutoffKeypadCancel').onclick=dismissKeypad;
@@ -167,9 +174,9 @@ async function commit(acceptedLowVoltage = false) {
   if (!['set', 'stock'].includes(choice.action) || !/^[a-f0-9-]{36}$/.test(choice.token)) {
     message('确认凭据无效，请刷新后重试。', true); return;
   }
-  const lowVoltage=choice.action==='set'&&(Number(choice.shutdown)<2700||Number(choice.term)<2700);
+  const lowVoltage=choice.action==='set'&&(Number(choice.shutdown)<LOW_VOLTAGE_MV||Number(choice.term)<LOW_VOLTAGE_MV);
   if(lowVoltage&&!acceptedLowVoltage){
-    $('lowVoltageText').textContent=`电量计截止：${choice.term} mV\n软件关机：${choice.shutdown} mV\n\n设置低于 2700 mV 的电压可能会对电池造成损伤。是否仍要应用？`;
+    $('lowVoltageText').textContent=`电量计截止：${choice.term} mV\n软件关机：${choice.shutdown} mV\n\n设置低于 ${LOW_VOLTAGE_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`;
     dialog.close();lowVoltageDialog.showModal();return;
   }
   if(acceptedLowVoltage&&(!lowVoltage||!lowVoltageDialog.open))return;

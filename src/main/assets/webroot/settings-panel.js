@@ -5,11 +5,18 @@ export class SettingsPanel{
     this.ready=false;this.dirty=false;this.running=null;this.timer=null;this.lastSaved='';this.editor=null;
     this.fastButton=document.getElementById('toggleFast');this.fastBusy=false;this.fastValue=false;this.editorBusy=false;
     this.fastButton.onclick=()=>this.toggleFast();
-    this.gameInfo=document.getElementById('gameModeExplanation');
-    document.getElementById('gameModeInfo').onclick=()=>{history.pushState({...history.state,gameInfo:true},'',location.href);this.gameInfo.showModal();};
-    const dismissInfo=()=>{if(history.state?.gameInfo)history.back();else this.gameInfo.close();};
-    document.getElementById('closeGameModeInfo').onclick=dismissInfo;
-    this.gameInfo.addEventListener('cancel',e=>{e.preventDefault();dismissInfo();});
+    this.infoDialogs=new Map();
+    for(const [key,prefix] of [['gameInfo','gameMode'],['gaugeInfo','gaugeInterval']]){
+      const dialog=document.getElementById(`${prefix}Explanation`);
+      this.infoDialogs.set(key,dialog);
+      document.getElementById(`${prefix}Info`).onclick=()=>{
+        history.pushState({...history.state,[key]:true},'',location.href);
+        dialog.showModal();
+      };
+      const dismiss=()=>{if(history.state?.[key])history.back();else dialog.close();};
+      dialog.querySelector('.game-explanation-actions button').onclick=dismiss;
+      dialog.addEventListener('cancel',e=>{e.preventDefault();dismiss();});
+    }
     this.changeConfirm=document.getElementById('settingsChangeConfirm');this.changeResolve=null;this.changeAccepted=false;
     document.getElementById('settingsChangeCancel').onclick=()=>this.dismissChange(false);
     document.getElementById('settingsChangeApply').onclick=()=>this.dismissChange(true);
@@ -79,14 +86,13 @@ export class SettingsPanel{
     if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
     this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
     try{
-      if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，记录总开关将开启。已有记录和备份会保留。'))return false;
+      if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，电流计将交回厂商驱动控制，记录总开关将开启。已有记录和备份会保留。'))return false;
       if(!await this.flush())throw Error('当前设置未能保存，请重试。');
       let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
       for(const field of this.form.elements)field.disabled=true;
       this.fastButton.disabled=true;this.recording.disabled=true;this.powerDisplay.disabled=true;document.getElementById('themeToggle').disabled=true;
-      const defaults=(await this.api('default_settings')).settings,args=encodeSettings({...DEFAULT_SETTINGS,...defaults});
-      const result=await this.api('set_settings',...args,0);
-      this.lastSaved=JSON.stringify(args);this.dirty=false;this.fill(result.settings);this.onSaved(result.settings);
+      const result=await this.api('reset_settings');
+      this.lastSaved=JSON.stringify(encodeSettings(result.settings));this.dirty=false;this.fill(result.settings);this.onSaved(result.settings);
       if(this.fastValue){const fast=await this.api('set_fast',0);this.updateFast(fast.fastEnabled);this.onSaved(fast.settings);}
       if(this.powerDisplayValue){const power=await this.api('set_power_display',0);this.updatePowerDisplay(power.powerDisplayEnabled,power.powerDisplayError);this.onSaved(power.settings);}
       if(this.recordingValue===false){const recording=await this.api('set_recording',1);this.updateRecording(recording.recordingEnabled,recording.recordingProblem);this.onSaved(recording.settings);}
@@ -252,8 +258,17 @@ export class SettingsPanel{
   cancelDeleteConfirmation(){if(history.state?.confirmDelete)history.back();else this.closeDeleteConfirmation();}
   closeDeleteConfirmation(){if(this.deleteConfirm.open)this.deleteConfirm.close();this.pendingDelete=null;this.deleteStage=0;}
   dismissEditor(){if(history.state?.confirmDelete)history.go(-2);else if(history.state?.keypad)history.back();else this.closeEditor();}
-  closeEditor(){if(this.gameInfo.open&&!history.state?.gameInfo)this.gameInfo.close();this.closeDeleteConfirmation();if(!history.state?.settingConfirm)this.closeChange();if(this.keypad.open)this.keypad.close();this.editor=null;if(!history.state?.recordingConfirm)this.closeRecordingConfirmation();}
-  handleHistory(state){if(state?.gameInfo&&!this.gameInfo.open)this.gameInfo.showModal();else if(!state?.gameInfo&&this.gameInfo.open)this.gameInfo.close();if(!state?.settingConfirm)this.closeChange();if(!state?.recordingConfirm)this.closeRecordingConfirmation();if(!state?.confirmDelete)this.closeDeleteConfirmation();if(!state?.keypad)this.closeEditor();else if(!this.keypad.open&&state.key)this.edit(state.key,false);else if(state.confirmDelete&&!this.deleteConfirm.open){history.replaceState({...state,confirmDelete:false},'',`${location.pathname}${location.search}#settings-keypad`);}}
+  closeEditor(){
+    for(const [key,dialog] of this.infoDialogs)if(dialog.open&&!history.state?.[key])dialog.close();
+    this.closeDeleteConfirmation();if(!history.state?.settingConfirm)this.closeChange();if(this.keypad.open)this.keypad.close();this.editor=null;if(!history.state?.recordingConfirm)this.closeRecordingConfirmation();
+  }
+  handleHistory(state){
+    for(const [key,dialog] of this.infoDialogs){
+      if(state?.[key]&&!dialog.open)dialog.showModal();
+      else if(!state?.[key]&&dialog.open)dialog.close();
+    }
+    if(!state?.settingConfirm)this.closeChange();if(!state?.recordingConfirm)this.closeRecordingConfirmation();if(!state?.confirmDelete)this.closeDeleteConfirmation();if(!state?.keypad)this.closeEditor();else if(!this.keypad.open&&state.key)this.edit(state.key,false);else if(state.confirmDelete&&!this.deleteConfirm.open){history.replaceState({...state,confirmDelete:false},'',`${location.pathname}${location.search}#settings-keypad`);}
+  }
   values(){
     const result={};
     for(const key of settingsKeys){

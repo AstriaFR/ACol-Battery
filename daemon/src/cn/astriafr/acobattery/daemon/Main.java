@@ -37,8 +37,10 @@ import static cn.astriafr.acobattery.daemon.DeferredStats.queryUsage;
 
 public final class Main {
     static final String SOCKET="cn.astriafr.aco_battery_app.v1";
-    private static final int SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
-    private static final long HOME_REFRESH_MS=1500;
+    private static final int DETAIL_WATCH_MODE=0, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
+    private static final long LIVE_READING_REFRESH_MS=1500;
+    private static final int DEFAULT_DELETE_PCT=3, DEFAULT_CHARGE_SECONDS=3;
+    private static final double DEFAULT_GAME_SECONDS=1.5;
     JSONObject settings;
     volatile boolean recordingEnabled,stopping;
     String recordingProblem="";
@@ -94,7 +96,7 @@ public final class Main {
         DisplayManager manager=ctx.getSystemService(DisplayManager.class);Display display=manager==null?null:manager.getDisplay(Display.DEFAULT_DISPLAY);
         if(display==null)return null;int value=display.getState();if(value==Display.STATE_UNKNOWN)return null;
         return value==Display.STATE_ON||value==Display.STATE_VR;
-    },error->{FallbackDiagnostics.record("屏幕状态读取",error);if(framework!=null)framework.observe(error);});}
+    },error->{if(framework!=null)framework.observe(error);});}
     final Runnable screenPoll=new Runnable(){public void run(){
         synchronized(mutex){
             if(stopping||screenListenerReady)return;
@@ -117,7 +119,7 @@ public final class Main {
     final DeferredStats deferred;
     long performanceSession=-1,performanceMetaSession=-1;
     String performanceMetaText="";
-    final Core.Cadence performanceCadence=new Core.Cadence(2000);
+    final Core.Cadence performanceCadence=new Core.Cadence(Math.round(DEFAULT_GAME_SECONDS*1000));
 
     public static void main(String[] args) {
         boolean recorder=args.length==2&&!args[0].startsWith("--")&&new File(args[1]).getAbsoluteFile().equals(Owner.BASE.getAbsoluteFile());
@@ -144,7 +146,7 @@ public final class Main {
             report.put("cutoffAvailable",cutoffAvailable());
             Core.Reading probeReading=readHardware(ctx,null,BatteryService.detectCellCount());
             report.put("powerInputDiagnostics",powerInputDiagnostics);
-            report.put("reading",readingJson(probeReading)).put("powerInputFallback",probeReading.onlineKnown&&!"sysfs".equals(probeReading.onlineSource));
+            report.put("reading",readingJson(probeReading));
             DisplayManager manager=null;
             DisplayManager.DisplayListener listener=new DisplayManager.DisplayListener(){public void onDisplayAdded(int id){}public void onDisplayRemoved(int id){}public void onDisplayChanged(int id){}};
             try{
@@ -152,7 +154,7 @@ public final class Main {
                 if(manager==null)throw new IOException("显示服务不可用");
                 report.put("screenEventApi",ScreenEvents.register(manager,listener,new Handler(Looper.getMainLooper())));
                 report.put("screenListener",true);
-            }catch(Throwable e){FallbackDiagnostics.record("屏幕监听注册",e);report.put("screenListener",false).put("screenError",FriendlyError.message(e));}
+            }catch(Throwable ignored){report.put("screenListener",false);}
             finally{if(manager!=null)try{manager.unregisterDisplayListener(listener);}catch(Throwable ignored){}}
             // Usage events are optional and checked by normal attribution after startup.
             report.put("fallbackDiagnostics",FallbackDiagnostics.snapshot());System.out.println(report);System.exit(0);
@@ -173,7 +175,7 @@ public final class Main {
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
             catch(Throwable e){
                 if(app.framework!=null)app.framework.close();
-                synchronized(app.mutex){app.gaugeUpdate.restore();}
+                synchronized(app.mutex){app.restoreGaugeInterval();}
                 app.powerIndicator.close();
                 try{StartupFailure.record(Owner.BASE,attempt,e);}catch(Throwable reportError){e.addSuppressed(reportError);}
                 StartupFailure.print(e,System.err);System.exit(1);
@@ -219,9 +221,9 @@ public final class Main {
             public void eventsReady(){if(!stopping)wakeCollector();}
         });
         store.backfillHistory();
-        fastEnabled="1".equals(runtimeValue("fast_discharge"));configureSampling(false);
+        fastEnabled=modeEnabledThisBoot("fast_discharge");configureSampling(false);
         loadCellProfile();
-        powerIndicator=new PowerIndicator(ctx,"1".equals(runtimeValue("power_indicator")));
+        powerIndicator=new PowerIndicator(ctx,modeEnabledThisBoot("power_indicator"));
         if(reset)Files.delete(resetFlag.toPath());
         performance=new PerformanceCollector((id,start,wall,row,meta)->{
             synchronized(mutex){
@@ -353,10 +355,13 @@ public final class Main {
         if(!gameFirst)collectGame(recordingEnabled&&!stableOnline?null:reading,screenBoundary,now);
     }
 
+    private static final Number[] SETTING_DEFAULTS={DEFAULT_DELETE_PCT,30,500,1,300,450,40,60,2,30,DEFAULT_GAME_SECONDS,1,DEFAULT_CHARGE_SECONDS,DEFAULT_GAME_SECONDS,10001,0};
+
     static JSONObject decodeSettings(JSONArray p)throws Exception {
         if(p.length()!=8&&(p.length()<12||p.length()>16))throw new IOException("设置项数量无效");
-        long[] v={5,30,560,1,300,450,50,60,2,30,2,1,2,2,10001};for(int i=0;i<Math.min(v.length,p.length());i++)if(i!=10&&i!=13)v[i]=p.getLong(i);
-        double powerSeconds=p.length()>=12?p.getDouble(10):2;
+        long[] v=new long[15];
+        for(int i=0;i<v.length;i++)if(i!=10&&i!=13)v[i]=i<p.length()?p.getLong(i):SETTING_DEFAULTS[i].longValue();
+        double powerSeconds=p.length()>=12?p.getDouble(10):DEFAULT_GAME_SECONDS;
         // The old game interval controlled both charts. Keep it for both on upgrade.
         double performanceSeconds=p.length()>=14?p.getDouble(13):powerSeconds;
         if(v[0]<0||v[0]>40||v[1]<0||v[1]>80)throw new IOException("删除范围 0–40%，隐藏范围 0–80%，仅限整数");
@@ -368,7 +373,7 @@ public final class Main {
         validateSamplingInterval(powerSeconds,"功耗");
         validateSamplingInterval(performanceSeconds,"性能");
         if(v[14]<0||v[14]>10001)throw new IOException("默认能量量程范围 0–100 Wh");
-        String gaugeOverride=p.length()==16?p.get(15).toString():"1";
+        String gaugeOverride=p.length()==16?p.get(15).toString():SETTING_DEFAULTS[15].toString();
         if(!gaugeOverride.equals("0")&&!gaugeOverride.equals("1"))throw new IOException("电流计间隔覆盖设置无效");
         return new JSONObject().put("energyWh",v[14]==10001?JSONObject.NULL:v[14]/100.0).put("deletePct",v[0]).put("hidePct",v[1]).put("capacityAh",v[2]/100.0)
             .put("capacityAuto",v[3]==1).put("voltageMin",v[4]/100.0).put("voltageMax",v[5]/100.0)
@@ -379,51 +384,75 @@ public final class Main {
         if(!Core.finite(seconds)||seconds<0.5||seconds>20||Math.abs(seconds*10-Math.round(seconds*10))>1e-7)
             throw new IOException(label+"采样间隔 0.5–20.0 秒，步进 0.1 秒");
     }
-    JSONObject defaultSettings()throws Exception {
-        JSONObject defaults=decodeSettings(new JSONArray("[5,30,560,1,300,450,50,60]"));
-        Integer design=integer(read(BAT+"design_capacity"));
-        if(design!=null&&design>=1000&&design<=20000){
-            double ah=Math.round((design/1000.0-0.5)*100)/100.0;
-            if(ah>=0.01&&ah<=20)defaults.put("capacityAh",ah);
+    private JSONArray defaultSettingsValues()throws JSONException {
+        JSONArray defaults=new JSONArray(SETTING_DEFAULTS);
+        long capacity=defaults.getLong(2);
+        Integer designCapacityMah=battery.designCapacityMah();
+        if(designCapacityMah!=null){
+            long adjusted=Math.round((designCapacityMah-1500)/10.0);
+            if(adjusted>=1)capacity=adjusted;
         }
+        defaults.put(2,capacity);
+        // Capacity is in hundredths of an Ah. Convert at 3.8 V and keep whole 0.5 Wh steps.
+        defaults.put(14,capacity*76/1000*50);
         return defaults;
     }
+    JSONObject defaultSettings()throws Exception {return decodeSettings(defaultSettingsValues());}
     void loadSettings()throws Exception {
         settings=defaultSettings();
-        try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='module_settings'",null)) {
-            if(c.moveToFirst())try {
-                JSONArray stored=new JSONArray(c.getString(0));
-                // Clamp only previously valid whole-second intervals above the new cap.
-                for(int index:new int[]{10,13})if(stored.length()>index){
-                    double old=stored.getDouble(index);
-                    if(old>20&&old<=60&&old==Math.rint(old))stored.put(index,20);
-                }
-                settings=decodeSettings(stored);
+        boolean resetSamplingDefaults=runtimeValue(RecordStore.SAMPLING_DEFAULTS_MIGRATION).isEmpty();
+        String saved=runtimeValue("module_settings");
+        JSONArray stored=null;
+        if(!saved.isEmpty())try {
+            JSONArray values=new JSONArray(saved);
+            if(resetSamplingDefaults)applySamplingDefaults(values);
+            // Clamp only previously valid whole-second intervals above the new cap.
+            for(int index:new int[]{10,13})if(values.length()>index){
+                double old=values.getDouble(index);
+                if(old>20&&old<=60&&old==Math.rint(old))values.put(index,20);
             }
-            catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
+            settings=decodeSettings(values);
+            stored=values;
+        }catch(Exception e){System.err.println("Settings fallback to defaults: "+e);}
+        if(resetSamplingDefaults){
+            db.beginTransaction();
+            try{
+                if(stored!=null)db.execSQL("UPDATE runtime SET value=? WHERE key='module_settings'",new Object[]{stored.toString()});
+                RecordStore.markSamplingDefaultsMigrated(db);
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
         }
+    }
+    static void applySamplingDefaults(JSONArray values)throws JSONException{
+        // Temperature limits, screen-on/off, power, charging and performance intervals.
+        for(int index:new int[]{6,7,8,9,10,12,13})if(index<values.length())values.put(index,SETTING_DEFAULTS[index]);
     }
     String runtimeValue(String key){
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key=?",new String[]{key})){return c.moveToFirst()?c.getString(0):"";}
     }
-    long powerIntervalMs(){return Math.round(settings.optDouble("fastSeconds",2)*1000);}
-    private boolean gaugeIntervalOverride(){return settings.optBoolean("gaugeIntervalOverride",true);}
+    private boolean modeEnabledThisBoot(String key){return Core.sameBoot(runtimeValue(key),boot);}
+    private void saveBootMode(String key,boolean enabled){
+        db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES(?,?)",new Object[]{key,enabled?boot:"0"});
+    }
+    long powerIntervalMs(){return Math.round(settings.optDouble("fastSeconds",DEFAULT_GAME_SECONDS)*1000);}
+    private boolean gaugeIntervalOverride(){return settings.optBoolean("gaugeIntervalOverride",false);}
     private void updateGaugeInterval(){
         if(gaugeUpdate==null)return;
         if(gaugeIntervalOverride()&&(fastEnabled||powerIndicator.state.enabled))gaugeUpdate.apply(powerIntervalMs());
-        else gaugeUpdate.restore();
+        else restoreGaugeInterval();
     }
+    private void restoreGaugeInterval(){if(gaugeUpdate!=null)gaugeUpdate.restore(!gaugeIntervalOverride());}
     void configureSampling(boolean reschedule){
         long oldInterval=interval();
         sampling.screenOnMs=settings.optLong("screenOnMinutes",2)*60000;
         sampling.screenOffMs=settings.optLong("screenOffMinutes",30)*60000;
-        sampling.chargeMs=settings.optLong("chargeSeconds",2)*1000;
+        sampling.chargeMs=settings.optLong("chargeSeconds",DEFAULT_CHARGE_SECONDS)*1000;
         sampling.fastMs=0;
         long gameInterval=powerIntervalMs();
         if(reschedule&&gameTrack.sampling.fastMs!=gameInterval)gameTrack.sampling.next=Math.max(SystemClock.elapsedRealtime(),(gameTrack.previous==null?0:gameTrack.previous.elapsed)+gameInterval);
         gameTrack.sampling.fastMs=gameInterval;
         if(reschedule)gameTrack.sampling.expected=Math.max(gameTrack.sampling.expected,gameInterval);
-        performanceCadence.configure(Math.round(settings.optDouble("performanceSeconds",2)*1000),reschedule?SystemClock.elapsedRealtime():0);
+        performanceCadence.configure(Math.round(settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS)*1000),reschedule?SystemClock.elapsedRealtime():0);
         if(reschedule&&recordingEnabled){
             long now=SystemClock.elapsedRealtime(),nextInterval=interval();
             if(nextInterval!=oldInterval)sampling.next=Math.max(now,(previous==null?now:previous.elapsed)+nextInterval);
@@ -431,12 +460,14 @@ public final class Main {
             // already elapsed old plan when shortening without splitting a record.
             sampling.expected=Math.max(sampling.expected,nextInterval);
         }
-        if(reschedule&&fastEnabled&&gameTrack.session>=0){
-            db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",new Object[]{gameInterval/1000.0,settings.optDouble("performanceSeconds",2),gameTrack.session});
-        }
+        if(reschedule&&fastEnabled&&gameTrack.session>=0)saveGameIntervals(gameTrack.session);
+    }
+    private void saveGameIntervals(long id){
+        db.execSQL("UPDATE sessions SET fast_seconds=?,performance_seconds=? WHERE id=?",
+            new Object[]{powerIntervalMs()/1000.0,settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS),id});
     }
     void rememberFast(boolean enabled){
-        db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('fast_discharge',?)",new Object[]{enabled?"1":"0"});
+        saveBootMode("fast_discharge",enabled);
         fastEnabled=enabled;fastScreenOffAt=enabled&&!sampling.interactive?SystemClock.elapsedRealtime():-1;configureSampling(false);
         updateGaugeInterval();
     }
@@ -472,7 +503,7 @@ public final class Main {
     void loadCellProfile() {
         try(Cursor c=db.rawQuery("SELECT value FROM runtime WHERE key='cell_count_v1'",null)) {
             if(c.moveToFirst()){int value=Integer.parseInt(c.getString(0));if(value==1||value==2)cellCount=value;}
-        }catch(Exception e){System.err.println("Cell profile will be detected again: "+e);}
+        }catch(Exception ignored){}
         resolveCellProfile();
     }
     void resolveCellProfile() {
@@ -487,27 +518,31 @@ public final class Main {
         cellCount=detected;settingsVersion++;System.err.println("Remembered battery cell count: "+cellCount);
     }
     static String smallRecordWhere(JSONObject value) {
-        return "active=0 AND fast_seconds=0 AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",5);
+        return "active=0 AND fast_seconds=0 AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",DEFAULT_DELETE_PCT);
     }
     JSONObject saveSettings(JSONArray p)throws Exception {
         int count=p.length()-1;
         if(count<12||count>16||(p.getInt(count)!=0&&p.getInt(count)!=1))throw new IOException("删除确认参数无效");
         JSONArray values=new JSONArray();for(int i=0;i<count;i++)values.put(p.get(i));
-        if(count==12)values.put(settings.optLong("chargeSeconds",2));
-        if(values.length()==13)values.put(settings.optDouble("performanceSeconds",2));
+        if(count==12)values.put(settings.optLong("chargeSeconds",DEFAULT_CHARGE_SECONDS));
+        if(values.length()==13)values.put(settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS));
         if(values.length()==14)values.put(settings.isNull("energyWh")?10001:Math.round(settings.optDouble("energyWh",0)*100));
         if(values.length()==15)values.put(gaugeIntervalOverride()?1:0);
+        return saveSettingsValues(values,p.getInt(count)==1,false);
+    }
+    private JSONObject saveSettingsValues(JSONArray values,boolean prune,boolean resetGauge)throws Exception {
         JSONObject next=decodeSettings(values);int removed=0;
         db.beginTransaction();
         try {
             db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('module_settings',?)",new Object[]{values.toString()});
-            if(p.getInt(count)==1)removed=db.delete("sessions",smallRecordWhere(next),null);
+            if(prune)removed=db.delete("sessions",smallRecordWhere(next),null);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
         long oldPowerInterval=powerIntervalMs();
         boolean oldGaugeOverride=gaugeIntervalOverride();
         settings=next;settingsVersion++;store.rangeId=-1;store.rangeValues=null;
-        if(oldPowerInterval!=powerIntervalMs()||oldGaugeOverride!=gaugeIntervalOverride())updateGaugeInterval();
+        if(resetGauge){if(gaugeUpdate!=null)gaugeUpdate.restoreDriverDefault();}
+        else if(oldPowerInterval!=powerIntervalMs()||oldGaugeOverride!=gaugeIntervalOverride())updateGaugeInterval();
         if(removed>0)usageSnapshots.clear();
         configureSampling(true);powerIndicator.state.refresh();wakeCollector();
         return new JSONObject().put("ok",true).put("settings",settings).put("removed",removed);
@@ -588,15 +623,17 @@ public final class Main {
     }
     void refreshScreen(boolean initial){
         long now=SystemClock.elapsedRealtime();boolean first=!screenState.known;
-        boolean changed=screenState.refresh(now,initial);screenChanged(now,first,changed);
+        boolean changed=screenState.refresh(now,initial);
+        if(!screenStateAvailable())FallbackDiagnostics.record("屏幕状态暂不可用",screenState.error);
+        screenChanged(now,first,changed);
     }
+    boolean screenStateAvailable(){return screenState.available||screenReceiver!=null&&screenState.known;}
     void stopScreenFallback(){
         if(screenHandler!=null)screenHandler.removeCallbacks(screenPoll);
         if(screenReceiver!=null){try{ctx.unregisterReceiver(screenReceiver);}catch(Throwable ignored){}screenReceiver=null;}
     }
-    void screenFallback(String error){
-        if(error!=null&&!error.isEmpty())FallbackDiagnostics.record("屏幕状态回退",error);
-        screenListenerReady=false;screenError=error;
+    void screenFallback(){
+        screenListenerReady=false;
         if(screenReceiver==null){
             BroadcastReceiver receiver=new BroadcastReceiver(){public void onReceive(Context context,Intent intent){
                 String action=intent.getAction();if(!Intent.ACTION_SCREEN_ON.equals(action)&&!Intent.ACTION_SCREEN_OFF.equals(action))return;
@@ -610,7 +647,7 @@ public final class Main {
             try{
                 IntentFilter filter=new IntentFilter();filter.addAction(Intent.ACTION_SCREEN_ON);filter.addAction(Intent.ACTION_SCREEN_OFF);
                 ctx.registerReceiver(receiver,filter,null,screenHandler,Context.RECEIVER_EXPORTED);screenReceiver=receiver;
-            }catch(Throwable e){FallbackDiagnostics.record("屏幕广播注册",e);if(framework!=null)framework.observe(e);}
+            }catch(Throwable e){if(framework!=null)framework.observe(e);}
         }
         screenEventApi=screenReceiver!=null?"screen_broadcast":"state_poll";
         screenHandler.removeCallbacks(screenPoll);screenHandler.postDelayed(screenPoll,ScreenState.POLL_MS);
@@ -628,15 +665,15 @@ public final class Main {
                     synchronized(mutex) {
                         if(stopping)return;refreshScreen(false);
                         if(screenState.available){screenListenerReady=true;screenEventApi=registeredScreenApi;screenError=(capabilities&16)!=0||moduleWatch?"":"采样事件通知不可用，屏幕切换可能延迟";stopScreenFallback();}
-                        else screenFallback(screenState.error);
+                        else screenFallback();
                     }
                 }
             };
             registeredScreenApi=ScreenEvents.register(displays,displayListener,screenHandler);
             if(screenState.available){screenEventApi=registeredScreenApi;screenListenerReady=true;screenError=(capabilities&16)!=0||moduleWatch?"":"采样事件通知不可用，屏幕切换可能延迟";}
-            else screenFallback(screenState.error);
+            else screenFallback();
         }catch(Throwable e){
-            FallbackDiagnostics.record("屏幕监听注册",e);if(framework!=null)framework.observe(e);screenFallback(FrameworkWatch.cause(e).toString());
+            if(framework!=null)framework.observe(e);screenFallback();
         }
     }
     void collect(String attempt) throws Exception {
@@ -734,7 +771,7 @@ public final class Main {
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
         framework.close();performance.close();powerIndicator.close();usageWorker.shutdownNow();
         synchronized(mutex) {
-            if(gaugeUpdate!=null)gaugeUpdate.restore();
+            restoreGaugeInterval();
             // Updating code or reconnecting framework proxies suspends ownership,
             // not the charge/discharge session. Completed samples are already durable.
             if(!Core.resumableStop(stopReason)){stopGame(null,stopReason);finish(stopReason);}
@@ -850,7 +887,10 @@ public final class Main {
                     settingsVersion++;
                 }
             }
-            if(session>=0)append(r);
+            if(session>=0){
+                if(gameContext)saveGameIntervals(session);
+                append(r);
+            }
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         if(session>=0)return;
@@ -899,7 +939,7 @@ public final class Main {
         if(!gameContext)db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;startWall=r.wall;clockAdjusted=false;
         try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000.0:0,state==0&&gameContext?settings.optDouble("performanceSeconds",2):0,state==0&&gameContext?"rm_minute":"rm"};
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000.0:0,state==0&&gameContext?settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS):0,state==0&&gameContext?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -1136,7 +1176,7 @@ public final class Main {
                     for(DeferredStats.Pending item:deferred.eventBatch)if(item.id==id){includesRecord=true;break;}
                 }
                 try{task.get(8,TimeUnit.SECONDS);}
-                catch(TimeoutException slow){FallbackDiagnostics.record("应用事件结算","查询尚未返回，将在后续使用其结果");break;}
+                catch(TimeoutException slow){break;}
                 catch(ExecutionException failed){/* Capture harvest reports the underlying cause. */}
                 synchronized(mutex){if(stopping)return;deferred.captureAsync(false,0);}
                 if(includesRecord)break;
@@ -1160,15 +1200,18 @@ public final class Main {
                         if(connection.getPeerCredentials().getUid()!=0)return;
                         BufferedReader in=new BufferedReader(new InputStreamReader(connection.getInputStream(),StandardCharsets.UTF_8));
                         JSONObject req=new JSONObject(boundedLine(in,8192));
-                        if("watch".equals(req.optString("action"))){watchFrontend(connection,req.optJSONArray("args"));return;}
+                        String action=req.optString("action");
+                        if("watch".equals(action)){watchFrontend(connection,req.optJSONArray("args"));return;}
                         JSONObject answer;
                         try {
-                            if("daily_usage".equals(req.optString("action"))){
+                            if("cutoff_range".equals(action)){
+                                answer=new JSONObject().put("ok",true).put("minMv",BatteryService.cutoffMinMv(battery.designCapacityMah()));
+                            }else if("daily_usage".equals(action)){
                                 DailyUsage history=dailyUsage;
                                 if(history==null){synchronized(this){if(dailyUsage==null)dailyUsage=new DailyUsage(ctx);history=dailyUsage;}}
                                 JSONArray args=req.optJSONArray("args");if(args==null||args.length()!=3)throw new IOException("使用情况参数无效");
                                 answer=history.read(args.getLong(0),args.getLong(1),args.getString(2));
-                            }else if(usageRead(req.optString("action")))answer=readUsage(req);
+                            }else if(usageRead(action))answer=readUsage(req);
                             else synchronized(mutex){answer=dispatch(req);}
                         }
                         catch(Throwable e){answer=new JSONObject().put("ok",false).put("error",FriendlyError.message(e));}
@@ -1185,7 +1228,7 @@ public final class Main {
         if(mode==1){watchBatteryInfo(socket,args.optInt(3,1)==1);return;}
         if(mode==SETTINGS_WATCH_MODE){watchSettings(socket);return;}
         boolean summaryOnly=mode==3||mode==HOME_WATCH_MODE||mode==SUMMARY_WATCH_MODE;
-        long refreshMs=mode==HOME_WATCH_MODE?HOME_REFRESH_MS:1000;
+        long refreshMs=mode==HOME_WATCH_MODE||mode==DETAIL_WATCH_MODE?LIVE_READING_REFRESH_MS:1000;
         boolean includeList=args==null||args.optInt(5,1)==1;
         long id=args==null?0:Math.max(0,args.optLong(0,0)),after=args==null?0:Math.max(0,args.optLong(1,0));
         long began=SystemClock.elapsedRealtime(),lastList=0,lastSettings=-1,normalId=-1,normalAfter=0;
@@ -1280,7 +1323,7 @@ public final class Main {
             if(stopping)throw new IOException("后台正在结束，请稍后重试。");
             if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("性能监视器参数无效");
             boolean enabled=p.getInt(0)==1;
-            db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('power_indicator',?)",new Object[]{enabled?"1":"0"});
+            saveBootMode("power_indicator",enabled);
             powerIndicator.enabled(enabled);
             updateGaugeInterval();
             settingsVersion++;wakeCollector();
@@ -1291,6 +1334,10 @@ public final class Main {
         if(action.equals("shutdown")){requestStop("app_uninstalled".equals(p.optString(0))?"app_uninstalled":"service_updated");return o;}
         if(action.equals("settings"))return o.put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem).put("fastEnabled",fastEnabled).put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
         if(action.equals("default_settings"))return o.put("settings",defaultSettings());
+        if(action.equals("reset_settings")){
+            if(p.length()!=0)throw new IOException("恢复默认设置参数无效");
+            return saveSettingsValues(defaultSettingsValues(),false,true);
+        }
         if(action.equals("set_settings"))return saveSettings(p);
         if(action.equals("cache_records"))return store.cacheRecords(p);
         if(action.equals("live"))return live(p);
@@ -1324,7 +1371,7 @@ public final class Main {
             if(records.length()==0)throw new IOException("记录不存在或已删除");
             JSONObject record=records.getJSONObject(0);long end=record.getLong("end_elapsed")-record.getLong("start_elapsed");
             if(p.optLong(2,0)>0)end=Math.min(end,p.getLong(2)-1);
-            store.rawPoints(o,id,0,end,p.optLong(1,0)-1);return o.put("record",record).put("end",end);
+            store.rawPoints(o,id,0,end,p.optLong(1,0)-1);return o.put("record",record).put("end",end).put("highDesignCapacity",highDesignCapacity(battery.designCapacityMah()));
         }
         if(action.equals("delete")) {
             boolean current=activeSession(id),gameCurrent=id==gameTrack.session;Core.Reading r=current&&!gameCurrent?hardwareReading(header):null;
@@ -1361,7 +1408,7 @@ public final class Main {
         JSONArray records=store.rows("SELECT *,ABS(pct_end-pct_start) AS delta_pct FROM sessions WHERE id=?",new String[]{""+id});
         if(records.length()==0)throw new IOException("记录不存在或已删除");
         JSONObject record=records.getJSONObject(0);
-        o.put("record",record).put("statsVersion",statsVersion).put("statsEpoch",statsEpoch);
+        o.put("record",record).put("statsVersion",statsVersion).put("statsEpoch",statsEpoch).put("highDesignCapacity",highDesignCapacity(battery.designCapacityMah()));
         long from=Math.max(0,p.optLong(1,0)),to=Math.max(from+1,p.optLong(2,Long.MAX_VALUE));
         to=Math.min(to,records.getJSONObject(0).getLong("end_elapsed")-records.getJSONObject(0).getLong("start_elapsed"));
         int budget=Math.max(240,Math.min(6000,p.optInt(3,1200)));
@@ -1383,16 +1430,18 @@ public final class Main {
     JSONObject status()throws Exception {return status(true);}
     private JSONObject status(boolean includeReading)throws Exception {
         JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.5").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
-            .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi);
+            .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi)
+            .put("highDesignCapacity",highDesignCapacity(battery.designCapacityMah()));
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
-        o.put("retentionThresholdPct",settings.optInt("deletePct",5)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
+        o.put("retentionThresholdPct",settings.optInt("deletePct",DEFAULT_DELETE_PCT)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
         o.put("cutoffAvailable",cutoffAvailable()).put("recordingEnabled",recordingEnabled).put("state",state).put("session",preferredSession()).put("normalSession",session).put("gameSession",gameTrack.session).put("capabilities",capabilities).put("cellCount",cellCount).put("listVersion",settingsVersion);
         o.put("tailProgress",fullGate.progress(SystemClock.elapsedRealtime()));
         o.put("interactive",screenState.known?sampling.interactive:JSONObject.NULL).put("sampleIntervalMs",interval());
         o.put("gamePowerIntervalMs",powerIntervalMs());
         boolean frameworkHealthy=framework.healthy();
         o.put("frameworkHealthy",frameworkHealthy).put("screenListener",screenListenerReady&&frameworkHealthy).put("screenError",screenError);
-        o.put("screenFallback",!screenListenerReady).put("screenStateKnown",screenState.known).put("screenStateSource",screenState.source);
+        o.put("screenFallback",!screenListenerReady).put("screenStateKnown",screenState.known)
+            .put("screenStateAvailable",screenStateAvailable()).put("screenStateSource",screenState.source);
         o.put("usageCheckedAt",usageCheckedAt).put("usageErrorAt",usageErrorAt).put("usageActive",(recordingEnabled||fastEnabled)&&state==0);
         o.put("powerInputDiagnostics",powerInputDiagnostics);
         o.put("usageError",usageError).put("error",powerError.isEmpty()?runtimeError:powerError).put("readingRecoveryProblem",readingRecoveryProblem)

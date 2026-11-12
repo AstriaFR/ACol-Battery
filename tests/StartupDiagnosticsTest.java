@@ -48,34 +48,36 @@ public final class StartupDiagnosticsTest {
         check(find(StartupFeedback.notices(null,healthy().put("usageError","服务尚未就绪")),"应用统计暂不可用").text.contains("继续重试"),"Optional usage failures must be reported without disabling recording");
         JSONObject unknownPower=healthy();unknownPower.getJSONObject("reading").put("onlineKnown",false).put("online",JSONObject.NULL).put("onlineSource","unavailable");
         check(find(StartupFeedback.notices(null,unknownPower),"充电连接状态待确认").text.contains("自动重试"),"Unknown connection must pause without fatal initialization");
-        JSONObject servicePower=healthy();servicePower.getJSONObject("reading").put("onlineKnown",true).put("onlineSource","battery_service");
-        check(find(StartupFeedback.notices(null,servicePower),"充电连接状态使用系统数据").text.contains("BatteryService"),"Independent system fallback must be explained");
-        JSONObject powerFallback=healthy();powerFallback.getJSONObject("reading").put("onlineSource","android");
-        check(find(StartupFeedback.notices(null,powerFallback),"充电连接状态使用系统数据").text.contains("电池广播"),"Power input fallback must be explained");
-        check(find(StartupFeedback.notices(new JSONObject().put("powerInputFallback",true),healthy()),"充电连接状态使用系统数据")!=null,"Probe fallback must be reported");
-        JSONObject capacityFallback=healthy();capacityFallback.getJSONObject("reading").put("rmSource","android");
-        List<StartupFeedback.Notice> capacityNotices=StartupFeedback.notices(null,capacityFallback);
-        check(capacityNotices.size()==1&&find(capacityNotices,"剩余容量使用系统数据").text.contains("CHARGE_COUNTER"),"Capacity fallback must appear in the startup notice");
-        check(StartupFeedback.notices(capacityFallback,healthy()).isEmpty(),"Recovered RM must override probe capacity fallback");
-        JSONObject diagnosticProbe=healthy().put("nativeDiagnostics","timerfd_create: errno=1 (Operation not permitted)").put("fallbackDiagnostics",new org.json.JSONArray().put("读取 battery_rm\nNoSuchFileException"));
-        capacityFallback.put("fallbackDiagnostics",new JSONObject().put("native","wake_lock: errno=13 (Permission denied)").put("entries",new org.json.JSONArray().put("屏幕监听注册\nSecurityException")));
-        String fallbackReport=StartupFeedback.downgradeReport(diagnosticProbe,capacityFallback);
-        check(fallbackReport.contains("CHARGE_COUNTER")&&fallbackReport.contains("NoSuchFileException")&&fallbackReport.contains("SecurityException")&&fallbackReport.contains("timerfd_create")&&fallbackReport.contains("wake_lock"),"Report must show both probe and backend fallback diagnostics");
+        JSONObject workingFallback=healthy().put("screenListener",false).put("screenFallback",true)
+            .put("screenEventApi","screen_broadcast").put("screenStateAvailable",true).put("cutoffAvailable",false);
+        JSONObject fallbackReading=workingFallback.getJSONObject("reading");
+        fallbackReading.put("onlineKnown",true).put("rmSource","android").put("voltageSource","android").put("currentSource","android");
+        for(String source:new String[]{"android","battery_service"}){
+            fallbackReading.put("onlineSource",source);
+            check(StartupFeedback.notices(null,workingFallback).isEmpty(),"Working fallbacks must be silent");
+        }
+        JSONObject diagnosticProbe=healthy().put("nativeDiagnostics","timerfd_create: errno=1 (Operation not permitted)")
+            .put("fallbackDiagnostics",new org.json.JSONArray().put("剩余容量缺失\nNoSuchFileException"));
+        unknownPower.put("fallbackDiagnostics",new JSONObject().put("native","wake_lock: errno=13 (Permission denied)")
+            .put("entries",new org.json.JSONArray().put("充电连接状态不可用\nSecurityException")));
+        String fallbackReport=StartupFeedback.downgradeReport(diagnosticProbe,unknownPower);
+        check(fallbackReport.contains("充电连接状态待确认")&&fallbackReport.contains("NoSuchFileException")&&fallbackReport.contains("SecurityException")&&fallbackReport.contains("timerfd_create")&&fallbackReport.contains("wake_lock"),"Report must show both probe and backend diagnostics for unavailable data");
         check(!fallbackReport.contains("\n\n")&&fallbackReport.contains("应用可继续使用"),"Fallback report must be compact and permit continued use");
+        String fallbackDetail=ErrorReport.concise(fallbackReport);
+        check(fallbackDetail.contains("【接口检查】")&&fallbackDetail.contains("【后台连接】")&&fallbackDetail.contains("timerfd_create")
+            &&fallbackDetail.contains("充电连接状态待确认")&&!fallbackDetail.contains("reading.pct"),"Keep stage and failing interface without routine readings");
         FallbackDiagnostics.record("重复读取",new java.io.IOException("first"));FallbackDiagnostics.record("重复读取",new java.io.IOException("again"));
         check(FallbackDiagnostics.snapshot().length()==1,"Repeated sampling errors must be deduplicated");
         JSONObject probe=healthy().put("nativeCapabilities",0).put("screenListener",false).put("cutoffAvailable",false);
         check(StartupFeedback.notices(probe,healthy()).isEmpty(),"Real startup status must override recovered probe failures");
         JSONObject status=healthy().put("capabilities",0).put("screenListener",false).put("screenFallback",true)
-            .put("cutoffAvailable",false).put("recordingEnabled",false).put("recordingProblem","未读到剩余容量");
+            .put("screenEventApi","state_poll").put("recordingEnabled",false).put("recordingProblem","未读到剩余容量");
         List<StartupFeedback.Notice> notices=StartupFeedback.notices(null,status);
-        check(notices.size()==6,"All degraded checks must appear once");
         check(find(notices,"记录已暂停").text.contains("设置"),"Missing readings need manual retry advice");
         check(find(notices,"休眠采样受限").text.contains("不能保证深度休眠"),"Sleep limit must be clear");
-        check(find(notices,"截止电压调整不可用").text.contains("跳过"),"Skipped features must be explicit");
-        status.put("screenStateKnown",false);check(find(StartupFeedback.notices(null,status),"屏幕监听受限").text.contains("暂时无法确认"),"Unknown state must not promise detection");
-        status=healthy();status.getJSONObject("reading").put("voltageSource","android").put("currentSource","android");
-        notices=StartupFeedback.notices(null,status);check(notices.size()==1&&notices.get(0).text.contains("电压、电流"),"Merge Android fallbacks");
+        check(find(notices,"屏幕通知受限").text.contains("可能延迟"),"Polling-only screen detection can delay transitions");
+        status.put("screenStateAvailable",false);
+        check(find(StartupFeedback.notices(null,status),"屏幕状态暂不可用").text.contains("暂时无法确认"),"Unavailable state must not promise detection");
         status=healthy();status.getJSONObject("reading").put("temp",JSONObject.NULL).put("voltage",JSONObject.NULL);
         check(find(StartupFeedback.notices(null,status),"部分电池数据缺失").text.contains("电压、温度"),"Do not invent zeroes for missing data");
         status=healthy().put("recordingEnabled",false);check(StartupFeedback.notices(null,status).isEmpty(),"Manual stop is not a startup downgrade");
@@ -107,8 +109,29 @@ public final class StartupDiagnosticsTest {
         check(StartupFeedback.databaseProblem("SQLiteDatabaseCorruptException")&&StartupFeedback.databaseProblem("SQLiteCantOpenDatabaseException"),"Database recovery button missing for supported failures");
         check(!StartupFeedback.databaseProblem("UnsatisfiedLinkError")&&!StartupFeedback.databaseProblem("未能取得 root 权限"),"Unrelated errors must not offer database reset");
     }
+    static void reportDetail(){
+        String wrapper="技术详情\n异常：cn.astriafr.acobattery.RootSession$CommandFailure：系统未能完成当前操作，请重试初始化。\n"
+            +"  at cn.astriafr.acobattery.RootSession.connect(RootSession.java:105)\n";
+        String bridge="诊断输出\n技术详情\n异常：cn.astriafr.acobattery.common.StartupFailure$Failure：系统未能完成当前操作，请重试初始化。\n"
+            +"  at cn.astriafr.acobattery.daemon.AppBridge.handle(AppBridge.java:77)\n";
+        String backend="诊断输出\n技术详情\n异常：java.lang.IllegalStateException：The Typeface is not fully initialized.\n"
+            +"  at android.graphics.Typeface.getNativeInstance(Typeface.java:234)\n"
+            +"  at android.graphics.Paint.setTypeface(Paint.java:1649)\n"
+            +"  at cn.astriafr.acobattery.daemon.PowerIndicator.<init>(PowerIndicator.java:52)\n"
+            +"  at cn.astriafr.acobattery.daemon.Main.main(Main.java:122)";
+        String summary=ErrorReport.concise("阶段：连接记录服务\n"+wrapper+bridge+backend);
+        check(summary.contains("连接记录服务")&&summary.contains("The Typeface is not fully initialized")
+            &&summary.contains("Typeface.java:234")&&summary.contains("PowerIndicator.java:52"),"Keep concrete startup cause and app call site");
+        check(!summary.contains("AppBridge.java")&&!summary.contains("Paint.java")&&!summary.contains("诊断输出"),"Hide forwarding and intermediate frames");
+        check(ErrorReport.concise(wrapper+bridge).contains("AppBridge.java:77"),"Keep forwarding location when there is no deeper cause");
+        String runtime=ErrorReport.concise("充电连接状态不可用\njava.lang.IllegalStateException: /sys/class/power_supply/usb/online: Permission denied\n"
+            +"  at cn.astriafr.acobattery.common.FallbackDiagnostics.record(FallbackDiagnostics.java:17)\n"
+            +"  at cn.astriafr.acobattery.daemon.BatteryService.online(BatteryService.java:136)");
+        check(runtime.contains("/sys/class/power_supply/usb/online: Permission denied")&&runtime.contains("BatteryService.java:136")
+            &&!runtime.contains("FallbackDiagnostics.java"),"Keep runtime interface and caller without logger frame");
+    }
     public static void main(String[] args)throws Exception{
-        failureLifecycle();feedback();
+        failureLifecycle();feedback();reportDetail();
         System.out.println("Startup diagnostics: launch isolation, preserved causes, downgrade notices and reports passed");
     }
 }

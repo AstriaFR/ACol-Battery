@@ -1,4 +1,4 @@
-export const DEFAULT_SETTINGS=Object.freeze({deletePct:5,hidePct:30,energyWh:null,capacityAh:5.60,capacityAuto:true,voltageMin:3.00,voltageMax:4.50,tempMin:30,tempMax:40,screenOnMinutes:2,screenOffMinutes:30,fastSeconds:2,fastAutoOff:true,chargeSeconds:2,performanceSeconds:2,gaugeIntervalOverride:true});
+export const DEFAULT_SETTINGS=Object.freeze({deletePct:3,hidePct:30,energyWh:19,capacityAh:5,capacityAuto:true,voltageMin:3.00,voltageMax:4.50,tempMin:20,tempMax:40,screenOnMinutes:2,screenOffMinutes:30,fastSeconds:1.5,fastAutoOff:true,chargeSeconds:3,performanceSeconds:1.5,gaugeIntervalOverride:false});
 export const settingsKeys=Object.keys(DEFAULT_SETTINGS);
 export function encodeSettings(value){
   const finite=v=>typeof v==='number'&&Number.isFinite(v);

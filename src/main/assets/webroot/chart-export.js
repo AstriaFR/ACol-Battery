@@ -44,7 +44,7 @@ export async function* recordCsv(api,id){
     const record=data.record,fast=record.fast_seconds>0;
     for(const p of data.points){
       const cellCount=(p[6]&unclassifiedCells)?0:record.cell_count;
-      const estimate=record.kind==='discharge'&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4],cellCount},null):null;
+      const estimate=record.kind==='discharge'&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4],cellCount},null,data.highDesignCapacity):null;
       yield[exportTime(finite(p[13])?p[13]:record.start_wall+p[0]),p[0],p[1],p[2],finite(p[3])?p[3]*(cellCount===2?2:1):null,finite(p[4])?p[4]/1000:null,p[5],finite(p[8])?p[8]/1000:null,finite(p[9])?p[9]/1000:null,p[10],estimate?Number(estimate.whText):null,p[12],p[14],p[15],p[7],p[6]];
     }
     if(!finite(data.nextAfter))break;

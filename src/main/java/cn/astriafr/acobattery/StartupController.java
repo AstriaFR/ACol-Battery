@@ -22,6 +22,7 @@ import cn.astriafr.acobattery.common.FriendlyError;
 import cn.astriafr.acobattery.common.RuntimePayload;
 import cn.astriafr.acobattery.common.StartupFeedback;
 import cn.astriafr.acobattery.common.ErrorLogStore;
+import cn.astriafr.acobattery.common.ErrorReport;
 import org.json.*;
 import java.io.*;
 import java.security.MessageDigest;
@@ -49,10 +50,11 @@ final class StartupController {
     boolean channelLost;
     FrameLayout errorPage;String currentPhase="初始化";
     TextView stage,detail,errorText,errorTitle;
+    ScrollView errorScroll;
     Button retry,errorView,errorCopy,rebuild,errorRebuild;
     boolean canRebuild,rebuilding,showingFallbackReport;
     LinearLayout errorActions,initializationContent;ProgressBar progress;
-    String errorReport="",downgradeReport="";JSONObject probeReport;
+    String errorReport="",downgradeReport="",openedReport="";JSONObject probeReport;
     List<StartupFeedback.Notice> pendingNotices=java.util.Collections.emptyList();
     AlertDialog startupNotice;View reportHome;
     StartupController(MainActivity app){this.app=app;}
@@ -101,7 +103,7 @@ final class StartupController {
     }
     void showInitialization(){
         if(app.destroyed)return;
-        initialized=false;errorPage=null;errorText=null;errorTitle=null;errorCopy=null;errorRebuild=null;canRebuild=false;showingFallbackReport=false;
+        initialized=false;errorPage=null;errorText=null;errorScroll=null;errorTitle=null;errorCopy=null;errorRebuild=null;canRebuild=false;showingFallbackReport=false;openedReport="";
         LinearLayout layout=new LinearLayout(app);initializationContent=layout;layout.setOrientation(LinearLayout.VERTICAL);layout.setGravity(Gravity.CENTER_VERTICAL);layout.setPadding(app.dp(28),app.dp(32),app.dp(28),app.dp(32));layout.setBackgroundColor(Color.rgb(246,248,251));
         LinearLayout title=new LinearLayout(app);title.setGravity(Gravity.CENTER_VERTICAL);
         ImageView icon=new ImageView(app);try(InputStream in=app.getAssets().open("webroot/assets/acol-icon.png")){icon.setImageBitmap(BitmapFactory.decodeStream(in));}catch(IOException ignored){}
@@ -143,7 +145,7 @@ final class StartupController {
         connectionPhase("");
     }
     void copyFailure(){
-        String report=errorPage!=null&&errorPage.getVisibility()==View.VISIBLE&&errorText!=null?errorText.getText().toString():errorReport;if(report.isEmpty())return;
+        String report=errorPage!=null&&errorPage.getVisibility()==View.VISIBLE?openedReport:errorReport;if(report.isEmpty())return;
         ClipboardManager clipboard=(ClipboardManager)app.getSystemService(Context.CLIPBOARD_SERVICE);
         if(clipboard==null)return;
         clipboard.setPrimaryClip(ClipData.newPlainText("ACol 错误报告",report));
@@ -160,20 +162,22 @@ final class StartupController {
             Button back=app.pageBackButton(this::closeErrorPage);LinearLayout.LayoutParams backLine=new LinearLayout.LayoutParams(app.dp(62),app.dp(40));backLine.rightMargin=app.dp(10);header.addView(back,backLine);
             errorTitle=new TextView(app);errorTitle.setTextSize(19);errorTitle.setTypeface(null,Typeface.BOLD);errorTitle.setTextColor(Color.rgb(24,38,56));
             header.addView(errorTitle,new LinearLayout.LayoutParams(0,-2,1));
-            errorCopy=new Button(app);errorCopy.setText("复制报告");errorCopy.setTextSize(12);errorCopy.setMinWidth(0);errorCopy.setMinimumWidth(0);errorCopy.setOnClickListener(v->copyFailure());
+            errorCopy=new Button(app);errorCopy.setText("复制原文");errorCopy.setTextSize(12);errorCopy.setMinWidth(0);errorCopy.setMinimumWidth(0);errorCopy.setOnClickListener(v->copyFailure());
             LinearLayout.LayoutParams copyTop=new LinearLayout.LayoutParams(-2,app.dp(40));copyTop.rightMargin=app.dp(6);header.addView(errorCopy,copyTop);
             reportHome=app.homeIconButton(app::goHomeFromNative);header.addView(reportHome,new LinearLayout.LayoutParams(app.dp(36),app.dp(40)));
             page.addView(header,new LinearLayout.LayoutParams(-1,-2));
-            ScrollView scroll=new ScrollView(app);scroll.setFillViewport(false);
+            errorScroll=new ScrollView(app);errorScroll.setFillViewport(false);
             errorText=new TextView(app);errorText.setTextSize(12);errorText.setTypeface(Typeface.MONOSPACE);errorText.setTextColor(Color.rgb(55,70,90));errorText.setLineSpacing(0,1.08f);errorText.setPadding(app.dp(12),app.dp(12),app.dp(12),app.dp(12));errorText.setTextIsSelectable(true);
             GradientDrawable box=new GradientDrawable();box.setColor(Color.rgb(238,242,247));box.setCornerRadius(app.dp(10));box.setStroke(app.dp(1),Color.rgb(214,222,232));errorText.setBackground(box);
-            scroll.addView(errorText,new ScrollView.LayoutParams(-1,-2));
-            LinearLayout.LayoutParams scrollLine=new LinearLayout.LayoutParams(-1,0,1);scrollLine.topMargin=app.dp(12);page.addView(scroll,scrollLine);
+            errorScroll.addView(errorText,new ScrollView.LayoutParams(-1,-2));
+            LinearLayout.LayoutParams scrollLine=new LinearLayout.LayoutParams(-1,0,1);scrollLine.topMargin=app.dp(12);page.addView(errorScroll,scrollLine);
             errorRebuild=new Button(app);errorRebuild.setText("重建数据库");errorRebuild.setTextColor(Color.rgb(190,65,65));errorRebuild.setOnClickListener(v->askRebuild());
             LinearLayout.LayoutParams rebuildLine=new LinearLayout.LayoutParams(-2,app.dp(48));rebuildLine.gravity=Gravity.END;rebuildLine.topMargin=app.dp(8);page.addView(errorRebuild,rebuildLine);
             errorPage=new FrameLayout(app);errorPage.setBackgroundColor(Color.rgb(246,248,251));errorPage.addView(page,new FrameLayout.LayoutParams(-1,-1));
         }
-        errorTitle.setText(fallback?"初始化降级报告":"初始化问题");errorText.setText(report);
+        openedReport=report;
+        errorTitle.setText(fallback?"初始化降级报告":"初始化问题");errorText.setText(ErrorReport.concise(report));
+        errorScroll.scrollTo(0,0);
         reportHome.setVisibility(rootReady&&app.browser.web!=null?View.VISIBLE:View.GONE);
         errorRebuild.setVisibility(!fallback&&canRebuild&&!rebuilding?View.VISIBLE:View.GONE);
         boolean newErrorParent=errorPage.getParent()!=app.contentFrame;

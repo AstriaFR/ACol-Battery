@@ -49,11 +49,13 @@ public final class AppBridge {
         if(words.length<1||words.length>(words[0].equals("set_settings")?18:17))throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
-            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
+            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","reset_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
             if(action.equals("daily_usage")){
                 if(words.length!=4||!words[1].matches("[0-9]{1,20}")||!words[2].matches("[0-9]{1,20}")||!words[3].matches("[A-Za-z0-9_-]{1,4096}"))throw new IllegalArgumentException("使用情况参数无效");
             }else if(action.equals("error_log")){
                 if(words.length!=2||!words[1].matches("[0-9]{13,20}-[0-9a-f-]{36}"))throw new IllegalArgumentException("日志参数无效");
+            }else if(action.equals("reset_settings")){
+                if(words.length!=1)throw new IllegalArgumentException("恢复默认设置参数无效");
             }else for(int i=1;i<words.length;i++){
                 boolean decimalInterval=action.equals("set_settings")&&(i==11||i==14);
                 if(!words[i].matches(decimalInterval?"[0-9]{1,2}(?:\\.[0-9])?":"[0-9]{1,20}"))throw new IllegalArgumentException("参数无效");
@@ -101,7 +103,15 @@ public final class AppBridge {
             String[] words=parse(request.getString("command"));String action=words[1];JSONArray args=new JSONArray();for(int i=2;i<words.length;i++)args.put(words[i]);
             if(words[0].equals("cutoff")){
                 String[] command=new String[words.length+1];command[0]="/system/bin/sh";command[1]=ROOT+"cutoff.sh";System.arraycopy(words,1,command,2,words.length-1);
-                long deadline=OperationTimeout.deadline();Process p=new ProcessBuilder(command).redirectErrorStream(true).start();
+                long deadline=OperationTimeout.deadline();
+                int minMv=BatteryService.cutoffMinMv(null);
+                try{
+                    JSONObject range=api("cutoff_range",new JSONArray(),Math.min(1000,OperationTimeout.remaining(deadline)));
+                    if(range.optBoolean("ok"))minMv=range.optInt("minMv",minMv);
+                }catch(Exception ignored){}
+                ProcessBuilder builder=new ProcessBuilder(command).redirectErrorStream(true);
+                builder.environment().put("ACO_CUTOFF_MIN_MV",Integer.toString(minMv));
+                Process p=builder.start();
                 ProcessResponse result=ProcessResponse.read(p,deadline,65536);int code=result.code;String text=result.text;
                 send(new JSONObject().put("id",id).put("event","result").put("errno",code).put("stdout",code==0?text:"").put("stderr",code==0?"":text));return;
             }

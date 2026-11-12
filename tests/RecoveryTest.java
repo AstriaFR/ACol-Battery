@@ -15,6 +15,11 @@ public final class RecoveryTest {
         longSleep.restoreExpected(Long.MAX_VALUE);check(longSleep.expected==120*60000L);
         longSleep.restoreExpected(-1);check(longSleep.expected==1000);
         // APK updater and system_server recovery preserve kernel boot and monotonic clock.
+        check(Core.sameBoot("boot-a","boot-a"));
+        check(!Core.sameBoot("boot-a","boot-b"));
+        check(!Core.sameBoot("1","boot-a")); // Legacy enabled flags have no boot ID.
+        check(!Core.sameBoot("0","boot-a"));
+        check(!Core.sameBoot("",""));
         check(resume("boot-a","boot-a","discharge",false,false,false,2000,2300));
         check(resume("boot-a","boot-a","discharge",false,false,false,2000,3600000));
         check(resume("boot-a","boot-a","charge",false,true,false,2000,2300));

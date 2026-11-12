@@ -26,13 +26,13 @@ export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>s
   if(s.key==='voltage'&&cellCount!==2)item={...item,name:'电池电压'};
   return item;
 });}
-export function plotPoints(points,kind,cellCount=2,fast=false){
+export function plotPoints(points,kind,cellCount=2,fast=false,highDesignCapacity=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3])||cellCount!==2||(p[6]&unclassifiedCells))return p;const row=[...p];row[3]*=2;return row;});
   const withEnergy=p=>{
     const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
     const cells=(p[6]&unclassifiedCells)?0:cellCount;
     if(fast&&valid(row[3]))row[3]*=-(cells===2?2:1);
-    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null)?.wh??null;return row;
+    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null,highDesignCapacity)?.wh??null;return row;
   };
   if(fast)return points.map(withEnergy);
   return points.filter(p=>!valid(p[7])||p[7]>=20000).map(p=>{
@@ -281,7 +281,7 @@ export class Chart{
     this.canvas=canvas;this.ctx=canvas.getContext('2d');this.tooltip=tooltip;this.onWindow=onWindow;
     this.markerLine=document.createElement('span');this.markerLine.className='plot-marker';this.markerLine.hidden=true;
     this.markerLine.setAttribute('aria-hidden','true');canvas.after(this.markerLine);
-    this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;
+    this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;this.highDesignCapacity=false;
     this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.startWall=null;this.wallByX=new Map();
     new ResizeObserver(()=>this.draw()).observe(canvas.parentElement);
     globalThis.visualViewport?.addEventListener('resize',()=>this.draw());
@@ -319,7 +319,7 @@ export class Chart{
     return{label,ticks:(wall?wallTimeTicks(this.points,this.startWall,this.window,width,this.kind,this.wallByX):elapsedTimeTicks(this.window,width)).map(t=>({...t,text:wall?systemTimeLabel(t.wall):elapsedMinuteLabel(t.x)}))};
   }
   axisMaximum(){return 110;}
-  preparePoints(points){return plotPoints(points,this.kind,this.cellCount,this.fast);}
+  preparePoints(points){return plotPoints(points,this.kind,this.cellCount,this.fast,this.highDesignCapacity);}
   scaleFor(s){
     const settings=scaleSettingsKey();if(settings!==this.scaleSettings){this.scaleCache.clear();this.scaleSettings=settings;}
     if(s.key==='ram'){
@@ -349,11 +349,12 @@ export class Chart{
   }
   capture(){return{points:[...this.pointers.values()],window:[...this.window]};}
   set(points,total,window,options={}){
-    const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2;
-    if(kind!==this.kind||fast!==this.fast||cells!==this.cellCount||options.recordId!==undefined&&options.recordId!==this.recordId)this.scaleCache.clear();
+    const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2,highDesignCapacity=options.highDesignCapacity===true;
+    if(kind!==this.kind||fast!==this.fast||cells!==this.cellCount||highDesignCapacity!==this.highDesignCapacity||options.recordId!==undefined&&options.recordId!==this.recordId)this.scaleCache.clear();
     if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
     this.startWall=valid(options.startWall)?options.startWall:null;
-    this.kind=kind;this.fast=fast;this.cellCount=cells;this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
+    this.kind=kind;this.fast=fast;this.cellCount=cells;this.highDesignCapacity=highDesignCapacity;
+    this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
     if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);}this.draw();
   }
   setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}

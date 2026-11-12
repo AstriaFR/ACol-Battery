@@ -29,14 +29,14 @@ public final class GaugeUpdateTest {
             state(active,value,"1","2000");
             restarted.apply(1500);
             state(active,value,"1","1500");
-            restarted.restore();
+            restarted.restore(false);
             state(active,value,"0","10000");
             check(!Files.exists(journal),"Successful restore must clear the journal");
 
             // The process died after force_val changed and before force_active changed.
             Files.writeString(journal,"boot-a 0 10000 500");
             Files.writeString(value,"500");
-            new GaugeUpdate(dir,journal.toFile(),"boot-a").restore();
+            new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
             state(active,value,"0","10000");
 
             if(System.getProperty("os.name","").startsWith("Windows")){
@@ -51,13 +51,37 @@ public final class GaugeUpdateTest {
             // Respect an interval changed by another client or carried by a new kernel boot.
             first.apply(500);
             Files.writeString(value,"3000");
-            restarted.restore();
+            restarted.restore(false);
             state(active,value,"1","3000");
             check(!Files.exists(journal),"External changes release ownership");
             first.apply(500);
-            new GaugeUpdate(dir,journal.toFile(),"boot-b").restore();
+            new GaugeUpdate(dir,journal.toFile(),"boot-b").restore(false);
             state(active,value,"1","500");
             check(!Files.exists(journal),"Discard journal from an earlier boot");
+
+            restarted.apply(1500);
+            new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
+            state(active,value,"1","1500");
+            check(!Files.exists(journal),"A disabled switch must retain the applied interval across restarts");
+
+            // Explicit defaults release forcing even if the driver was forced before ACol took over.
+            restarted.apply(2000);
+            restarted.restoreDriverDefault();
+            state(active,value,"0","2000");
+            check(!Files.exists(journal),"Driver default must clear the journal");
+
+            if(System.getProperty("os.name","").startsWith("Windows")){
+                Files.writeString(active,"1");
+                Files.setAttribute(active,"dos:readonly",true);
+                try{
+                    restarted.restoreDriverDefault();
+                    state(active,value,"1","2000");
+                    check(Files.exists(journal),"An interrupted default reset must be retryable");
+                }finally{Files.setAttribute(active,"dos:readonly",false);}
+                new GaugeUpdate(dir,journal.toFile(),"boot-a").restore(true);
+                state(active,value,"0","2000");
+                check(!Files.exists(journal),"Retry must release forcing");
+            }
         }finally{
             Files.deleteIfExists(dir.resolve("gauge-update.state.next"));
             Files.deleteIfExists(journal);
@@ -65,6 +89,6 @@ public final class GaugeUpdateTest {
             Files.deleteIfExists(value);
             Files.delete(dir);
         }
-        System.out.println("Gauge override: same-boot restart, interrupted write, rollback and ownership checks passed");
+        System.out.println("Gauge override: restart, interrupted write, retention, rollback, ownership and driver reset passed");
     }
 }

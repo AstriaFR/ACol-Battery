@@ -10,7 +10,7 @@ final class ScreenEvents {
     static String register(DisplayManager manager,DisplayManager.DisplayListener listener,Handler handler){
         if(Build.VERSION.SDK_INT>=36){
             try{Api36.register(manager,listener,handler);return "display_state";}
-            catch(RuntimeException|LinkageError e){System.err.println("Display state subscription unavailable; using legacy listener: "+e.getClass().getSimpleName());}
+            catch(RuntimeException|LinkageError ignored){}
         }
         manager.registerDisplayListener(listener,handler);
         return "display_legacy";

@@ -4,6 +4,9 @@ set -eu
 STATE=/data/adb/aco_battery_app/cutoff
 BASE=/proc/oplus-votable
 NODES="GAUGE_TERM_VOLTAGE GAUGE_SHUTDOWN_VOLTAGE"
+MIN_MV=2600
+MAX_MV=3400
+if [ "${ACO_CUTOFF_MIN_MV:-}" = 2500 ]; then MIN_MV=2500; fi
 LOCKED=0
 TRANSACTION=0
 umask 077
@@ -54,9 +57,10 @@ lock() {
 }
 effective() { sed -n 's/.*effective=.* v=\([-0-9]*\)$/\1/p' "$BASE/$1/status"; }
 status() {
- printf '{"term":"%s","shutdown":"%s","termForced":"%s","shutdownForced":"%s"}\n' \
+ printf '{"term":"%s","shutdown":"%s","termForced":"%s","shutdownForced":"%s","minMv":%s,"maxMv":%s}\n' \
   "$(effective GAUGE_TERM_VOLTAGE)" "$(effective GAUGE_SHUTDOWN_VOLTAGE)" \
-  "$(cat "$BASE/GAUGE_TERM_VOLTAGE/force_active")" "$(cat "$BASE/GAUGE_SHUTDOWN_VOLTAGE/force_active")"
+  "$(cat "$BASE/GAUGE_TERM_VOLTAGE/force_active")" "$(cat "$BASE/GAUGE_SHUTDOWN_VOLTAGE/force_active")" \
+  "$MIN_MV" "$MAX_MV"
 }
 fingerprint() {
  for n in $NODES; do cat "$BASE/$n/force_active" "$BASE/$n/force_val"; done | cksum | awk '{print $1}'
@@ -64,7 +68,7 @@ fingerprint() {
 validate_voltages() {
  for value in "$1" "$2"; do
   case "$value" in [0-9][0-9][0-9][0-9]) :;; *) fail "请输入四位整数电压，单位 mV。";; esac
-  [ "$value" -ge 2600 ] && [ "$value" -le 3400 ] || fail "可调范围为 2600–3400 mV。"
+  [ "$value" -ge "$MIN_MV" ] && [ "$value" -le "$MAX_MV" ] || fail "可调范围为 $MIN_MV–$MAX_MV mV。"
  done
 }
 snapshot() {

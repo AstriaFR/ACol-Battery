@@ -8,7 +8,7 @@ import{loadSelection,saveSelection}from'./preferences.js?v=acol-2.2s';
 import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,recordEndWall,fmt,stamp,pad2,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
 import{createRecordDrain}from'./record-usage.js?v=acol-2.2s';
 import{bindExport,recordCsv}from'./chart-export.js?v=acol-2.2s';
-import{SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
+import{DETAIL_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
 const fullRecordEnd=Number.MAX_SAFE_INTEGER,previewBudget=1200;
 
@@ -63,7 +63,7 @@ export function createRecordDetail(options){
       const status=await api('status');
       if(generation!==remainingGeneration||!remainingEligible())return;
       if(!canEstimateRemaining(detail.record,status.reading)){stopRemaining();return;}
-      const estimate=remainingEstimate(status.reading,detail.drainSummary?.[0]?.avgPower);
+      const estimate=remainingEstimate(status.reading,detail.drainSummary?.[0]?.avgPower,status.highDesignCapacity);
       if(!estimate){clearRemaining();return;}
       $('remainingWh').textContent=estimate.whText;$('remainingTime').textContent=remainingTime(estimate.minutes,estimate.wh);
     }catch(e){if(generation===remainingGeneration)clearRemaining();}
@@ -112,7 +112,7 @@ export function createRecordDetail(options){
   function applyChart(data,view,live=false){
     const record=data.record;
     chart.readRawInspection=data.preview?async(from,to,x)=>(await api('detail_sample',record.id,from,to,x)).sample:null;
-    chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live});
+    chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),highDesignCapacity:data.highDesignCapacity,fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live});
     if(!data.loading){intervalAppDetails.preload(record,data.statsVersion);screenOffOverlay.update(record,data.statsVersion);}
     renderChartInfo();renderFollow();
   }
@@ -177,7 +177,7 @@ export function createRecordDetail(options){
   function showDetail(data,preserve=false,live=false){
     followRedrawPending=false;
     detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
-    if(!data.loading)liveChannel.setMode(r.active?0:SUMMARY_WATCH_MODE);
+    if(!data.loading)liveChannel.setMode(r.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);
     if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
     if(data.loading)$('apps').hidden=true;
     $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
@@ -197,7 +197,6 @@ export function createRecordDetail(options){
     if(!preserve){followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
     syncReversePlot(false);
     const end=Math.max(1,r.end_elapsed-r.start_elapsed),view=live&&followLive?followWindow(end):preserve?chart.window:[0,end];applyChart(data,view,live);
-    if(!preserve&&chart.enabled.has('energy')&&!(uiSettings.energyWh>0))toast(uiSettings.energyWh===0?'默认能量量程为 0，量程按记录最大值显示。':'未设置默认能量量程，量程按记录最大值显示。');
     if(!data.loading)renderApps(data);
     renderDetailNote(data);
     if(!preserve&&(history.state?.page!=='record'||history.state.id!==r.id))history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);
@@ -286,7 +285,6 @@ export function createRecordDetail(options){
       const input=el('input');input.type='checkbox';input.checked=chart.enabled.has(s.key);input.setAttribute('aria-label',s.name);
       input.onchange=()=>{
         input.checked?chart.enabled.add(s.key):chart.enabled.delete(s.key);
-        if(input.checked&&s.key==='energy'&&!(uiSettings.energyWh>0))toast(uiSettings.energyWh===0?'默认能量量程为 0，量程按记录最大值显示。':'未设置默认能量量程，量程按记录最大值显示。');
         if(!input.checked&&chart.axisKey===s.key)chart.axisKey=null;
         remember();
         chart.clearInspect();chart.draw();renderChartInfo();
@@ -299,7 +297,6 @@ export function createRecordDetail(options){
           if(!label.isConnected||detail?.record.kind!==kind)return;
           held=true;longPressFeedback();chart.axisKey=chart.axisKey===s.key?null:s.key;
           chart.enabled.add(s.key);input.checked=true;remember();
-          if(s.key==='energy'&&!(uiSettings.energyWh>0))toast(uiSettings.energyWh===0?'默认能量量程为 0，量程按记录最大值显示。':'未设置默认能量量程，量程按记录最大值显示。');
           chart.clearInspect();chart.draw();renderChartInfo();
         },500);
       });
@@ -363,7 +360,7 @@ export function createRecordDetail(options){
           else{followRedrawPending=followLive;chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}renderDetailNote(detail);renderFollow();renderChartInfo();}
         }
         renderSummary(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
-        if(activeChanged){liveChannel.setMode(detail.record.active?0:SUMMARY_WATCH_MODE);syncRemainingExplanation();}
+        if(activeChanged){liveChannel.setMode(detail.record.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);syncRemainingExplanation();}
       }
     }
     if(current(token))startRemaining();

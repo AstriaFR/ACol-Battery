@@ -1,29 +1,34 @@
 // Current cell-mean voltage (0.01 V) -> expected remaining mean voltage (0.001 V).
 const table=[
-  [445,3870],[440,3850],[435,3815],[430,3787],[425,3760],[420,3735],
-  [415,3710],[410,3685],[405,3659],[400,3632],[395,3604],[390,3574],
-  [385,3542],[380,3508],[375,3474],[370,3440],[365,3407],[360,3376],
-  [355,3348],[350,3320],[345,3290],[340,3250],[335,3210],[330,3170],
-  [325,3140],[320,3100],[315,3070],[310,3000],[300,2950],[290,2900]
+  [445,3875],[440,3855],[435,3820],[430,3795],[425,3768],[420,3742],
+  [415,3718],[410,3692],[405,3665],[400,3640],[395,3612],[390,3582],
+  [385,3550],[380,3520],[375,3490],[370,3460],[365,3430],[360,3400],
+  [355,3370],[350,3340],[345,3310],[340,3280],[335,3250],[330,3210],
+  [325,3180],[320,3150],[315,3120],[310,3080],[305,3040],[300,3000]
+];
+const highCapacityTable=[
+  ...table.map(([voltage,mean])=>[voltage,mean-75]),
+  [290,2850],[280,2780],[270,2700]
 ];
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 export function canEstimateRemaining(record,reading){
   return !(Number(record?.fast_seconds)>0)||(reading?.onlineKnown!==false&&reading?.online===false);
 }
-export function remainingMeanVoltage(millivolts){
+export function remainingMeanVoltage(millivolts,highDesignCapacity=false){
   if(!finite(millivolts)||millivolts<=0)return null;
   const cv=Math.round(millivolts/10);
-  if(cv<290)return cv/100;
-  if(cv>=445)return 3.870;
-  for(let i=1;i<table.length;i++){
-    const [hi,meanHi]=table[i-1],[lo,meanLo]=table[i];
+  const points=highDesignCapacity?highCapacityTable:table;
+  if(cv<points.at(-1)[0])return cv/100;
+  if(cv>=points[0][0])return points[0][1]/1000;
+  for(let i=1;i<points.length;i++){
+    const [hi,meanHi]=points[i-1],[lo,meanLo]=points[i];
     if(cv>=lo)return Math.round(meanLo+(meanHi-meanLo)*(cv-lo)/(hi-lo))/1000;
   }
   return null;
 }
-export function remainingEstimate(reading,averagePower){
+export function remainingEstimate(reading,averagePower,highDesignCapacity){
   if(reading?.cellCount===0)return null;
-  const mean=remainingMeanVoltage(reading?.voltage);
+  const mean=remainingMeanVoltage(reading?.voltage,highDesignCapacity);
   if(mean===null||!finite(reading?.rm)||reading.rm<0)return null;
   // battery_rm is the equivalent remaining mAh used by the discharge accounting.
   // Use the single-cell mean voltage basis without another 2S multiplier.

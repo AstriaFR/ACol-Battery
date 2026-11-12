@@ -17,11 +17,12 @@ delete warning.dataset.startupError;status='';assert.equal(context.connectionMes
 const inline=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 vm.runInNewContext(inline,{window,localStorage:{getItem:()=>null},matchMedia:()=>({matches:false}),document:{documentElement:{dataset:{}},getElementById:()=>warning}});
 warning.textContent='等待 root 授权…';events.get('error')({});assert.equal(warning.textContent,'页面启动失败，请重新打开 App。');assert.equal(warning.dataset.startupError,'1');
-const app=fs.readFileSync(path.join(root,'app.js'),'utf8'),warnings=[];
-const warningBlock=app.slice(app.indexOf('if(s.screenFallback)'),app.indexOf("$('warning').textContent=warnings.join"));
-vm.runInNewContext(warningBlock,{warnings,s:{screenFallback:true,screenStateKnown:false}});
-assert.ok(warnings.some(text=>text.includes('已启用状态回退检测')));
-assert.ok(warnings.some(text=>text.includes('屏幕状态暂不可用')));
+const warningBlock=source.slice(source.indexOf('const warnings=[]'),source.indexOf("$('warning').textContent=warnings.join"));
+const warningsFor=s=>Array.from(vm.runInNewContext(`${warningBlock}\nwarnings;`,{s,r:{},recording:true}));
+const broadcast={capabilities:31,screenFallback:true,screenEventApi:'screen_broadcast',screenStateAvailable:true};
+assert.deepEqual(warningsFor(broadcast),[]);
+assert.ok(warningsFor({...broadcast,screenStateAvailable:false}).some(text=>text.includes('屏幕状态暂不可用')));
+assert.ok(warningsFor({...broadcast,screenEventApi:'state_poll'}).some(text=>text.includes('亮息屏切换可能延迟')));
 }
 
 async function requestTimeout(){
@@ -33,4 +34,4 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
  globalThis.__timers=timers;const pending=bridge.exec('test');assert.equal(timers[0].ms,10000);timers[0].fn();await assert.rejects(pending,/超时/);
 }
 
-runCases([startupProgress,requestTimeout]).then(()=>console.log('Startup UI: progress, errors, fallback warnings and request timeout passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([startupProgress,requestTimeout]).then(()=>console.log('Startup UI: progress, errors, screen status and request timeout passed')).catch(error=>{console.error(error);process.exitCode=1;});

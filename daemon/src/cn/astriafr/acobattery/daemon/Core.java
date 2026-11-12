@@ -34,10 +34,11 @@ public final class Core {
     public static double remainingMah(long microampHours) {
         return microampHours>=0&&microampHours<=Integer.MAX_VALUE?microampHours/1000.0:Double.NaN;
     }
+    static boolean sameBoot(String savedBoot,String boot){return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot);}
     /** elapsedRealtime survives a framework restart, but never a kernel reboot. */
     public static boolean resumeSession(String savedBoot,String boot,String kind,boolean wasFast,
             boolean online,boolean fast,long start,long end,long now) {
-        return boot!=null&&!boot.isEmpty()&&boot.equals(savedBoot)&&start>=0&&end>=start&&now>=end
+        return sameBoot(savedBoot,boot)&&start>=0&&end>=start&&now>=end
             &&(fast?wasFast&&"discharge".equals(kind):!wasFast&&(online?"charge":"discharge").equals(kind));
     }
     public static boolean gameDischargeInterval(Reading before,Reading after){

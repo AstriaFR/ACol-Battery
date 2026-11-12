@@ -1,6 +1,6 @@
 import{spawn,exec}from'./root-bridge.js?v=acol-2.2s';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
-export const SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
+export const DETAIL_WATCH_MODE=0, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
 
 export const recordRank=record=>record.active?(Number(record.fast_seconds)>0?0:1):2;
 export function compareRecords(a,b){return recordRank(a)-recordRank(b)||b.id-a.id;}

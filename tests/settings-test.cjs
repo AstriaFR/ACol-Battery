@@ -10,12 +10,10 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
  globalThis.window={};
  const {validateApiArgs}=await import(pathToFileURL(path.join(root,'root-bridge.js')).href);
  assert.equal(encodeSettings(DEFAULT_SETTINGS).length,16);
- assert.equal(encodeSettings(DEFAULT_SETTINGS)[14],10001);
+ assert.equal(encodeSettings({...DEFAULT_SETTINGS,energyWh:null})[14],10001);
  for(const value of [0,0.01,25.34,100])assert.equal(encodeSettings({...DEFAULT_SETTINGS,energyWh:value})[14],Math.round(value*100));
  for(const value of [-0.01,100.01,1.001])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,energyWh:value}));
- assert.equal(DEFAULT_SETTINGS.fastSeconds,2);assert.equal(DEFAULT_SETTINGS.performanceSeconds,2);assert.equal(DEFAULT_SETTINGS.screenOffMinutes,30);assert.equal(DEFAULT_SETTINGS.chargeSeconds,2);
- assert.equal(DEFAULT_SETTINGS.gaugeIntervalOverride,true);
- assert.equal(encodeSettings(DEFAULT_SETTINGS)[15],1);
+ assert.equal(encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:true})[15],1);
  assert.equal(encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:false})[15],0);
  assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:1}));
  for(const value of [1,30,60,120])assert.equal(encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value})[9],value);
@@ -58,7 +56,7 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
   setAttribute(){},removeAttribute(){},checkValidity:()=>true,get valueAsNumber(){return Number(this.value);}
  }]));
  const panel=Object.create(SettingsPanel.prototype);panel.form={elements:{namedItem:key=>fields[key]}};
- panel.fill(DEFAULT_SETTINGS);assert.equal(fields.gaugeIntervalOverride.checked,true);
+ panel.fill({...DEFAULT_SETTINGS,gaugeIntervalOverride:true});assert.equal(fields.gaugeIntervalOverride.checked,true);
  fields.gaugeIntervalOverride.checked=false;assert.equal(encodeSettings(panel.values())[15],0);
 }
 
@@ -84,15 +82,17 @@ globalThis.localStorage={
 globalThis.document={documentElement:{dataset:{theme:'light'}}};
 const root=path.join(__dirname,'../src/main/assets/webroot/');
 const{loadSelection,saveSelection}=await import(pathToFileURL(path.join(root,'preferences.js')).href);
-storage.clear();
-  const available=['rm','pct','voltage','power','temp'];
-  const defaults=loadSelection('game',available);
-  assert.ok(defaults.has('temp'),'temperature is enabled for new game records by default');
-
+  const available=['rm','pct','voltage','power','temp','energy'];
+  for(const kind of ['game','discharge']){
+    const selected=new Set(['rm','energy']);
+    assert.ok(saveSelection(kind,selected,available));
+    selected.delete('energy');assert.ok(saveSelection(kind,selected,available));
+    assert.ok(!loadSelection(kind,available).has('energy'),'explicit legend choices are preserved');
+  }
   storage.clear();
   storage.set('battery_curves.legend.game',JSON.stringify(['rm','power']));
   const migrated=loadSelection('game',available);
-  assert.ok(migrated.has('temp'),'existing game legend is migrated once to include temperature');
+  assert.ok(migrated.has('rm')&&migrated.has('power'),'migration preserves saved legend choices');
   migrated.delete('temp');
   assert.ok(saveSelection('game',migrated,available));
   assert.equal(loadSelection('game',available).has('temp'),false,'a later user opt-out is preserved');
@@ -101,18 +101,18 @@ storage.clear();
 async function resetSettings(){
  const root=path.join(__dirname,'../src/main/assets/webroot/');
  const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
- const {DEFAULT_SETTINGS}=await import(pathToFileURL(path.join(root,'config.js')).href);
+ const {DEFAULT_SETTINGS,encodeSettings}=await import(pathToFileURL(path.join(root,'config.js')).href);
  const nodes={resetSettings:{disabled:false},themeToggle:{disabled:false}};globalThis.document={getElementById:id=>nodes[id]};
  const store=new Map();globalThis.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};
  const panel=Object.create(SettingsPanel.prototype),calls=[],defaults={...DEFAULT_SETTINGS,capacityAh:6.23};
  Object.assign(panel,{ready:true,form:{elements:[{disabled:false}]},fastButton:{},recording:{},powerDisplay:{},fastValue:true,powerDisplayValue:true,recordingValue:false,
    askChange:async()=>true,flush:async()=>true,fill:()=>{},onSaved:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
    updateFast(v){if(typeof v==='boolean')this.fastValue=v},updatePowerDisplay(v){this.powerDisplayValue=v},updateRecording(v){this.recordingValue=v},
-   api:async(action,...args)=>{calls.push([action,...args]);if(action==='default_settings')return{settings:defaults};if(action==='set_settings')return{settings:defaults};if(action==='set_fast')return{fastEnabled:false,settings:defaults};if(action==='set_power_display')return{powerDisplayEnabled:false,settings:defaults};if(action==='set_recording')return{recordingEnabled:true,settings:defaults};throw Error(action);}
+   api:async(action,...args)=>{calls.push([action,...args]);if(action==='reset_settings')return{settings:defaults};if(action==='set_fast')return{fastEnabled:false,settings:defaults};if(action==='set_power_display')return{powerDisplayEnabled:false,settings:defaults};if(action==='set_recording')return{recordingEnabled:true,settings:defaults};throw Error(action);}
  });
  assert.equal(await panel.resetDefaults(),true);
- const save=calls.find(c=>c[0]==='set_settings');assert.equal(save[3],623,'uses device design capacity default');assert.equal(save.at(-1),0,'does not prune existing records');
- assert.deepEqual(calls.map(c=>c[0]),['default_settings','set_settings','set_fast','set_power_display','set_recording','theme']);
+ assert.deepEqual(JSON.parse(panel.lastSaved),encodeSettings(defaults),'uses the defaults supplied by the device');
+ assert.deepEqual(calls.map(([action])=>action),['reset_settings','set_fast','set_power_display','set_recording','theme']);
  assert.equal(panel.resetBusy,false);assert.equal(panel.resetPromise,null);
  calls.length=0;panel.askChange=async()=>false;assert.equal(await panel.resetDefaults(),false);assert.equal(calls.length,0,'cancelling does not modify settings');
 }
