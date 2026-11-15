@@ -15,6 +15,17 @@ final class Owner {
     static final File RUNTIME=new File(BASE,"runtime");
     static final File BOOT=new File("/data/adb/service.d/aco_battery_app.sh");
     static final String PACKAGE="cn.astriafr.acobattery";
+    static void installBootEntry()throws IOException{
+        java.nio.file.Path entry=BOOT.toPath(),directory=entry.getParent();
+        Files.createDirectories(directory);
+        // A temporary file in the same directory permits atomic replacement.
+        java.nio.file.Path pending=Files.createTempFile(directory,".aco_battery_app-",".next");
+        try{
+            Files.write(pending,Files.readAllBytes(new File(RUNTIME,"boot.sh").toPath()));
+            Files.setPosixFilePermissions(pending,java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+            Files.move(pending,entry,java.nio.file.StandardCopyOption.ATOMIC_MOVE,java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }finally{Files.deleteIfExists(pending);}
+    }
     static String read(File file)throws IOException{return new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8).trim();}
     static void write(File file,String text)throws IOException{
         File tmp=new File(file.getPath()+".next");Files.write(tmp.toPath(),text.getBytes(StandardCharsets.UTF_8));

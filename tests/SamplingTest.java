@@ -255,6 +255,27 @@ public final class SamplingTest {
             node->{throw new AssertionError("valid primary pack voltage fell through: "+node);});
         check(dual.displayVoltage()==2900&&Double.isNaN(dual.temp));
     }
+    static void gaugeCurrentFallback(){
+        Core.Reading charging=new Core.Reading();charging.cellCount=2;
+        BatteryService.applyGaugeFallback(charging,8200,Double.NaN,30,true,
+            node->{check(node.equals("current_now"));return "1400000";},
+            node->{throw new AssertionError("valid primary current fell through: "+node);});
+        check(charging.chargingCurrent()==1400&&charging.compensatedCurrent()==2800&&charging.currentSource.equals("current_now"));
+
+        Core.Reading discharging=new Core.Reading();discharging.cellCount=1;
+        BatteryService.applyGaugeFallback(discharging,4000,Long.MIN_VALUE,30,true,
+            node->"2147483647",node->{check(node.equals("current_now"));return "-650000";});
+        check(discharging.chargingCurrent()==-650&&discharging.power()==-2.6);
+
+        Core.Reading zero=new Core.Reading();zero.cellCount=1;
+        BatteryService.applyGaugeFallback(zero,4000,0,30,true,
+            node->{throw new AssertionError("valid Android zero fell through: "+node);},node->"");
+        check(zero.current==0&&zero.currentSource.equals("android"));
+
+        Core.Reading missing=new Core.Reading();missing.cellCount=1;
+        BatteryService.applyGaugeFallback(missing,4000,Double.NaN,30,true,node->"",node->"NaN");
+        check(Double.isNaN(missing.current)&&missing.currentSource.isEmpty());
+    }
     static void cpuUsage(){
         long[] before={100,50}, busy={120,50}, mostlyIdle={120,65};
         check(PerformanceCollector.coreUsage(before,busy)==100);
@@ -266,6 +287,33 @@ public final class SamplingTest {
         java.util.Map<Integer,long[]> current=java.util.Map.of(0,busy,1,mostlyIdle);
         check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0,1),previous,current)==62.5);
         check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0),previous,java.util.Map.of(0,busy,1,before))==50);
+        java.util.Map<Integer,long[]> retained=java.util.Map.of(0,busy);
+        check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0),previous,retained)==50);
+        check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(),previous,retained)==50);
+        check(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(2),previous,java.util.Map.of())==0);
+        check(Double.isNaN(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(0,1),previous,retained)));
+        check(Double.isNaN(PerformanceCollector.cpuUsage(java.util.List.of(0,1),java.util.Set.of(),previous,java.util.Map.of())));
+    }
+    static void fpsLayerSelection(){
+        java.util.regex.Pattern packageName=PerformanceCollector.layerPackagePattern("game.demo");
+        for(String layer:new String[]{"SurfaceView[game.demo/Game]#1","VRI-game.demo/.Game#2","game.demo:remote#3","game.demo"})
+            check(packageName.matcher(layer).find());
+        for(String layer:new String[]{"SurfaceView[game.demo.overlay/Overlay]#1","SurfaceView[other.game.demo/Activity]#2","VRI-game.demo_tools/.Game#3","VRI-gameXdemo/.Game#4"})
+            check(!packageName.matcher(layer).find());
+        long now=20_000_000_000L,window=1_500_000_000L;
+        long[] auxiliary={now-1_000_000},main=new long[72];
+        for(int i=0;i<main.length;i++)main[i]=now-2_000_000L-(main.length-1-i)*8_333_333L;
+        long[][] histories={auxiliary,main};
+        int selected=PerformanceCollector.bestFrameHistory(histories,now,window);
+        check(selected==1);
+        check(Math.abs(PerformanceCollector.frameRate(histories[selected],now,window)-120)<0.001);
+        long[] faster=new long[main.length];
+        for(int i=0;i<faster.length;i++)faster[i]=now-3_000_000L-(faster.length-1-i)*4_166_667L;
+        check(PerformanceCollector.bestFrameHistory(new long[][]{main,faster},now,window)==1);
+        check(Math.abs(PerformanceCollector.frameRate(faster,now,window)-240)<0.001);
+        check(PerformanceCollector.bestFrameHistory(new long[][]{{now-window},auxiliary},now,window)==1);
+        check(PerformanceCollector.frameRate(main,now+window,window)==0);
+        check(PerformanceCollector.bestFrameHistory(new long[][]{{},{}},now,window)==-1);
     }
     public static void main(String[] args)throws Exception{
         MemoryStats memory=MemoryStats.parse("MemTotal: 11392228 kB\nMemFree: 824840 kB\nMemAvailable: 4639988 kB\n");
@@ -273,7 +321,7 @@ public final class SamplingTest {
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();cpuUsage();
+        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();
         System.out.println("Sampling: 500 ms charging reuse, tail rules, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

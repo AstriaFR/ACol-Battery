@@ -52,13 +52,13 @@ export class SettingsPanel{
     }
     for(const button of this.keypad.querySelectorAll('[data-key]'))button.onclick=()=>this.press(button.dataset.key);
     document.getElementById('keypadApply').onclick=()=>this.commitEditor();
+    document.getElementById('keypadRestore').onclick=()=>this.applyEditorAction(this.editor?.restore);
     document.getElementById('keypadCancel').onclick=()=>this.dismissEditor();
     this.keypad.addEventListener('cancel',e=>{e.preventDefault();this.dismissEditor();});
     this.keypad.addEventListener('click',e=>{const r=this.keypad.getBoundingClientRect();if(e.target===this.keypad&&(e.clientY<r.top||e.clientX<r.left||e.clientX>r.right))this.dismissEditor();});
     this.keypad.addEventListener('keydown',e=>{
       let key=/^[0-9]$/.test(e.key)?e.key:{'.':'dot','-':'sign',Backspace:'backspace',Delete:'clear'}[e.key];
       if(key){e.preventDefault();this.press(key);}
-      else if(e.key==='Enter'){e.preventDefault();this.commitEditor();}
     });
   }
   setStatus(text,error=false){this.status.textContent=error?text:'';this.status.hidden=!error;this.status.classList.toggle('error',error);}
@@ -86,7 +86,7 @@ export class SettingsPanel{
     if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
     this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
     try{
-      if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，电流计将交回厂商驱动控制，记录总开关将开启。已有记录和备份会保留。'))return false;
+      if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，记录总开关将开启。已有记录和备份会保留。'))return false;
       if(!await this.flush())throw Error('当前设置未能保存，请重试。');
       let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
       for(const field of this.form.elements)field.disabled=true;
@@ -165,22 +165,50 @@ export class SettingsPanel{
     const names={deletePct:'自动删除百分比',hidePct:'自动隐藏百分比',energyWh:'默认能量量程',capacityAh:'默认容量量程',voltageMin:'电压下限',voltageMax:'电压上限',tempMin:'温度下限',tempMax:'温度上限',screenOnMinutes:'亮屏记录间隔',screenOffMinutes:'息屏记录间隔',fastSeconds:'功耗采样间隔',performanceSeconds:'性能采样间隔',chargeSeconds:'充电记录间隔'};
     const field=this.form.elements.namedItem(key),digits=key==='fastSeconds'||key==='performanceSeconds'?1:2;
     const decimal=digits===1||['energyWh','capacityAh','voltageMin','voltageMax'].includes(key),signed=key.startsWith('temp');
-    this.editor={key,field,draft:field.value,fresh:true,decimal,signed,digits};
-    document.getElementById('keypadTitle').textContent=names[key];
     const unit=key.endsWith('Pct')?'%':key==='energyWh'?'Wh':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
-    document.getElementById('keypadUnit').textContent=unit;
     const minimum=decimal?Number(field.min).toFixed(digits):field.min,maximum=decimal?Number(field.max).toFixed(digits):field.max;
-    document.getElementById('keypadRange').textContent=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
-    this.keypad.querySelector('[data-key=dot]').disabled=!decimal;
-    this.keypad.querySelector('[data-key=sign]').disabled=!signed;
+    const range=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
+    this.openEditor({key,field,draft:field.value,decimal,signed,digits},names[key],unit,range,push?{page:'settings',keypad:true,key}:null);
+  }
+  openEditor(editor,title,unit,range,state){
+    if(this.keypad.open||this.editorBusy)return;
+    this.editor={...editor,fresh:true};
+    document.getElementById('keypadTitle').textContent=title;
+    document.getElementById('keypadUnit').textContent=unit;
+    document.getElementById('keypadRange').textContent=range;
+    const restore=document.getElementById('keypadRestore');
+    document.getElementById('keypadApply').disabled=!!editor.applyDisabled;
+    restore.hidden=!editor.restore;
+    restore.disabled=editor.restoreDisabled??false;
+    const hint=document.getElementById('keypadHint');
+    hint.textContent=editor.hint??'';
+    hint.hidden=!editor.hint;
+    this.keypad.querySelector('[data-key=dot]').disabled=!editor.decimal;
+    this.keypad.querySelector('[data-key=sign]').disabled=!editor.signed;
     this.editorError('');this.drawEditor();
-    if(push)history.pushState({page:'settings',keypad:true,key},'',`${location.pathname}${location.search}#settings-keypad`);
+    if(state)history.pushState(state,'',`${location.pathname}${location.search}#${state.page}-keypad`);
     this.keypad.showModal();document.getElementById('keypadCancel').focus({preventScroll:true});
   }
   drawEditor(){document.getElementById('keypadValue').textContent=this.editor?.draft||'—';}
   editorError(text){const box=document.getElementById('keypadError');box.textContent=text;box.hidden=!text;}
+  async applyEditorAction(action){
+    const editor=this.editor;
+    if(!editor||!action||this.editorBusy)return;
+    const apply=document.getElementById('keypadApply'),restore=document.getElementById('keypadRestore');
+    const wasDisabled=restore.disabled;
+    this.editorBusy=apply.disabled=restore.disabled=true;
+    this.editorError('');
+    let saved=false;
+    try{saved=await action()!==false;}
+    catch(error){if(this.editor===editor)this.editorError(error.message);}
+    finally{this.editorBusy=false;apply.disabled=!!editor.applyDisabled;restore.disabled=wasDisabled;}
+    if(saved&&this.editor===editor){
+      this.closeEditor();
+      if(history.state?.keypad)history.back();
+    }
+  }
   press(key){
-    const e=this.editor;if(!e)return;
+    const e=this.editor;if(!e||e.commit&&this.editorBusy)return;
     this.editorError('');
     if(key==='clear'){e.draft='';e.fresh=false;}
     else if(key==='backspace'){e.draft=e.draft.slice(0,-1);e.fresh=false;}
@@ -193,9 +221,13 @@ export class SettingsPanel{
     this.drawEditor();
   }
   async commitEditor(){
-    const e=this.editor;if(!e||this.editorBusy)return;
+    const e=this.editor;if(!e||this.editorBusy||e.applyDisabled)return;
     if(e.key==='energyWh'&&e.draft===''){e.field.value='';e.field.dispatchEvent(new Event('change',{bubbles:true}));this.dismissEditor();return;}
     if(!/^-?\d+(?:\.\d*)?$/.test(e.draft)){this.editorError('请输入完整数值。');return;}
+    if(e.commit){
+      await this.applyEditorAction(()=>e.commit(Number(e.draft)));
+      return;
+    }
     let value;
     try{value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);}
     catch(error){this.editorError(error.message);return;}
@@ -257,7 +289,7 @@ export class SettingsPanel{
   }
   cancelDeleteConfirmation(){if(history.state?.confirmDelete)history.back();else this.closeDeleteConfirmation();}
   closeDeleteConfirmation(){if(this.deleteConfirm.open)this.deleteConfirm.close();this.pendingDelete=null;this.deleteStage=0;}
-  dismissEditor(){if(history.state?.confirmDelete)history.go(-2);else if(history.state?.keypad)history.back();else this.closeEditor();}
+  dismissEditor(){if(this.editor?.commit&&this.editorBusy)return;if(history.state?.confirmDelete)history.go(-2);else if(history.state?.keypad)history.back();else this.closeEditor();}
   closeEditor(){
     for(const [key,dialog] of this.infoDialogs)if(dialog.open&&!history.state?.[key])dialog.close();
     this.closeDeleteConfirmation();if(!history.state?.settingConfirm)this.closeChange();if(this.keypad.open)this.keypad.close();this.editor=null;if(!history.state?.recordingConfirm)this.closeRecordingConfirmation();

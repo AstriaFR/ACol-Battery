@@ -37,11 +37,15 @@ public final class RuntimeTransactionTest {
     }
     public static void main(String[] args)throws Exception{
         try(Fixture f=new Fixture(true)){
+            File oldScript=new File(f.runtime,"cutoff.sh"),oldState=new File(f.base,"cutoff/cutoff-pending");
+            write(oldScript,"legacy script");write(oldState,"legacy token");
             RuntimeTransaction t=f.transaction();t.apply("new-hash","owner-a",f.control);
             check(read(new File(f.base,"runtime.version")).equals("old-hash"),"Version committed before bridge handshake");
             check(new File(f.base,"update.transaction").isFile(),"Missing recovery marker");
             try{t.commit("wrong-owner");throw new AssertionError();}catch(IOException expected){}
             t.commit("owner-a");check(read(new File(f.base,"runtime.version")).equals("new-hash"),"Commit failed");
+            check(read(f.boot).equals("old boot"),"Runtime update must leave the existing boot entry alone");
+            check(!oldScript.exists()&&!oldState.getParentFile().exists(),"Committed upgrade must retire the old script and its state directory");
             check(!new File(f.base,"update.transaction").exists()&&!f.stage.exists(),"Committed recovery state left active");f.protectedData();
         }
         try(Fixture f=new Fixture(true)){
@@ -86,7 +90,7 @@ public final class RuntimeTransactionTest {
             check(!new File(f.runtime,"bin/daemon.dex.jar").exists(),"Failed first-install runtime survived");f.protectedData();
         }
         try(Fixture f=new Fixture(true)){
-            Files.delete(new File(f.stage,"cutoff.sh").toPath());
+            Files.delete(new File(f.stage,"transfer.sh").toPath());
             try{f.transaction().apply("new","owner-a",f.control);throw new AssertionError();}catch(IOException expected){}
             check(f.stops==0,"Invalid payload stopped the old recorder");f.old();
         }
@@ -98,12 +102,11 @@ public final class RuntimeTransactionTest {
             try{f.transaction().apply("new","owner-a",f.control);throw new AssertionError();}catch(IOException expected){}
             check(f.stops==0,"Concurrent updater bypassed the lock");f.old();
         }
-        try(Fixture f=new Fixture(true)){
-            boolean[] failed={false};RuntimeTransaction t=new RuntimeTransaction(f.base,f.boot,(file,execute)->{
-                if(file.equals(f.boot)&&!failed[0]){failed[0]=true;throw new IOException("boot permission denied");}
-            });
-            try{t.apply("new","owner-a",f.control);throw new AssertionError();}catch(IOException expected){}
-            check(f.stops==0,"Preparation failure stopped the recorder");f.old();
+        try(Fixture f=new Fixture(false)){
+            write(f.boot.getParentFile(),"blocks creating service.d");
+            RuntimeTransaction t=f.transaction();t.apply("new","owner-a",f.control);t.commit("owner-a");
+            check(f.starts==1&&read(new File(f.runtime,"service.sh")).equals("new:service.sh"),"An unusable boot directory must not block starting the recorder");
+            f.protectedData();
         }
         try(Fixture f=new Fixture(true)){
             RuntimeTransaction t=new RuntimeTransaction(f.base,f.boot,(file,execute)->{if(file.getName().equals("libcurvewait.so"))throw new Crash();});

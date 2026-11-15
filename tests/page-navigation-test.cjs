@@ -5,8 +5,8 @@ async function navigationMotion(){
  globalThis.window={addEventListener:(name,fn)=>{const list=listeners.get(name)||[];list.push(fn);listeners.set(name,list)}};
  const media={matches:false,addEventListener(name,fn){this.change=fn}};globalThis.matchMedia=()=>media;
  const element=(id,hidden=true,parent=null)=>({id,hidden,parent,events:{},addEventListener(name,fn){this.events[name]=fn},closest(){return this.hidden||this.parent?.hidden?this:null},animate(frames,options){let reject,resolve;const animation={frames,options,cancelled:false,finished:new Promise((a,b)=>{resolve=a;reject=b}),cancel(){this.cancelled=true;reject(Error('cancelled'))},finish(){resolve()}};animations.push({node:this,animation});return animation}});
- const shell=element('appShell',false),home=element('homePage',false,shell),records=element('recordsPage',true,shell),settings=element('settingsPanel',true,shell),detail=element('detail'),week=element('usageWeekDetail'),frame=element('cutoffFrame'),dialog=element('modal',false);
- const nodes=[shell,home,records,settings,detail,week,frame],byId=new Map(nodes.map(n=>[n.id,n]));
+ const shell=element('appShell',false),home=element('homePage',false,shell),records=element('recordsPage',true,shell),settings=element('settingsPanel',true,shell),detail=element('detail'),week=element('usageWeekDetail'),dialog=element('modal',false);
+ const nodes=[shell,home,records,settings,detail,week],byId=new Map(nodes.map(n=>[n.id,n]));
  globalThis.document={hidden:false,documentElement:{hasAttribute:()=>false},getElementById:id=>byId.get(id),querySelectorAll:selector=>selector==='dialog'?[dialog]:[],addEventListener:window.addEventListener};
  globalThis.history={state:{page:'home',homeDepth:0},pushState(state){this.state=state},replaceState(state){this.state=state}};
  globalThis.MutationObserver=class{constructor(callback){this.callback=callback;this.targets=new Map();observers.push(this)}observe(node,options){this.targets.set(node,options)}};

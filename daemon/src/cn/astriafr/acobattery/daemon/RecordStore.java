@@ -122,6 +122,20 @@ final class RecordStore {
         }
         return out.put("points",points).put("wallTimes",walls).put("end",end).put("cursor",after+1).put("more",more);
     }
+    JSONObject chargeIntegral(long id,long startWall,long duration)throws Exception{
+        int cells;
+        try(Cursor c=db.rawQuery("SELECT cell_count FROM sessions WHERE id=? AND kind='charge' AND active=0 AND start_wall=? AND end_elapsed-start_elapsed=CAST(? AS INTEGER)",
+            new String[]{""+id,""+startWall,""+duration})){
+            if(!c.moveToFirst())throw new IOException("已结束的充电记录不可用。");
+            cells=c.getInt(0);
+        }
+        Core.ChargingIntegral integral=new Core.ChargingIntegral(cells);
+        try(Cursor c=db.rawQuery("SELECT x,current,quality FROM samples WHERE session=? AND x>=0 AND x<=? ORDER BY x",
+            new String[]{""+id,""+duration})){
+            while(c.moveToNext())integral.sample(c.getLong(0),c.isNull(1)?Double.NaN:c.getDouble(1),c.getInt(2));
+        }
+        return new JSONObject().put("ok",true).put("mah",jsonValue(nullable(integral.value())));
+    }
     /** Charging is transmitted without decimation. Pages limit IPC size, not data fidelity. */
     void rawPoints(JSONObject out,long id,long from,long to,long after)throws Exception {
         JSONArray result=new JSONArray();boolean more=false;long last=-1;
@@ -201,6 +215,13 @@ final class RecordStore {
                 result.put(row);
             }
         }return result;
+    }
+    JSONObject detailRecord(long id)throws JSONException {
+        JSONArray records=rows("SELECT sessions.*,ABS(pct_end-pct_start) AS delta_pct,"+
+            "CASE WHEN active=0 THEN (SELECT wall FROM samples WHERE session=sessions.id "+
+            "AND x<=sessions.end_elapsed-sessions.start_elapsed ORDER BY x DESC LIMIT 1) END AS end_wall "+
+            "FROM sessions WHERE id=?",new String[]{""+id});
+        return records.optJSONObject(0);
     }
     /** Union of per-bucket extrema across all five signals; endpoints and gaps are retained. */
     JSONArray points(long id,long from,long to,int budget,boolean rawPreview)throws Exception {
@@ -318,10 +339,20 @@ final class RecordStore {
             return o.put("items",values).put("through",through).put("nextAfter",more?last:JSONObject.NULL);
         }
         if(action.equals("battery_history")){
-            int offset=Math.max(0,Math.min(1_000_000,p.optInt(0,0)));
-            JSONArray items=rows("SELECT id,completed_wall,cycles FROM battery_history ORDER BY id DESC LIMIT 20 OFFSET ?",new String[]{""+offset});
-            try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM battery_history",null)){count.moveToFirst();o.put("total",count.getInt(0));}
-            return o.put("items",items);
+            String sql="SELECT id,completed_wall,cycles FROM battery_history";
+            if(p.length()<2){
+                int offset=Math.max(0,Math.min(1_000_000,p.optInt(0,0)));
+                JSONArray items=rows(sql+" ORDER BY id DESC LIMIT 20 OFFSET ?",new String[]{""+offset});
+                try(Cursor count=db.rawQuery("SELECT COUNT(*) FROM battery_history",null)){count.moveToFirst();o.put("total",count.getInt(0));}
+                return o.put("items",items);
+            }
+            long cursor=Math.max(0,p.optLong(0,0));boolean newer=p.getInt(1)==1;
+            String[] args=cursor>0||newer?new String[]{""+cursor}:null;
+            if(newer)sql+=" WHERE id>? ORDER BY id";
+            else sql+=(cursor>0?" WHERE id<?":"")+" ORDER BY id DESC";
+            JSONArray items=rows(sql+" LIMIT 21",args);
+            boolean more=items.length()>20;if(more)items.remove(20);
+            return o.put("items",items).put("more",more);
         }
         if(action.equals("battery_history_detail")){
             long historyId=p.optLong(0,0);if(historyId<1)throw new IOException("历史记录 ID 无效");

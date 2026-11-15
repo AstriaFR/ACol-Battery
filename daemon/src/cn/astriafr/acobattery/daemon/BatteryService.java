@@ -142,6 +142,26 @@ final class BatteryService {
     static Core.Reading readGauge(Context ctx,int cells) {
         return readGauge(ctx,cells,true);
     }
+    static final class MonitorTemperature {
+        final double celsius;
+        final boolean charging;
+        MonitorTemperature(double celsius,boolean charging){this.celsius=celsius;this.charging=charging;}
+    }
+    static MonitorTemperature readMonitorTemperature(Context ctx){
+        double temp=num(read(PS+"battery/temp"))/10;
+        if(!Core.batteryTemperature(temp))temp=num(alternateReading("temp"))/10;
+        String status=read(PS+"battery/status");
+        if(ctx!=null&&(status.isEmpty()||!Core.batteryTemperature(temp))){
+            try{
+                Intent battery=ctx.registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                if(battery!=null){
+                    if(!Core.batteryTemperature(temp))temp=battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE,Integer.MIN_VALUE)/10.0;
+                    if(status.isEmpty()&&battery.getIntExtra(BatteryManager.EXTRA_STATUS,0)==BatteryManager.BATTERY_STATUS_CHARGING)status="Charging";
+                }
+            }catch(Exception ignored){}
+        }
+        return new MonitorTemperature(Core.batteryTemperature(temp)?temp:Double.NaN,"Charging".equalsIgnoreCase(status));
+    }
     static Core.Reading readGauge(Context ctx,int cells,boolean withTemperature) {
         Core.Reading r=new Core.Reading();r.elapsed=SystemClock.elapsedRealtime();r.wall=System.currentTimeMillis();
         r.cellCount=cells;r.onlineKnown=false;
@@ -181,11 +201,17 @@ final class BatteryService {
             voltage=num(fixed.apply("voltage_now"))/1000;
             if(!Core.finite(Core.systemVoltage(r.cellCount,voltage)))voltage=num(alternate.apply("voltage_now"))/1000;
         }
+        boolean useCurrentNode=!Core.finite(r.current)&&!Core.validSystemCurrent(current);
+        if(useCurrentNode){
+            current=num(fixed.apply("current_now"));
+            if(!Core.validSystemCurrent(current))current=num(alternate.apply("current_now"));
+        }
         if(withTemperature&&!Core.batteryTemperature(r.temp)&&!Core.batteryTemperature(temp)){
             temp=num(fixed.apply("temp"))/10;
             if(!Core.batteryTemperature(temp))temp=num(alternate.apply("temp"))/10;
         }
         Core.applySystem(r,voltage,current,withTemperature?temp:Double.NaN);
+        if(useCurrentNode&&Core.finite(r.current))r.currentSource="current_now";
     }
     static void readRemainingCapacity(Context ctx,Core.Reading r) {
         r.rm=num(read(BAT+"battery_rm"));r.rmSource="";
@@ -283,12 +309,6 @@ final class BatteryService {
         return designCapacityMah!=null&&designCapacityMah>=7400;
     }
 
-    static int cutoffMinMv(Integer designCapacityMah){return highDesignCapacity(designCapacityMah)?2500:2600;}
+    int dischargeVoltageMin(){return highDesignCapacity(designCapacityMah)?2500:2600;}
 
-    static boolean cutoffAvailable(){
-        for(String node:new String[]{"GAUGE_TERM_VOLTAGE","GAUGE_SHUTDOWN_VOLTAGE"})
-            for(String part:new String[]{"status","force_active","force_val"})
-                if(!new File("/proc/oplus-votable/"+node+"/"+part).canRead())return false;
-        return true;
-    }
 }

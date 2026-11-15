@@ -123,5 +123,18 @@ function load(file){
   },()=>mutableRecord,{read:async()=>null,save:async(record,state)=>writes.push([record.app_revision,[...state.names][0][1]])});
   const oldRead=changing.preload(mutableRecord);while(!releaseRevision)await Promise.resolve();mutableRecord.app_revision=1;releaseRevision();await oldRead;
   for(let n=0;n<12;n++)await Promise.resolve();assert.deepEqual(writes,[[0,'old'],[1,'new']],'in-flight old data is never saved under a newer revision');
+  const charge=load(path.join(root,'charge-integral.js'));
+  await charge.link((specifier,parent)=>load(path.resolve(path.dirname(parent.identifier),specifier)));await charge.evaluate();
+  let now=0,scans=0,finishScan;
+  context.performance={now:()=>now};
+  const chargeCache=new charge.namespace.ChargeIntegralCache();
+  chargeCache.run=()=>{scans++;return new Promise(resolve=>finishScan=resolve);};
+  const firstScan=chargeCache.prune(api);
+  now=chargeCache.pruneAt;
+  await chargeCache.prune(api);assert.equal(scans,1,'cleanup cannot overlap even after the interval has elapsed');
+  finishScan();await firstScan;
+  const nextScan=chargeCache.prune(api);assert.equal(scans,2,'cleanup can resume after the interval and the preceding scan');
+  finishScan();await nextScan;
+  await chargeCache.prune(api);assert.equal(scans,2,'ordinary refresh cannot repeat a completed scan immediately');
   console.log('Record caches: revision replacement, retryable opens, generation GC, persistent partial interval retry, incremental/concurrent energy and gestures passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

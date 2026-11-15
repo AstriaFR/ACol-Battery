@@ -76,7 +76,7 @@ final class DataTransfer {
     static void snapshot(File app,File snapshot)throws Exception{
         File roots=new File(snapshot,"root"),apps=new File(snapshot,"app");Files.createDirectories(roots.toPath());Files.createDirectories(apps.toPath());
         File[] files=Owner.BASE.listFiles();if(files==null)throw new IOException("无法读取后台数据。");
-        for(File file:files)if(!DataArchive.ROOT_KEEP.contains(file.getName()))DataArchive.copyTree(file,new File(roots,file.getName()),()->{});
+        for(File file:files)if(!DataArchive.keepRootEntry(file.getName()))DataArchive.copyTree(file,new File(roots,file.getName()),()->{});
         for(String name:DataArchive.APP_DIRS){
             File source=new File(app,name),target=new File(apps,name);if(!source.exists())continue;
             if(name.equals("shared_prefs")){

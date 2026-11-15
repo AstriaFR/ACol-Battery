@@ -54,7 +54,11 @@ public final class RuntimeTransaction {
     private void cleanBackup(){
         for(String name:RuntimePayload.FILES)try{Files.deleteIfExists(new File(backup,name+".next").toPath());}catch(IOException ignored){}
         for(String name:new String[]{"version","initialized","boot.entry","ready"})try{Files.deleteIfExists(new File(backup,name).toPath());Files.deleteIfExists(new File(backup,name+".next").toPath());}catch(IOException ignored){}
+        removeRetiredScript(backup);
         RuntimePayload.discard(backup);
+    }
+    private static void removeRetiredScript(File directory){
+        try{Files.deleteIfExists(new File(directory,"cutoff.sh").toPath());}catch(IOException|SecurityException ignored){}
     }
     private Properties state()throws IOException{
         Properties state=new Properties();try(InputStream in=new FileInputStream(transaction)){state.load(in);}return state;
@@ -65,11 +69,10 @@ public final class RuntimeTransaction {
         Files.createDirectories(new File(backup,"bin").toPath());
         for(String name:RuntimePayload.FILES)optional(new File(runtime,name),new File(backup,name));
         optional(new File(base,"runtime.version"),new File(backup,"version"));
-        optional(new File(base,"initialized"),new File(backup,"initialized"));optional(boot,new File(backup,"boot.entry"));
+        optional(new File(base,"initialized"),new File(backup,"initialized"));
         text(new File(backup,"ready"),"1");
-        // Install the recovery-aware boot entry before suspending the old recorder.
-        copy(new File(stage,"boot.sh"),boot);access.set(boot,true);
         Properties state=new Properties();state.setProperty("version",version);state.setProperty("owner",owner);
+        state.setProperty("bootEntryUntouched","true");
         ByteArrayOutputStream bytes=new ByteArrayOutputStream();state.store(bytes,"ACol runtime transaction");
         text(transaction,new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.ISO_8859_1));
         Files.deleteIfExists(new File(base,"update.installed").toPath());text(new File(base,"update.pending"),"1");
@@ -78,14 +81,25 @@ public final class RuntimeTransaction {
         for(String name:RuntimePayload.FILES)copy(new File(stage,name),new File(runtime,name));
         permissions(runtime);text(new File(base,"update.installed"),"1");
     }
+
+    private void removeRetiredVoltageFiles(){
+        removeRetiredScript(runtime);
+        removeRetiredScript(stage);
+        try{DataArchive.removeTree(base,new File(base,"cutoff"));}catch(IOException|SecurityException ignored){}
+    }
     private void rollback(Control control)throws Exception{
         if(!transaction.isFile())return;
         if(!new File(backup,"ready").isFile())throw new IOException("缺少完整的后台恢复文件，已保留更新状态。");
         control.stop();
         for(String name:RuntimePayload.FILES)restore(new File(backup,name),new File(runtime,name));
         restore(new File(backup,"version"),new File(base,"runtime.version"));
-        restore(new File(backup,"initialized"),new File(base,"initialized"));restore(new File(backup,"boot.entry"),boot);
-        if(boot.isFile())access.set(boot,true);
+        restore(new File(backup,"initialized"),new File(base,"initialized"));
+        // Older installers touched the boot entry during preparation. Try to
+        // restore it without making it a condition of runtime recovery.
+        if(!"true".equals(state().getProperty("bootEntryUntouched")))try{
+            restore(new File(backup,"boot.entry"),boot);
+            if(boot.isFile())access.set(boot,true);
+        }catch(IOException|SecurityException ignored){}
         if(new File(runtime,"bin/daemon.dex.jar").isFile())permissions(runtime);
         clearPending();
         // Retain the snapshot until restarting the restored recorder succeeds.
@@ -109,7 +123,7 @@ public final class RuntimeTransaction {
                     // The split update recovers via a separate command with a fresh
                     // deadline. Preserve its journal for that command or boot.
                     if(transaction.isFile()){if(startAfterInstall)rollback(control);}
-                    else if(new File(backup,"ready").isFile()){restore(new File(backup,"boot.entry"),boot);if(boot.isFile())access.set(boot,true);cleanBackup();}
+                    else if(new File(backup,"ready").isFile())cleanBackup();
                 }catch(Exception recovery){failure.addSuppressed(recovery);}
                 throw failure;
             }
@@ -120,7 +134,7 @@ public final class RuntimeTransaction {
             if(!transaction.isFile())return;
             Properties state=state();if(!owner.equals(state.getProperty("owner")))throw new IOException("后台更新会话不匹配，已取消提交。");
             text(new File(base,"runtime.version"),state.getProperty("version"));text(new File(base,"initialized"),"1");
-            clearPending();Files.deleteIfExists(transaction.toPath());cleanBackup();RuntimePayload.discard(stage);
+            clearPending();Files.deleteIfExists(transaction.toPath());cleanBackup();removeRetiredVoltageFiles();RuntimePayload.discard(stage);
         });
     }
     public void recover(String owner,OwnerAlive alive,Control control)throws Exception{

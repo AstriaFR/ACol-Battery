@@ -361,4 +361,17 @@ async function intervalApplications(){
  let day=null;const daily={previousDay:100,nextDay:300,onDate:value=>day=value};DailyUsageChart.prototype.changeDay.call(daily,-1);assert.equal(day,100);DailyUsageChart.prototype.changeDay.call(daily,1);assert.equal(day,300);daily.nextDay=null;day=null;DailyUsageChart.prototype.changeDay.call(daily,1);assert.equal(day,null);
 }
 
-runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications]).then(()=>console.log('Charts: scales, time axes, hit geometry, temperature, RAM, interval apps and day navigation passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function deletedDailyUsage(){
+ const{DailyUsageChart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/daily-usage-chart.js')).href);
+ const day=new Date(2026,10,15).getTime(),nodes={screenTimeTotal:{textContent:'1时'},screenTimeHint:{}};
+ let cleared=false,tipHidden=false;
+ const chart=Object.assign(Object.create(DailyUsageChart.prototype),{
+   day,pkg:null,dayToken:0,selected:8,data:{totalMs:3600000},entry:{dayStart:day,through:day+3600000},host:{},inspectionEnabled:false,
+   node:id=>nodes[id],navigation(){},cancelPress(){},hideTip(){tipHidden=true},drawEmpty(){cleared=true},
+   getCache:()=>({getHours:async()=>({dayStart:day,through:day}),getAllHourApps:async()=>[]})
+ });
+ await chart.display(day);
+ assert.equal(nodes.screenTimeTotal.textContent,'—');assert.equal(chart.data,null);assert.equal(chart.selected,null);assert.ok(cleared&&tipHidden);
+}
+
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications,deletedDailyUsage]).then(()=>console.log('Charts: scales, time axes, hit geometry, temperature, RAM, interval apps, day navigation and deleted usage passed')).catch(error=>{console.error(error);process.exitCode=1;});

@@ -27,7 +27,11 @@ public final class RootSessionStartupTest {
                                 out.println(new JSONObject().put("id",id).put("event","startup_phase").put("message","正在连接后台…"));
                                 out.println(fail?new JSONObject().put("id",id).put("event","result").put("message","后台无法启动。").put("diagnostics","full technical cause")
                                     :new JSONObject().put("id",id).put("event","startup_ready").put("status",new JSONObject().put("ok",true).put("frameworkHealthy",true)));
-                            }else out.println(new JSONObject().put("id",id).put("event","result").put("errno",0).put("stdout",new JSONObject().put("ok",true).toString()));
+                            }else{
+                                JSONObject result=new JSONObject().put("ok",true);
+                                if(request.optString("action").equals("install_boot_entry"))result.put("bootEntryError","Read-only file system");
+                                out.println(new JSONObject().put("id",id).put("event","result").put("errno",0).put("stdout",result.toString()));
+                            }
                         }
                     }
                 }catch(Exception ignored){}finally{exited=true;}
@@ -48,6 +52,8 @@ public final class RootSessionStartupTest {
             check(phases.size()==1,"Missing startup feedback");
             check(shell.received.get(0).startsWith("exec env "),"A second helper process was started");
             JSONObject request=new JSONObject(shell.received.get(1));check(request.getBoolean("commit"),"Update was not committed through the handshake");
+            root.installBootEntry(status);
+            check(status.optBoolean("ok")&&status.has("bootEntryError"),"Boot entry failure must retain recorder readiness and reach the limitations report");
             root.request(new JSONObject().put("id","regular"));check(delivered.await(2,TimeUnit.SECONDS),"Frontend messages were not delivered after startup");
             check(root.api("settings").getBoolean("ok"),"Native API response was lost to the WebView callback");
         }

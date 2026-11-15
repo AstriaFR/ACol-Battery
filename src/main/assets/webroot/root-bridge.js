@@ -39,6 +39,14 @@ window.__acoDeliver=message=>{
 };
 export function exec(command){return send(command);}
 export function validateApiArgs(action,args){
+  if(action==='set_charging_mode'){
+    if(args.length!==1||!/^[0-3]$/.test(String(args[0])))throw Error('参数无效');
+    return;
+  }
+  if(action==='set_oplus_vote'){
+    if(args.length!==2||!/^[A-Z_]+$/.test(String(args[0]))||!/^(?:-?\d{1,5}|stock)$/.test(String(args[1])))throw Error('参数无效');
+    return;
+  }
   if(action==='daily_usage'){
     if(args.length!==3||args.slice(0,2).some(a=>!/^\d+$/.test(String(a)))||!/^[A-Za-z0-9_-]{1,4096}$/.test(String(args[2])))throw Error('使用情况参数无效');
     return;

@@ -1,9 +1,11 @@
 import{openDatabase}from'./indexed-db.js?v=acol-2.2s';
+import{isoWeek}from'./usage-calendar.js?v=acol-2.2s';
 const finite=value=>Number.isFinite(value)&&value>=0;
 export const midnight=wall=>{const date=new Date(wall);date.setHours(0,0,0,0);return date.getTime()};
 export const nextDate=(day,amount=1)=>{const date=new Date(day);date.setDate(date.getDate()+amount);return date.getTime()};
 export const localZone=()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'local'}catch{return'local'}};
 export const canDeleteUsageDay=(day,now=Date.now())=>Number.isFinite(day)&&midnight(day)===day&&day<midnight(now);
+export const canDeleteUsageWeek=(week,now=Date.now())=>Number.isFinite(week?.end)&&week.end<=midnight(now);
 export function newDay(day,zone){
   return{key:`${zone}|${day}`,v:1,zone,dayStart:day,dayEnd:nextDate(day),through:day,state:'0',labels:{},hours:Array.from({length:24},()=>({onMs:0,coveredMs:0,apps:[]}))};
 }
@@ -170,19 +172,31 @@ export class DailyUsageCache{
     for(const id of this.memory.keys())if(id.includes(prefix)||id.includes(prefix.slice(0,-1)+','))this.memory.delete(id);
   }
   async deleteDay(day){
-    if(!Number.isFinite(day)||midnight(day)!==day)throw Error('日期无效');
+    if(!canDeleteUsageDay(day))throw Error('只能删除已结束的日期。');
+    await this.deleteDays([day]);
+    return [day];
+  }
+  async deleteWeek(start){
+    const week=isoWeek(start);
+    if(week.start!==start||!canDeleteUsageWeek(week))throw Error('只能删除已结束的一周。');
+    await this.deleteDays(week.days);
+    return week.days;
+  }
+  async deleteDays(days){
     const db=await this.open(),names=[...stores,...(db.objectStoreNames.contains('days')?['days']:[])],zone=this.zone;
     await this.transaction(names,'readwrite',(s)=>{
-      for(const name of ['hours','day_apps','progress','app_total_days'])s[name].delete([zone,day]);
-      for(const name of ['app_hours','hour_apps','app_totals']){
-        const source=name==='app_totals'?s[name].index('zoneDay'):s[name];
-        const range=name==='app_totals'?IDBKeyRange.only([zone,day]):IDBKeyRange.bound([zone,day],[zone,day,[]]);
-        const request=source.openCursor(range);request.onsuccess=()=>{const cursor=request.result;if(cursor){cursor.delete();cursor.continue();}};
+      for(const day of days){
+        for(const name of ['hours','day_apps','progress','app_total_days'])s[name].delete([zone,day]);
+        for(const name of ['app_hours','hour_apps','app_totals']){
+          const source=name==='app_totals'?s[name].index('zoneDay'):s[name];
+          const range=name==='app_totals'?IDBKeyRange.only([zone,day]):IDBKeyRange.bound([zone,day],[zone,day,[]]);
+          const request=source.openCursor(range);request.onsuccess=()=>{const cursor=request.result;if(cursor){cursor.delete();cursor.continue();}};
+        }
+        if(s.days)s.days.delete(`${zone}|${day}`);
+        s.summaries.put({zone,dayStart:day,dayEnd:nextDate(day),through:nextDate(day),onMs:0,coveredMs:0,deleted:true});
       }
-      if(s.days)s.days.delete(`${zone}|${day}`);
-      s.summaries.put({zone,dayStart:day,dayEnd:nextDate(day),through:nextDate(day),onMs:0,coveredMs:0,deleted:true});
     });
-    this.forgetDay(day);
+    for(const day of days)this.forgetDay(day);
   }
   /** Replace one incomplete hour, updating all derived totals in one transaction. */
   async repairHour(result,hour){

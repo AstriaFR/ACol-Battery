@@ -2,6 +2,7 @@ import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
 const rebootGap=64;
+const dischargeRebase=128;
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
@@ -443,7 +444,7 @@ export class Chart{
   showInspection(row,y){
     this.marker=row[0];this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
-    const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~unclassifiedCells?' · 数据异常':'';
+    const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~(unclassifiedCells|dischargeRebase)?' · 数据异常':'';
     this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${quality}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{

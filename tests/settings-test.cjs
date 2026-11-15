@@ -123,4 +123,25 @@ async function gameToggle(){
  panel.updateFast();assert.equal(panel.fastButton.disabled,false,'game toggle remains available while ordinary recording is off');
  await panel.toggleFast();assert.equal(panel.fastValue,true);await panel.toggleFast();assert.equal(panel.fastValue,false);assert.deepEqual(calls,[['set_fast',1],['set_fast',0]]);assert.equal(panel.fastBusy,false);
 }
-runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset and saved selections passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function keypadKeyboard(){
+ const {SettingsPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/settings-panel.js')).href);
+ const digit={dataset:{key:'3'}},calls=[],nodes=new Map();
+ let keydown;
+ const keypad={querySelectorAll:()=>[digit],addEventListener(type,handler){if(type==='keydown')keydown=handler;}};
+ const control={type:'checkbox',addEventListener(){}};
+ nodes.set('settingsKeypad',keypad);
+ nodes.set('settingsForm',{elements:{namedItem:()=>control},addEventListener(){}});
+ globalThis.document={getElementById(id){
+  if(!nodes.has(id))nodes.set(id,{id,querySelector:()=>({}),addEventListener(){}});
+  return nodes.get(id);
+ }};
+ const panel=new SettingsPanel();
+ panel.dismissEditor=()=>calls.push('cancel');panel.commitEditor=()=>calls.push('apply');panel.press=key=>calls.push(key);
+ const press=(key,target)=>{
+  let prevented=false;keydown({key,target,preventDefault(){prevented=true;}});
+  if(key==='Enter'&&!prevented)target.onclick?.();
+ };
+ press('Enter',nodes.get('keypadCancel'));press('Enter',digit);press('7',digit);press('Enter',nodes.get('keypadApply'));
+ assert.deepEqual(calls,['cancel','3','7','apply']);
+}
+runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle,keypadKeyboard]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset, saved selections and keypad passed')).catch(error=>{console.error(error);process.exitCode=1;});

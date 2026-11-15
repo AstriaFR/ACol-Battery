@@ -41,6 +41,9 @@ public final class StartupDiagnosticsTest {
     static void feedback()throws Exception{
         check(StartupFeedback.notices(null,healthy()).isEmpty(),"Healthy startup must not prompt");
         check(StartupFeedback.notices(null,new JSONObject()).isEmpty(),"Missing optional checks must not invent failures");
+        JSONObject noBootEntry=healthy().put("bootEntryError","Permission denied: service.d");
+        check(StartupFeedback.notices(null,noBootEntry).size()==1,"Boot entry failures belong in the final limitations notice");
+        check(StartupFeedback.downgradeReport(null,noBootEntry).contains("Permission denied: service.d"),"Keep the boot entry failure in the diagnostic report");
         JSONObject optionalLog=healthy();optionalLog.getJSONObject("reading").put("fv",0).put("driverFull",false).put("enabled",true).put("online",false);
         check(StartupFeedback.notices(null,optionalLog).isEmpty(),"Idle charging log values must not cause a startup warning");
         optionalLog.getJSONObject("reading").put("fv",JSONObject.NULL).put("online",true);

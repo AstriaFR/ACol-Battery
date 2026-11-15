@@ -16,17 +16,6 @@ globalThis.document={documentElement:{dataset:{},style:{}},querySelector:()=>nul
  controller.cycle();assert.equal(controller.preference.step,'same');assert.equal(controller.dark,true);
  controller.cycle();assert.equal(controller.preference.step,'auto');nativeDark=false;listeners.get('aco-system-theme')();assert.equal(controller.dark,false);
  delete window.AcoNative.isSystemDark;controller.media.matches=true;controller.apply();assert.equal(controller.dark,true,'browser fallback');
- // Preloaded cutoff content follows the live parent, including its native color scheme.
- let nativeWrites=0;window.AcoNative.setDarkTheme=()=>nativeWrites++;
- const parentListeners=new Map();
- window.parent={document:{documentElement:{dataset:{theme:'light'}}},__acoThemeState:{step:'same',dark:false},addEventListener:(key,cb)=>parentListeners.set(key,cb)};
- localStorage.setItem('acol.theme.preference',JSON.stringify({step:'reverse',dark:true}));
- const child=ThemeController.applyStored({followParent:true});
- assert.equal(document.documentElement.dataset.theme,'light');assert.equal(document.documentElement.style.colorScheme,'light');
- window.parent.__acoThemeState={step:'auto',dark:true};parentListeners.get('aco-theme-change')();
- assert.equal(document.documentElement.dataset.theme,'dark');assert.equal(document.documentElement.style.colorScheme,'dark');
- window.parent.__acoThemeState={step:'reverse',dark:false};child.apply();
- assert.equal(document.documentElement.dataset.theme,'light');assert.equal(nativeWrites,0,'hidden cutoff frame never overwrites native bars');
  // Snapshot updates are deduplicated and rapid toggles cannot apply a stale frame.
  localStorage.setItem('acol.theme.preference',JSON.stringify({step:'auto'}));nativeDark=false;window.AcoNative.isSystemDark=()=>nativeDark;
  const snapshots=[],presentations=[],barColors=[];window.AcoNative.setDarkTheme=dark=>barColors.push(dark);
@@ -57,5 +46,5 @@ globalThis.document={documentElement:{dataset:{},style:{}},querySelector:()=>nul
  document.documentElement.dataset.theme='dark';panel.refreshTheme();
  assert.equal(legends,1);assert.equal(renders,1);
  assert.equal(panel.chart.enabled,enabled);assert.equal(panel.chart.maximum,maximum);assert.equal(panel.chart.frequencyRanges,frequencyRanges);assert.equal(panel.chart.window,view);assert.equal(panel.chart.axisKey,'gpuFreq');
- console.log('Theme: system/manual changes, embedded cutoff sync, native bar ownership, duplicate/rapid updates and chart state preservation passed');
+ console.log('Theme: system/manual changes, native bar ownership, duplicate/rapid updates and chart state preservation passed');
 })().catch(error=>{console.error(error);process.exitCode=1});

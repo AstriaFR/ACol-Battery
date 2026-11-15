@@ -6,6 +6,7 @@ import java.util.*;
 public final class Core {
     static final int UNCLASSIFIED_CELLS=32;
     static final int REBOOT_GAP=64;
+    static final int DISCHARGE_REBASE=128;
     public static final class Reading {
         public long elapsed, wall;
         public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
@@ -87,6 +88,7 @@ public final class Core {
         if(batteryTemperature(temp))r.temp=temp;
         return finite(r.voltage())&&finite(r.current);
     }
+    static boolean validSystemCurrent(double microamps){return finite(microamps)&&Math.abs(microamps)<=30000000;}
     /** Android voltage is mV; CURRENT_NOW is microamps, positive while charging. */
     public static void applySystem(Reading r,double millivolts,double microamps,double temperature) {
         if(!finite(r.displayVoltage())){
@@ -96,7 +98,7 @@ public final class Core {
                 r.vmin=r.vmax=voltage;r.cell1=r.cellCount==1?voltage:Double.NaN;r.cell2=Double.NaN;r.voltageSource="android";
             }
         }
-        if(!finite(r.current)&&finite(microamps)&&Math.abs(microamps)<=30000000){r.current=-microamps/1000;r.currentSource="android";}
+        if(!finite(r.current)&&validSystemCurrent(microamps)){r.current=-microamps/1000;r.currentSource="android";}
         if(!finite(r.temp)&&batteryTemperature(temperature))r.temp=temperature;
     }
     // battery_rm discharge uses the cell-mean voltage basis; do not multiply by 2S again.
@@ -230,6 +232,47 @@ public final class Core {
             if (loss > 0) credit = 0;
             return loss;
         }
+    }
+
+    /** Allow a short dip while the gauge is still settling after unplugging. */
+    static final class DischargeStart {
+        private static final int CONFIRMED_DECLINE_SAMPLES=3;
+        boolean open=true;
+        double peak=Double.NaN;
+        int belowPeak;
+
+        void reset(boolean open,double peak,int belowPeak){
+            this.open=open;this.peak=peak;this.belowPeak=belowPeak;
+        }
+
+        boolean advance(double before,double after,long dt,long maxGap){
+            if(!open)return false;
+            if(!finite(before)||before<0||!finite(after)||after<0||dt<=0||dt>maxGap){
+                open=false;return false;
+            }
+            if(!finite(peak))peak=before;
+            if(after>peak){peak=after;belowPeak=0;return true;}
+            if(after==peak){belowPeak=0;return false;}
+            if(++belowPeak>=CONFIRMED_DECLINE_SAMPLES)open=false;
+            return false;
+        }
+    }
+
+    static final class ChargingIntegral {
+        private final int cells;
+        private long last;
+        private double previous=Double.NaN,total;
+        private boolean measured;
+        ChargingIntegral(int cells){this.cells=cells;}
+        void sample(long x,double current,int quality){
+            if((quality&UNCLASSIFIED_CELLS)!=0||cells<1||cells>2)current=Double.NaN;
+            if(x>last&&(quality&(1|8|REBOOT_GAP))==0&&finite(previous)&&finite(current)){
+                total+=(previous+current)*0.5*(x-last)*cells/3600000;
+                measured=true;
+            }
+            previous=current;last=x;
+        }
+        double value(){return measured?total:Double.NaN;}
     }
 
     public static final class Event {

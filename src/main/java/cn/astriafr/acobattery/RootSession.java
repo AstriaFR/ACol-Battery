@@ -83,9 +83,18 @@ final class RootSession implements Closeable {
     }
     void request(JSONObject request)throws IOException{write(request.toString()+"\n");}
     JSONObject api(String arguments)throws Exception{
+        return call(new JSONObject().put("command","/data/adb/aco_battery_app/runtime/bin/curve-client "+arguments));
+    }
+    void installBootEntry(JSONObject status)throws org.json.JSONException{
+        try{
+            JSONObject result=call(new JSONObject().put("action","install_boot_entry"));
+            if(result.has("bootEntryError"))status.put("bootEntryError",result.getString("bootEntryError"));
+        }catch(Exception error){status.put("bootEntryError",error.toString());}
+    }
+    private JSONObject call(JSONObject request)throws Exception{
         String id="native-"+java.util.UUID.randomUUID();CompletableFuture<JSONObject> future=new CompletableFuture<>();nativeResults.put(id,future);
         try{
-            request(new JSONObject().put("id",id).put("command","/data/adb/aco_battery_app/runtime/bin/curve-client "+arguments));
+            request(request.put("id",id));
             JSONObject result=future.get(OperationTimeout.MAX_MS,TimeUnit.MILLISECONDS);
             if(result.optInt("errno",1)!=0)throw new IOException(result.optString("stderr","后台操作未完成。"));
             JSONObject data=new JSONObject(result.optString("stdout"));if(!data.optBoolean("ok",false))throw new IOException(data.optString("error","后台操作未完成。"));return data;

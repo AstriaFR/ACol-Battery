@@ -38,20 +38,24 @@ public final class AppBridge {
     }
     static String[] parse(String command){
         if(command==null||command.length()>6144)throw new IllegalArgumentException("命令无效");
-        String base=ROOT+"bin/curve-client ",control="/system/bin/sh "+ROOT+"control.sh ",cutoff="/system/bin/sh "+ROOT+"cutoff.sh ";
+        String base=ROOT+"bin/curve-client ",control="/system/bin/sh "+ROOT+"control.sh ";
         String route;
         if(command.startsWith("/system/bin/sh "+base)){route="api";command=command.substring(("/system/bin/sh "+base).length());}
         else if(command.startsWith(base)){route="api";command=command.substring(base.length());}
         else if(command.startsWith(control)){route="api";command=command.substring(control.length());}
-        else if(command.startsWith(cutoff)){route="cutoff";command=command.substring(cutoff.length());}
         else throw new IllegalArgumentException("不支持的操作");
         String[] words=command.trim().split(" +");
         if(words.length<1||words.length>(words[0].equals("set_settings")?18:17))throw new IllegalArgumentException("参数无效");
         String action=words[0];
         if("api".equals(route)){
-            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","reset_settings","set_settings","set_recording","set_fast","set_power_display","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
+            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","charge_integral","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","reset_settings","set_settings","set_recording","set_fast","set_power_display","monitor_appearance","set_monitor_appearance","reset_monitor_appearance","oplus_votes","cool_down_details","set_oplus_vote","reset_oplus_votes","set_charging_mode","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
             if(action.equals("daily_usage")){
                 if(words.length!=4||!words[1].matches("[0-9]{1,20}")||!words[2].matches("[0-9]{1,20}")||!words[3].matches("[A-Za-z0-9_-]{1,4096}"))throw new IllegalArgumentException("使用情况参数无效");
+            }else if(action.equals("set_oplus_vote")){
+                if(words.length!=3||!words[2].matches("(?:-?[0-9]{1,5}|stock)"))throw new IllegalArgumentException("参数无效。");
+                OplusVotes.editable(words[1]);
+            }else if(action.equals("set_charging_mode")){
+                if(words.length!=2||!words[1].matches("[0-3]"))throw new IllegalArgumentException("充电模式无效。");
             }else if(action.equals("error_log")){
                 if(words.length!=2||!words[1].matches("[0-9]{13,20}-[0-9a-f-]{36}"))throw new IllegalArgumentException("日志参数无效");
             }else if(action.equals("reset_settings")){
@@ -60,11 +64,6 @@ public final class AppBridge {
                 boolean decimalInterval=action.equals("set_settings")&&(i==11||i==14);
                 if(!words[i].matches(decimalInterval?"[0-9]{1,2}(?:\\.[0-9])?":"[0-9]{1,20}"))throw new IllegalArgumentException("参数无效");
             }
-        }else{
-            boolean valid=words.length==1&&action.equals("status")||words.length==2&&action.equals("plan")&&words[1].equals("stock")
-                ||words.length==4&&action.equals("plan")&&words[1].equals("set")&&words[2].matches("[0-9]{4}")&&words[3].matches("[0-9]{4}")
-                ||words.length==2&&action.equals("commit")&&words[1].matches("[0-9a-f-]{36}");
-            if(!valid)throw new IllegalArgumentException("截止电压操作无效");
         }
         String[] result=new String[words.length+1];result[0]=route;System.arraycopy(words,0,result,1,words.length);return result;
     }
@@ -100,21 +99,16 @@ public final class AppBridge {
                 send(new JSONObject().put("id",id).put("event","startup_ready").put("status",healthy));
                 return;
             }
-            String[] words=parse(request.getString("command"));String action=words[1];JSONArray args=new JSONArray();for(int i=2;i<words.length;i++)args.put(words[i]);
-            if(words[0].equals("cutoff")){
-                String[] command=new String[words.length+1];command[0]="/system/bin/sh";command[1]=ROOT+"cutoff.sh";System.arraycopy(words,1,command,2,words.length-1);
-                long deadline=OperationTimeout.deadline();
-                int minMv=BatteryService.cutoffMinMv(null);
-                try{
-                    JSONObject range=api("cutoff_range",new JSONArray(),Math.min(1000,OperationTimeout.remaining(deadline)));
-                    if(range.optBoolean("ok"))minMv=range.optInt("minMv",minMv);
-                }catch(Exception ignored){}
-                ProcessBuilder builder=new ProcessBuilder(command).redirectErrorStream(true);
-                builder.environment().put("ACO_CUTOFF_MIN_MV",Integer.toString(minMv));
-                Process p=builder.start();
-                ProcessResponse result=ProcessResponse.read(p,deadline,65536);int code=result.code;String text=result.text;
-                send(new JSONObject().put("id",id).put("event","result").put("errno",code).put("stdout",code==0?text:"").put("stderr",code==0?"":text));return;
+            if("install_boot_entry".equals(request.optString("action"))&&id.startsWith("native-")){
+                JSONObject result=new JSONObject().put("ok",true);
+                try{Owner.installBootEntry();}
+                catch(IOException|SecurityException|UnsupportedOperationException error){
+                    result.put("bootEntryError",error.toString());
+                }
+                send(new JSONObject().put("id",id).put("event","result").put("errno",0).put("stdout",result.toString()).put("stderr",""));
+                return;
             }
+            String[] words=parse(request.getString("command"));String action=words[1];JSONArray args=new JSONArray();for(int i=2;i<words.length;i++)args.put(words[i]);
             if(action.equals("stop_watch")){
                 int token=args.getInt(0);LocalSocket socket=streams.remove(token);if(socket!=null)socket.close();
                 send(new JSONObject().put("id",id).put("event","result").put("errno",0).put("stdout","{\"ok\":true}\n").put("stderr",""));return;

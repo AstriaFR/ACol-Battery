@@ -1,6 +1,7 @@
 import{Chart,systemTimeLabel}from'./chart.js?v=acol-2.2s';
 import{bindExport,exportTime}from'./chart-export.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
+const historyRefreshMs=5000;
 export const healthMetrics=[{key:'cycles',index:1,name:'循环次数',axis:'循环次数',unit:'次',color:'#5479c4',digits:0},{key:'qmax',index:2,name:'Qmax',axis:'Qmax',unit:'mAh',color:'#b47b35',digits:0},{key:'fcc',index:3,name:'满充容量',axis:'满充容量',unit:'mAh',color:'#26957d',digits:0}];
 export function healthScale(values,step=100){
   const known=values.filter(finite);if(!known.length)return{base:0,full:1,min:0,label:'暂无数据'};
@@ -41,14 +42,15 @@ export function batteryHistoryDate(wall,dateOnly=false){
 }
 export function batteryHistoryFields(snapshot){
   const info=snapshot??{},green=new Set(Array.isArray(info.nearActual)?info.nearActual:[]),noCompensation=info.noCompensation===true;
+  const fcc=key=>green.has(key)?ratio(info[key],info.designCapacity):number(info[key],'mAh');
   const locked=finite(info.lockedCapacity)&&finite(info.qmax)&&info.qmax>0?`${number(info.lockedCapacity,'mAh')} (${(-Math.abs(info.lockedCapacity)/info.qmax*100).toFixed(1)}%)`:'—';
-  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:ratio(info.fcc,info.designCapacity),rawFcc:noCompensation?'——':ratio(info.rawFcc,info.designCapacity),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};
+  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};
   return{values,green};
 }
 export class BatteryHistoryPanel{
   constructor(api,navigate,back){
     this.back=back;
-    this.api=api;this.navigate=navigate;this.active=false;this.token=0;this.items=new Map();this.snapshots=new Map();this.loaded=false;this.offset=0;this.total=0;this.loading=false;this.scrollTop=0;
+    this.api=api;this.navigate=navigate;this.active=false;this.token=0;this.items=new Map();this.snapshots=new Map();this.loaded=false;this.before=0;this.latest=0;this.morePages=false;this.loading=false;this.refreshing=false;this.refreshTimer=null;this.scrollTop=0;
     this.list=document.getElementById('batteryHistoryPanel');this.detail=document.getElementById('batteryHistoryDetail');this.rows=document.getElementById('batteryHistoryRows');this.scroller=document.getElementById('batteryHistoryScroll');this.more=document.getElementById('batteryHistoryMore');this.status=document.getElementById('batteryHistoryStatus');
     this.deleteDialog=document.getElementById('batteryHistoryDelete');this.deleteApply=document.getElementById('batteryHistoryDeleteApply');this.deleteCancel=document.getElementById('batteryHistoryDeleteCancel');
     this.deleteCancel.onclick=()=>this.deleteDialog.close();this.deleteApply.onclick=()=>this.remove();
@@ -78,8 +80,12 @@ export class BatteryHistoryPanel{
     this.more.onclick=()=>this.load();
     this.scroller.addEventListener('scroll',()=>{if(this.active&&this.state?.page==='battery-history'&&this.scroller.scrollTop>0&&this.scroller.scrollHeight-this.scroller.scrollTop-this.scroller.clientHeight<60)this.load();},{passive:true});
   }
-  close(){this.stopPress();this.trendChart?.clearInspect();if(this.trend)this.trend.hidden=true;if(this.deleteDialog.open)this.deleteDialog.close();if(this.recordDialog.open)this.recordDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
+  close(){clearTimeout(this.refreshTimer);this.refreshTimer=null;this.stopPress();this.trendChart?.clearInspect();if(this.trend)this.trend.hidden=true;if(this.deleteDialog.open)this.deleteDialog.close();if(this.recordDialog.open)this.recordDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.refreshing=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
   refreshTheme(){if(this.active&&!this.trend.hidden)this.trendChart.draw();}
+  resetList(){
+    this.token++;this.loading=false;this.refreshing=false;this.items.clear();this.rows.replaceChildren();
+    this.loaded=false;this.listDirty=false;this.before=0;this.latest=0;this.morePages=false;this.scrollTop=0;this.scroller.scrollTop=0;
+  }
   askRecord(){
     if(this.saving||this.deleting||!this.active||this.state?.page!=='battery-history'||this.recordDialog.open)return;
     this.recordDialog.showModal();this.recordCancel.focus({preventScroll:true});
@@ -91,8 +97,7 @@ export class BatteryHistoryPanel{
     try{
       await this.api('battery_history_record');this.listDirty=true;
       if(!this.active||this.state?.page!=='battery-history')return;
-      // Invalidate any earlier page load so its offset cannot skip the new row.
-      this.token++;this.loading=false;this.items.clear();this.rows.replaceChildren();this.loaded=false;this.listDirty=false;this.offset=0;this.total=0;this.scrollTop=0;this.scroller.scrollTop=0;
+      this.resetList();
       const refreshToken=this.token;await this.load();
       if(refreshToken===this.token&&this.active&&this.state?.page==='battery-history'&&!this.status.textContent)this.status.textContent='已记录当前电池信息';
     }catch(error){if(token===this.token&&this.active)this.status.textContent='记录失败：'+error.message;}
@@ -111,21 +116,22 @@ export class BatteryHistoryPanel{
       if(this.state?.page==='battery-history-detail'){
         this.detailDelete.disabled=true;this.deleteDialog.close();this.back();return;
       }
-      // Reload from the first page so deleting a row cannot shift later offsets past an entry.
-      this.token++;this.loading=false;this.items.clear();this.rows.replaceChildren();this.loaded=false;this.listDirty=false;this.offset=0;this.total=0;this.scrollTop=0;this.scroller.scrollTop=0;
+      this.resetList();
       this.deleteDialog.close();await this.load();
     }catch(error){if(token===this.token)document.getElementById('batteryHistoryDeleteStatus').textContent=error.message;}
     finally{this.deleting=false;this.deleteApply.disabled=this.deleteCancel.disabled=false;}
   }
   async open(state,fresh=false){
     if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;
-    this.token++;this.loading=false;this.active=true;this.state={...state};
+    clearTimeout(this.refreshTimer);this.refreshTimer=null;
+    this.token++;this.loading=false;this.refreshing=false;this.active=true;this.state={...state};
     this.list.hidden=state.page!=='battery-history';this.detail.hidden=state.page!=='battery-history-detail';
     this.trend.hidden=state.page!=='battery-history-trend';
     if(state.page==='battery-history-trend'){await this.openTrend();return;}
     if(state.page==='battery-history'){
-      if(fresh||this.listDirty){this.items.clear();this.rows.replaceChildren();this.loaded=false;this.listDirty=false;this.offset=0;this.total=0;this.scrollTop=0;}
-      this.scroller.scrollTop=this.scrollTop;if(!this.loaded)await this.load();return;
+      if(fresh||this.listDirty)this.resetList();
+      this.scroller.scrollTop=this.scrollTop;this.more.disabled=false;this.scheduleRefresh();
+      if(this.loaded)await this.refreshHead();else await this.load();return;
     }
     const token=this.token;this.detailDelete.disabled=true;document.getElementById('batterySnapshotStatus').textContent='正在读取快照…';
     for(const node of this.detail.querySelectorAll('[data-history-field]')){node.textContent='—';node.classList.remove('battery-near-actual');}
@@ -142,18 +148,45 @@ export class BatteryHistoryPanel{
     }catch(error){if(token===this.token)document.getElementById('batterySnapshotStatus').textContent=error.message;}
   }
   async load(){
-    if(!this.active||this.state?.page!=='battery-history'||this.loading||this.loaded&&this.offset>=this.total)return;
+    if(!this.active||this.state?.page!=='battery-history'||this.loading||this.loaded&&!this.morePages)return;
     const token=this.token;this.loading=true;this.more.disabled=true;this.status.textContent='正在读取历史记录…';
     try{
-      const data=await this.api('battery_history',this.offset);if(token!==this.token||!this.active)return;
-      this.total=data.total;this.offset+=data.items.length;this.loaded=true;
-      for(const item of data.items){if(this.items.has(item.id))continue;this.items.set(item.id,item);
-        const row=document.createElement('button');row.type='button';row.className='battery-history-row';row.dataset.historyId=item.id;
-        const text=document.createElement('span'),arrow=document.createElement('span');text.textContent=batteryHistoryDate(item.completed_wall,true)+' · 循环次数：'+number(item.cycles);arrow.textContent='›';arrow.setAttribute('aria-hidden','true');row.append(text,arrow);this.rows.append(row);
-      }
-      this.status.textContent=this.items.size?'':'暂无电池历史记录';this.more.hidden=this.offset>=this.total;
+      const data=await this.api('battery_history',this.before,0);if(token!==this.token||!this.active)return;
+      if(!this.loaded)this.latest=data.items[0]?.id??0;
+      this.before=data.items.at(-1)?.id??this.before;this.morePages=data.more;this.loaded=true;
+      if(data.items.length)this.rows.append(...this.buildRows(data.items));
+      this.status.textContent=this.items.size?'':'暂无电池历史记录';this.more.hidden=!this.morePages;
     }catch(error){if(token===this.token){this.status.textContent=error.message;this.more.hidden=false;}}
     finally{if(token===this.token){this.loading=false;this.more.disabled=false;}}
+  }
+  scheduleRefresh(){
+    if(this.refreshTimer!==null||!this.active||this.state?.page!=='battery-history')return;
+    this.refreshTimer=setTimeout(async()=>{
+      this.refreshTimer=null;if(!document.hidden)await this.refreshHead();this.scheduleRefresh();
+    },historyRefreshMs);
+  }
+  async refreshHead(){
+    if(!this.active||this.state?.page!=='battery-history'||!this.loaded||this.refreshing)return;
+    const token=this.token;this.refreshing=true;
+    try{
+      const {items}=await this.api('battery_history',this.latest,1);
+      if(token!==this.token||!items.length)return;
+      const wasEmpty=!this.items.size;
+      this.latest=items.at(-1).id;
+      this.rows.prepend(...this.buildRows(items).reverse());
+      if(wasEmpty&&!this.saving)this.status.textContent='';
+    }catch{}
+    finally{if(token===this.token)this.refreshing=false;}
+  }
+  buildRows(items){
+    const rows=[];
+    for(const item of items){
+      if(this.items.has(item.id))continue;
+      this.items.set(item.id,item);
+      const row=document.createElement('button');row.type='button';row.className='battery-history-row';row.dataset.historyId=item.id;
+      const text=document.createElement('span'),arrow=document.createElement('span');text.textContent=batteryHistoryDate(item.completed_wall,true)+' · 循环次数：'+number(item.cycles);arrow.textContent='›';arrow.setAttribute('aria-hidden','true');row.append(text,arrow);rows.push(row);
+    }
+    return rows;
   }
   async openTrend(){
     const token=this.token,status=document.getElementById('batteryTrendStatus'),button=document.getElementById('batteryTrendExport');

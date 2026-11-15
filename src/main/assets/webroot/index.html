@@ -24,9 +24,9 @@
     <div class="record-scroll"><div id="records" class="records"></div><button id="more" class="wide" hidden>加载更多</button></div>
   </section>
   <section id="settingsPanel" class="app-page settings-page settings-panel" aria-label="设置" hidden>
-    <header class="page-head settings-head"><div><h1>设置</h1></div><div class="settings-header-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="主题：跟随系统"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z"/></svg><span class="theme-auto-badge" aria-hidden="true">A</span></button><a id="openCutoff" class="cutoff-button" href="cutoff/index.html?from=settings">截止电压调整</a></div></header>
+    <header class="page-head settings-head"><div><h1>设置</h1></div><div class="settings-header-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="主题：跟随系统"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z"/></svg><span class="theme-auto-badge" aria-hidden="true">A</span></button><button id="openAdvanced" class="advanced-button" type="button">进阶设置</button></div></header>
     <div class="page-scroll">
-    <section class="card setting-card recording-control"><label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label><p id="recordingHint">正在连接后台…</p><div class="setting-group power-display-control"><label class="setting-heading setting-switch" for="powerDisplayEnabled"><span>性能监视器</span><input id="powerDisplayEnabled" type="checkbox" role="switch" disabled></label><p>CPU 和 GPU 跟随性能采样间隔，电池跟随功耗采样间隔。</p></div></section>
+    <section class="card setting-card recording-control"><label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label><p id="recordingHint">正在连接后台…</p><div class="setting-group power-display-control"><div class="setting-heading setting-switch monitor-control"><label for="powerDisplayEnabled">性能监视器</label><button id="openMonitorAppearance" class="settings-button" type="button">自定义</button><input id="powerDisplayEnabled" type="checkbox" role="switch" disabled></div></div></section>
     <form id="settingsForm" novalidate>
       <section class="card setting-card fast-control">
         <div class="setting-heading"><div class="setting-title"><span>游戏性能统计</span><button id="gameModeInfo" class="setting-info" type="button" aria-label="游戏性能统计介绍" aria-haspopup="dialog">i</button></div><button id="toggleFast" type="button" disabled>开启</button></div>
@@ -55,7 +55,124 @@
     <button type="button" class="tab-button" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span>设置</span></button>
   </nav>
 </main>
-<iframe id="cutoffFrame" class="cutoff-frame" title="截止电压调整" hidden></iframe>
+<section id="monitorAppearancePage" class="detail battery-info-panel monitor-appearance-page" aria-labelledby="monitorAppearanceTitle" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="monitorAppearanceBack" class="back" type="button">返回</button><h1 id="monitorAppearanceTitle">监视器自定义</h1></div><button id="resetMonitorAppearance" class="settings-button" type="button" disabled>恢复默认</button></header>
+  <div class="page-scroll">
+    <fieldset id="monitorAppearanceControls" disabled>
+      <section class="card setting-card" aria-labelledby="monitorMetricsTitle">
+        <h2 id="monitorMetricsTitle">显示项目</h2>
+        <label class="setting-heading setting-switch"><span>帧率</span><input type="checkbox" role="switch" data-monitor-bit="1"></label>
+        <label class="setting-heading setting-switch"><span>CPU 图表</span><input type="checkbox" role="switch" data-monitor-bit="2"></label>
+        <label class="setting-heading setting-switch"><span>CPU 频率</span><input type="checkbox" role="switch" data-monitor-bit="4"></label>
+        <label class="setting-heading setting-switch"><span>GPU 图表</span><input type="checkbox" role="switch" data-monitor-bit="8"></label>
+        <label class="setting-heading setting-switch"><span>GPU 频率</span><input type="checkbox" role="switch" data-monitor-bit="16"></label>
+        <label class="setting-heading setting-switch"><span>功耗</span><input type="checkbox" role="switch" data-monitor-bit="32"></label>
+        <label class="setting-heading setting-switch"><span>温度</span><input type="checkbox" role="switch" data-monitor-bit="64"></label>
+      </section>
+      <section class="card setting-card" aria-labelledby="monitorThresholdTitle">
+        <h2 id="monitorThresholdTitle">颜色阈值</h2>
+        <div class="monitor-threshold-grid">
+          <span></span><span>黄色</span><span>橙色</span><span>红色</span>
+          <span>CPU 图表</span>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="1" aria-label="CPU 黄色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="2" aria-label="CPU 橙色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="3" aria-label="CPU 红色阈值" aria-haspopup="dialog">—</button>
+          <span>放电功耗</span>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="7" aria-label="功耗黄色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="8" aria-label="功耗橙色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="9" aria-label="功耗红色阈值" aria-haspopup="dialog">—</button>
+          <span>电池温度</span>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="10" aria-label="温度黄色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="11" aria-label="温度橙色阈值" aria-haspopup="dialog">—</button>
+          <button class="settings-button monitor-threshold" type="button" data-monitor-threshold="12" aria-label="温度红色阈值" aria-haspopup="dialog">—</button>
+        </div>
+      </section>
+      <section class="card setting-card" aria-labelledby="monitorStyleTitle">
+        <h2 id="monitorStyleTitle">外观</h2>
+        <div class="setting-heading"><label for="monitorWhiteOpacity">白字背景不透明度</label><output for="monitorWhiteOpacity">—</output></div>
+        <input id="monitorWhiteOpacity" class="monitor-opacity" type="range" min="0" max="100" step="1" data-monitor-opacity="4">
+        <div class="setting-heading"><label for="monitorBlackOpacity">黑字背景不透明度</label><output for="monitorBlackOpacity">—</output></div>
+        <input id="monitorBlackOpacity" class="monitor-opacity" type="range" min="0" max="100" step="1" data-monitor-opacity="14">
+        <label class="setting-heading setting-switch" for="monitorFollowSystem"><span>跟随系统主题</span><input id="monitorFollowSystem" type="checkbox" role="switch"></label>
+        <div class="setting-heading"><span id="monitorTextColorLabel">文字颜色</span><div class="monitor-options" role="group" aria-labelledby="monitorTextColorLabel"><button type="button" data-monitor-option="5" value="1" aria-pressed="false">黑色</button><button type="button" data-monitor-option="5" value="0" aria-pressed="false">白色</button></div></div>
+        <div class="setting-heading"><span id="monitorLandscapeLabel">横屏位置</span><div class="monitor-options" role="group" aria-labelledby="monitorLandscapeLabel"><button type="button" data-monitor-option="6" value="0" aria-pressed="false">顶部</button><button type="button" data-monitor-option="6" value="1" aria-pressed="false">底部</button></div></div>
+      </section>
+    </fieldset>
+    <p id="monitorAppearanceStatus" class="small" role="status" hidden></p>
+    <p class="monitor-sampling-note">帧率、CPU 和 GPU 跟随性能采样间隔，功耗和电池温度跟随功耗采样间隔。</p>
+  </div>
+</section>
+<section id="advancedPage" class="detail battery-info-panel advanced-page" aria-labelledby="advancedTitle" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="advancedBack" class="back" type="button">返回</button><h1 id="advancedTitle">进阶设置</h1></div><button id="resetAdvancedSettings" class="settings-button" type="button" disabled>恢复默认</button></header>
+  <div class="page-scroll">
+    <section class="card advanced-card" aria-labelledby="advancedLiveTitle">
+      <div class="advanced-live-heading"><h2 id="advancedLiveTitle">当前生效值</h2><button id="advancedInfo" class="setting-info" type="button" aria-label="查看参数说明">i</button></div>
+      <dl id="advancedCapacityReadings" class="advanced-readings" aria-label="解容" hidden></dl>
+      <dl id="advancedChargingReadings" class="advanced-readings" aria-label="充电"></dl>
+      <p id="advancedStatus" class="small" role="status" hidden></p>
+    </section>
+    <section class="card advanced-card" aria-labelledby="advancedCapacityTitle">
+      <h2 id="advancedCapacityTitle">解容</h2>
+      <div id="advancedDischargeVoltageFields"></div>
+      <p class="advanced-setting-note">两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。</p>
+      <div id="advancedFloatCorrection"></div>
+      <p class="advanced-setting-note">设为FV_DEC的正数值，可以抵消系统判断的浮充电压下降(FV_DEC)，不能实际增高浮充电压。</p>
+      <div id="advancedFloatFields"></div>
+      <p class="advanced-setting-note">一般无需修改，仅能降低浮充电压。</p>
+    </section>
+    <section class="card advanced-card" aria-labelledby="advancedChargingTitle">
+      <h2 id="advancedChargingTitle">充电</h2>
+      <div id="advancedCoolDown"></div>
+      <p class="advanced-setting-note">设置为0可以基本排除温度和亮屏导致的降流，电流在合理范围内，可能会导致温度较高，但依然有温控。</p>
+      <div class="advanced-field"><span id="advancedChargingModeLabel">限制充电</span><div id="advancedChargingMode" class="monitor-options" role="group" aria-labelledby="advancedChargingModeLabel"></div><span id="advancedChargingModeUnavailable" hidden>不存在</span></div>
+      <p class="advanced-setting-note">均依然会显示为充电状态。</p>
+      <div id="advancedGaugeInterval"></div>
+      <p class="advanced-setting-note">建议设置为1.5s，节奏合适。</p>
+      <div id="advancedWiredCurrentFields"></div>
+      <p class="advanced-setting-note">可以提高5V,PD,QC等慢充的电流。<br>使用需谨慎，会导致温度上升。</p>
+      <div id="advancedFastCurrentFields"></div>
+      <p class="advanced-setting-note">谨慎修改，虽然仍会受到底层限制，但会因电压和温度墙导致充电中断。</p>
+    </section>
+  </div>
+</section>
+<section id="advancedInfoPage" class="detail battery-info-panel advanced-page" aria-labelledby="advancedInfoTitle" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="advancedInfoBack" class="back" type="button">返回</button><h1 id="advancedInfoTitle">参数说明</h1></div></header>
+  <div class="page-scroll">
+    <p class="advanced-info-intro"><strong>使用须知：</strong><span id="advancedSafetyText">进阶选项接口依赖OPLUS厂商节点，存在情况视机型而定。虽然这些接口都会受到更底层的限制，但若设置不当，仍可能会导致手机寿命非正常下降。修改前应了解其意义，并合理地修改。参数修改只生效一次，可直接恢复，硬重启后会失效，不影响系统分区。</span></p>
+    <p class="advanced-info-intro">「当前生效值」显示驱动接口的读回结果。电压和电流的读回值可能是阈值或协议目标，实测值还会随充电器、电池状态和温度变化。显示「不存在」的接口无法在这台设备上使用。</p>
+    <section class="advanced-definitions" aria-labelledby="advancedInfoCapacity">
+      <h2 id="advancedInfoCapacity">解容</h2>
+      <p><strong>电量计截止电压（GAUGE_TERM_VOLTAGE）</strong>：电量计估算剩余容量时使用的放电终点。调整后，低电量读数可能要经过后续充放电才会重新校准。</p>
+      <p><strong>软件关机电压（GAUGE_SHUTDOWN_VOLTAGE）</strong>：供系统低电压关机策略使用的阈值。实际关机时机还受负载引起的压降和系统保护策略影响，可与电量计截止电压分开设置。</p>
+      <p><strong>厂商截止与关机目标（TARGET_TERM_VOLTAGE、TARGET_SHUTDOWN_VOLTAGE）</strong>：厂商策略为上述两个阈值计算的参考值，仅供查看，可能与手动覆盖后的生效值不同。</p>
+      <p><strong>浮充降压修正（DEC_DELTA）</strong>：参与厂商对充电目标电压的降压计算。0 表示不加手动修正；写入后由驱动在满足条件时重算，修改量不一定会立即等量反映到电压上。</p>
+      <p><strong>实际浮充降压量（FV_DEC）</strong>：驱动当前算出的降压量，只读。可用它查看修正是否已经反映到厂商的降压结果。</p>
+      <p><strong>浮充电压上限（FV_MAX）</strong>：驱动为电池设定的充电目标上限，通常受温度和厂商降压策略影响。</p>
+      <p><strong>浮充电压下限（FV_MIN）</strong>：驱动在浮充上限和其他电压限制中取较低值，作为有线充电的目标电压。这里的「下限」是取低值的结果，不是电池电压必须保持的最低值。</p>
+    </section>
+    <section class="advanced-definitions" aria-labelledby="advancedInfoCharging">
+      <h2 id="advancedInfoCharging">充电</h2>
+      <p><strong>充电降温限流档位（COOL_DOWN）</strong>：选择厂商的充电降温电流档位。各档对应的电流由设备和充电协议决定，并非固定的电流或温度阈值。<a id="openCoolDownDetails" class="cool-down-link" href="#cool-down-details">详细档位</a></p>
+      <p><strong>限制充电</strong>：四个选项互斥。「无」解除手动限制，交回系统；「暂停」让驱动暂停给电池充电；「禁止」挂起有线充电输入；「旁路」请求厂商旁路模式，是否开启由驱动根据接入和电池状态决定。</p>
+      <p><strong>电流计采样间隔（GAUGE_UPDATE）</strong>：决定充电和放电时电流读数多久更新一次。App 的记录和曲线采样间隔在设置页单独调整。启用自动覆盖时，性能功能启动后可能改写这个值。</p>
+      <p><strong>普通有线电池电流（WIRED_FCC）</strong>：限制普通有线充电时流入电池端的电流。</p>
+      <p><strong>普通有线输入电流（WIRED_ICL）</strong>：限制普通有线充电时 USB 端从充电器取用的电流。输入端与电池端的电压可能不同，两边的电流不能直接比较。</p>
+      <p><strong>PPS 电流（PPS_CURR）</strong>：USB PD PPS 模式下的协议电流目标，仅在使用 PPS 时适用。</p>
+      <p><strong>UFCS 电流（UFCS_CURR）</strong>：UFCS 融合快充模式下的协议电流目标，仅在使用 UFCS 时适用。</p>
+      <p><strong>VOOC 电流（VOOC_CURR）</strong>：VOOC 或 SUPERVOOC 模式下的协议电流目标，仅在使用对应协议时适用。</p>
+    </section>
+    <p class="advanced-info-intro">修改在确认时应用一次。输入页的「恢复默认」撤销这一项的手动设置，进阶设置右上角的「恢复默认」撤销本页的手动设置。恢复后的值由厂商策略决定。</p>
+  </div>
+</section>
+<section id="coolDownDetailsPage" class="detail battery-info-panel advanced-page" aria-labelledby="coolDownDetailsTitle" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="coolDownDetailsBack" class="back" type="button">返回</button><h1 id="coolDownDetailsTitle">详细档位</h1></div></header>
+  <div class="page-scroll">
+    <p class="advanced-info-intro">0 档取消降温降流，PPS、UFCS 在 0 档使用表内最高电流。其他充电限制继续生效。「恢复默认」会撤销手动设置，由系统选档。</p>
+    <p class="advanced-info-intro">每张表只列到对应协议的配置上限。电流为档位对应的限制值，实际电流还受充电器、电池状态和温度影响。</p>
+    <p id="coolDownDetailsStatus" class="advanced-info-intro" role="status" hidden></p>
+    <div id="coolDownTables"></div>
+  </div>
+</section>
 <section id="detail" class="detail record-detail" hidden>
   <div id="detailScroll" class="page-scroll record-detail-scroll">
   <header class="record-detail-head"><div class="record-detail-heading"><button id="back" type="button" aria-label="返回上一页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg><span>返回</span></button><h2 id="detailType">记录</h2><span id="detailState" class="record-detail-state"></span></div><div class="record-detail-dates"><div><small>开始时间</small><time id="detailTitle">—</time></div><div><small>结束时间</small><time id="detailEnd">—</time></div></div></header>
@@ -111,7 +228,7 @@
       <div class="usage-week-summary"><div class="usage-week-metrics"><div class="usage-week-average"><strong id="usageWeekAverage">—</strong><small id="usageWeekAverageLabel">日均</small></div><p id="usageWeekTotal">总计 —</p></div><div class="screen-time-nav usage-week-nav"><button id="usageWeekPrev" class="period-step" type="button" aria-label="前一周" title="前一周"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><span id="usageWeekDate"></span><button id="usageWeekNext" class="period-step" type="button" aria-label="后一周" title="后一周"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6.5 5.5 5.5-5.5 5.5"/></svg></button></div></div>
       <div class="usage-week-plot"><div class="screen-time-bars"><svg id="usageWeekPlot" viewBox="0 0 288 140" preserveAspectRatio="none" role="group" aria-label="周一至周日的亮屏使用时长"></svg><span id="usageWeekEmpty" class="screen-time-empty" hidden>暂无已缓存的每日汇总</span></div><div class="screen-time-y" id="usageWeekY" aria-hidden="true"><span>3</span><span>2</span><span>1</span><span>0</span></div><small class="usage-week-unit" aria-hidden="true">时</small></div>
       <div id="usageWeekAxis" class="usage-week-axis" aria-hidden="true"></div>
-      <p id="usageWeekHint" class="small usage-week-hint" aria-live="polite">短按查看时长，长按打开当天</p>
+      <div class="usage-day-footer"><p id="usageWeekHint" class="small usage-week-hint" aria-live="polite">短按查看时长，长按打开当天</p><button id="usageWeekDelete" class="usage-day-delete" type="button" hidden>删除整周数据</button></div>
     </section>
     <section class="card usage-app-list usage-week-app-list" aria-label="本周各应用使用时长"><div id="usageWeekAppRows"></div><p id="usageWeekAppListStatus" class="small" role="status"></p></section>
   </div>
@@ -209,15 +326,24 @@
 <dialog id="gaugeIntervalExplanation" class="game-explanation" aria-labelledby="gaugeIntervalTitle">
   <h3 id="gaugeIntervalTitle">电流计采样间隔覆盖</h3>
   <p>打开此开关后，启动游戏性能统计或性能监视器时，会尝试将上方的「功耗采样间隔」应用到手机电流计。此功能需要设备提供 OPLUS 的 <code>GAUGE_UPDATE</code> 投票节点。设置成功后，充电和放电时的电流读数都按此间隔更新。</p>
-  <p>重启手机或选择「恢复默认设置」可将电流计采样间隔恢复为厂商默认值。</p>
   <div class="game-explanation-actions"><button type="button">知道了</button></div>
 </dialog>
+<dialog id="advancedSafetyNotice" class="game-explanation" aria-labelledby="advancedSafetyTitle" aria-describedby="advancedSafetyMessage">
+  <h3 id="advancedSafetyTitle">使用须知</h3>
+  <p id="advancedSafetyMessage"></p>
+  <div class="game-explanation-actions"><button id="closeAdvancedSafetyNotice" type="button">知道了</button></div>
+</dialog>
 <dialog id="recordingConfirm" class="recording-confirm" aria-labelledby="recordingConfirmTitle" aria-describedby="recordingConfirmHint"><h3 id="recordingConfirmTitle"></h3><p id="recordingConfirmHint"></p><div class="recording-confirm-actions"><button id="cancelRecording" type="button">取消</button><button id="confirmRecording" type="button">确认</button></div></dialog>
-<dialog id="settingsKeypad" class="numeric-keypad" aria-labelledby="keypadTitle">
-  <div class="keypad-heading"><h3 id="keypadTitle">修改数值</h3><div class="keypad-heading-actions"><small id="keypadRange" class="keypad-range"></small><button id="keypadCancel" type="button" aria-label="取消修改">取消</button><button id="keypadApply" class="keypad-apply" type="button">确认</button></div></div>
+<dialog id="settingsKeypad" class="numeric-keypad" aria-labelledby="keypadTitle" aria-describedby="keypadRange keypadHint">
+  <div class="keypad-heading"><h3 id="keypadTitle">修改数值</h3><div class="keypad-heading-actions"><button id="keypadRestore" class="keypad-restore" type="button" hidden>恢复默认</button><small id="keypadRange" class="keypad-range"></small><button id="keypadCancel" type="button" aria-label="取消修改">取消</button><button id="keypadApply" class="keypad-apply" type="button">确认</button></div></div>
   <div class="keypad-readout"><output id="keypadValue"></output><span id="keypadUnit"></span></div>
+  <p id="keypadHint" class="keypad-hint" hidden></p>
   <p id="keypadError" class="keypad-error" role="status" hidden></p>
   <div class="keypad-grid"><button type="button" data-key="sign" aria-label="切换正负号">−</button><button type="button" data-key="clear">清空</button><button type="button" data-key="backspace" aria-label="退格">⌫</button><button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button><button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button><button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button><button type="button" data-key="00">00</button><button type="button" data-key="0">0</button><button type="button" data-key="dot">.</button></div>
+</dialog>
+<dialog id="advancedConfirm" aria-labelledby="advancedConfirmTitle" aria-describedby="advancedConfirmText">
+  <h3 id="advancedConfirmTitle"></h3><p id="advancedConfirmText"></p>
+  <div class="dialogbuttons"><button id="advancedConfirmCancel" type="button" autofocus>取消</button><button id="advancedConfirmApply" class="danger" type="button">确定</button></div>
 </dialog>
 <dialog id="settingsChangeConfirm" class="recording-confirm settings-change-confirm" aria-labelledby="settingsChangeTitle" aria-describedby="settingsChangeHint"><h3 id="settingsChangeTitle"></h3><p id="settingsChangeHint"></p><div class="recording-confirm-actions"><button id="settingsChangeCancel" type="button">取消</button><button id="settingsChangeApply" type="button">确认</button></div></dialog>
 <dialog id="settingsDeleteConfirm" class="settings-delete-confirm" aria-labelledby="settingsDeleteTitle" aria-describedby="settingsDeleteHint">
@@ -232,7 +358,7 @@
 </dialog>
 <dialog id="batteryHistoryRecordConfirm" class="recording-confirm" aria-labelledby="batteryHistoryRecordTitle" aria-describedby="batteryHistoryRecordHint"><h3 id="batteryHistoryRecordTitle">是否手动记录电池信息？</h3><p id="batteryHistoryRecordHint">尾充完成时会自动记录较精确的数值。</p><div class="recording-confirm-actions"><button id="batteryHistoryRecordCancel" type="button">取消</button><button id="batteryHistoryRecordApply" type="button">确认</button></div></dialog>
 <dialog id="batteryHistoryDelete"><h3>删除此历史记录？</h3><p>将删除这条电池快照，充放电记录不受影响。删除后无法恢复。</p><p id="batteryHistoryDeleteStatus" role="status"></p><div class="dialogbuttons"><button id="batteryHistoryDeleteCancel" type="button">取消</button><button id="batteryHistoryDeleteApply" type="button">删除</button></div></dialog>
-<dialog id="usageDeleteConfirm"><h3>删除当天使用时间数据？</h3><p>将删除这一天的使用时间和应用明细，并从周、月统计中移除。删除后不再自动采集该日数据，充放电记录不受影响。</p><div class="dialogbuttons"><button id="usageDeleteCancel" type="button">取消</button><button id="usageDeleteApply" class="danger" type="button">删除</button></div></dialog>
+<dialog id="usageDeleteConfirm" aria-labelledby="usageDeleteTitle" aria-describedby="usageDeleteText"><h3 id="usageDeleteTitle"></h3><p id="usageDeleteText"></p><div class="dialogbuttons"><button id="usageDeleteCancel" type="button">取消</button><button id="usageDeleteApply" class="danger" type="button">删除</button></div></dialog>
 <dialog id="confirm"><h3>删除此记录？</h3><p id="confirmText">曲线和应用统计将删除，无法恢复。</p><div class="dialogbuttons"><button id="cancelDelete">取消</button><button id="confirmDelete" class="danger">删除</button></div></dialog>
 <div id="appEnergyTip" class="app-energy-tip" role="status" hidden></div>
 <div id="toast" role="status" hidden></div>

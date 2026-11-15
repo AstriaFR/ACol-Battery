@@ -35,8 +35,7 @@ button,button:focus,button:focus-visible,a:focus,a:focus-visible,input[type=chec
 .home-overview{padding:25.5552px 16px 14px;border:1px solid #cde6d8;border-radius:18px;background:linear-gradient(140deg,#edf8f1 0%,#fbfefc 48%,#fff 100%);box-shadow:0 3px 12px #174f3105}
 .home-overview .overview-header{margin:0;gap:12px;align-items:center}
 .overview-header h1{margin:0;color:var(--charge)}
-.cutoff-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none;font-size:14px;line-height:1.4;min-height:38px;border:1px solid var(--theme-line);border-radius:10px;padding:8px 12px;background:#fff;color:var(--accent)}
-.cutoff-button:focus-visible{outline:none}
+.advanced-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;line-height:1.4;min-height:38px;border:1px solid var(--theme-line);border-radius:10px;padding:8px 12px;background:#fff;color:var(--accent)}
 .livegrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:0;row-gap:20px;margin:29px 0 4px}
 .livegrid>div{min-width:0;text-align:center;padding:0 2px;border-left:1px solid transparent}
 .livegrid>div+div{border-left-color:#dfece4}
@@ -291,6 +290,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .numeric-keypad{position:fixed;inset:auto 0 0;margin:0 auto;width:min(100%,420px);max-width:100%;max-height:calc(100dvh - 12px);overflow-y:auto;border-radius:18px 18px 0 0;padding:14px 14px calc(24px + env(safe-area-inset-bottom));touch-action:manipulation}
 .keypad-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
 .keypad-heading h3{font-size:14px;margin:0;min-width:0;flex:1}
+.keypad-heading-actions .keypad-restore{margin-right:auto;color:var(--accent)}
 .keypad-heading button{min-height:32px;padding:5px 10px;font-size:12px}
 .keypad-heading-actions{display:flex;align-items:center;flex-shrink:0;gap:8px}
 .keypad-range{max-width:88px;color:var(--muted);font-size:10px;line-height:1.35;text-align:right;white-space:pre-line}
@@ -307,6 +307,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .game-explanation{--accent:var(--charge);--theme-line:#c7e8dc}
 .game-explanation p{font-size:12px;line-height:1.7;color:var(--muted);margin:10px 0}
 .game-explanation-actions{display:flex;justify-content:flex-end;margin-top:16px}
+#advancedSafetyMessage{font-size:14px}
 .settings-change-confirm{--accent:var(--charge);--theme-soft:#eaf7f2;--theme-line:#c7e8dc}
 .settings-change-confirm #settingsChangeApply{background:var(--charge);border-color:var(--charge);color:#fff}
 .settings-change-confirm[data-action=stop] #settingsChangeApply,.settings-change-confirm[data-action=stop] #settingsChangeApply:active{background:#c4443f;border-color:#c4443f;color:#fff}
@@ -320,6 +321,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .keypad-grid button:nth-child(-n+3){background:#f6f8fb}
 .keypad-grid button:disabled{cursor:default;opacity:.25}
 .numeric-keypad .keypad-error{font-size:11px;line-height:1.5;color:#b03d35;margin:0 0 9px}
+.numeric-keypad .keypad-hint{font-size:11px;line-height:1.5;margin:0 0 9px}
 .settings-delete-confirm{padding:22px;max-width:calc(100vw - 28px)}
 .settings-delete-confirm h3{line-height:1.6;margin:0}
 .settings-delete-confirm p{margin:10px 0 0;font-size:12px}
@@ -395,7 +397,7 @@ body:has(main:not([hidden])){overflow:hidden}
 :root[data-theme=dark] .card{background:var(--card);border-color:var(--line);box-shadow:none}
 :root[data-theme=dark] .pagehead{background:linear-gradient(115deg,#0d1b12 0%,#080b09 85%);border-color:#245638}
 :root[data-theme=dark] .pagehead h1,:root[data-theme=dark] .pagehead h2,:root[data-theme=dark] .pagehead small{color:#79dfa5}
-:root[data-theme=dark] button,:root[data-theme=dark] .cutoff-button,:root[data-theme=dark] .back{background:#0b110d;color:var(--text);border-color:#23362a}
+:root[data-theme=dark] button,:root[data-theme=dark] .back{background:#0b110d;color:var(--text);border-color:#23362a}
 :root[data-theme=dark] .record-open{background:transparent;border-color:transparent}
 :root[data-theme=dark] button.selected{background:#102319;color:#8aefb5;border-color:#28563a;box-shadow:none}
 :root[data-theme=dark] .home-overview{background:#000;border-color:#214a32;box-shadow:none}
@@ -497,6 +499,24 @@ body:has(dialog[open])>.edge-scrollbar{visibility:hidden}
 .recording-control{margin-bottom:10px}
 .recording-control p{margin-top:3.2px}
 .power-display-control{margin-top:6.4px}
+.monitor-control>.settings-button{padding:4px 8px}
+.monitor-appearance-page,.advanced-page{padding-bottom:0}
+.monitor-appearance-page>.page-scroll,.advanced-page>.page-scroll{padding-bottom:6px}
+#monitorAppearanceControls{min-width:0;padding:0;margin:0;border:0;display:grid;gap:10px}
+#monitorAppearanceControls h2{margin:0 0 6px;color:var(--accent)}
+#monitorAppearanceControls .setting-heading{min-height:36px}
+.monitor-threshold-grid{display:grid;grid-template-columns:auto repeat(3,minmax(0,1fr));gap:7px;align-items:center;text-align:center}
+.monitor-threshold-grid>span{font-size:12px;color:var(--muted)}
+.monitor-threshold-grid>span:nth-child(4n+1){text-align:left}
+#monitorAppearanceControls .monitor-threshold{min-width:0;padding:6px 3px;font-size:13px;white-space:nowrap}
+.monitor-opacity{display:block;width:100%;margin:0 0 8px;accent-color:var(--accent)}
+.monitor-options{display:inline-grid;grid-template-columns:repeat(2,1fr);padding:2px;gap:2px;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+#advancedChargingMode{grid-template-columns:repeat(4,1fr)}
+#monitorAppearanceControls .monitor-options button,#advancedChargingMode button{min-height:29px;padding:3px 9px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;white-space:nowrap}
+#monitorAppearanceControls .monitor-options button[aria-pressed=true],#advancedChargingMode button[aria-pressed=true]{background:var(--theme-soft);color:var(--accent);font-weight:600}
+#advancedChargingMode button:disabled{opacity:.5}
+#resetMonitorAppearance,#resetAdvancedSettings{min-height:38px;padding:8px 12px;font-size:14px;white-space:nowrap}
+.monitor-sampling-note{color:var(--muted);font-size:11px;line-height:1.65;margin:10px 0 0}
 #confirmRecording{transition:none}
 .recording-confirm[data-action=stop] #confirmRecording,.recording-confirm[data-action=stop] #confirmRecording:active,.recording-confirm[data-action=stop] #confirmRecording:focus{background:#c4443f;border-color:#c4443f;color:#fff}
 
@@ -726,8 +746,41 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 :root[data-theme=dark] .settings-maintenance .settings-link-button{color:#79adff}
 .settings-maintenance button.maintenance-danger{color:#be4141}
 .settings-about{padding:2.4px 0 1.2px;text-align:center;font-size:11px;line-height:1.8;color:var(--muted)}
-.cutoff-frame{position:fixed;inset:0;width:100%;height:100%;border:0;background:var(--bg);z-index:10}
-.cutoff-frame[hidden]{display:none}
+.advanced-card{border-radius:16px;margin-bottom:12px;padding:14px 15px}
+.advanced-card:last-child{margin-bottom:0}
+.advanced-card h2{font-size:16px;margin:0 0 8px;color:var(--accent)}
+.advanced-live-heading{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.advanced-live-heading h2{margin:0}
+.advanced-info-intro,.advanced-definitions{color:var(--muted);font-size:13px;line-height:1.65;margin:0}
+.advanced-info-intro+.advanced-info-intro{margin-top:8px}
+.advanced-definitions{margin:12px 0}
+.advanced-definitions h2{color:var(--accent);font-size:13px;margin:0 0 3px}
+.advanced-definitions p{margin:0;overflow-wrap:anywhere}
+.advanced-definitions strong{color:var(--text);font-weight:600}
+.cool-down-link{display:inline-block;margin-inline-start:4px;color:#2563eb;text-decoration:underline}
+:root[data-theme=dark] .cool-down-link{color:#79adff}
+.cool-down-table{width:100%;border-collapse:collapse;color:var(--text);font-size:12px;font-variant-numeric:tabular-nums;text-align:center}
+.cool-down-table th,.cool-down-table td{padding:4px 3px;border-bottom:1px solid var(--line)}
+.cool-down-table thead{background:var(--card)}
+#coolDownDetailsStatus{margin-top:8px}
+.advanced-readings{margin:0}
+.advanced-readings>div,.advanced-field{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.advanced-readings>div{min-height:31px}
+.advanced-readings>div:not([hidden])~div{border-top:1px solid var(--line)}
+.advanced-readings:not([hidden])+.advanced-readings{border-top:1px solid var(--charge)}
+.advanced-readings dt{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.advanced-readings dd{margin:0;white-space:nowrap;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.advanced-field{min-height:51px}
+.advanced-field>span{min-width:0;font-size:14px;overflow-wrap:anywhere}
+.advanced-field-label{line-height:1.2}
+.advanced-field-node{display:block;color:var(--muted);font-size:10px;line-height:1.2}
+.advanced-field>button{flex:0 0 108px;min-height:34px;padding:4px 8px;color:var(--accent);font-variant-numeric:tabular-nums;text-align:center}
+.advanced-setting-note{margin:0;color:var(--muted);font-size:11px;line-height:1.65}
+.advanced-setting-note:not(:last-child){padding-bottom:4px;border-bottom:1px solid var(--line);margin-bottom:4px}
+#advancedConfirmText{white-space:pre-line}
+#advancedConfirmCancel,#advancedConfirmApply{color:#fff;border-color:transparent}
+#advancedConfirmCancel{background:#078267}
+#advancedConfirmApply{background:#c4443f}
 
 /* Record drain, screen-time and app breakdown form one continuous section. */
 .discharge-stats>#drainSummary{margin-bottom:0}
@@ -784,7 +837,7 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 .discharge-stats>.record-screen-time{margin-bottom:4px;padding-bottom:0}
 
  .usage-day-footer{display:flex;align-items:baseline;gap:8px;margin-top:7px;flex:none;font-size:var(--usage-duration-font-size);line-height:20px}
-.usage-day-footer .screen-time-hint{display:block;flex:1;min-width:0;margin:0;font-size:inherit;line-height:inherit}
+.usage-day-footer :is(.screen-time-hint,.usage-week-hint){display:block;flex:1;min-width:0;margin:0;font-size:inherit;line-height:inherit}
 .usage-day-delete{display:block;flex:none;margin:0 0 0 auto;min-height:0;padding:0;border:0;background:transparent;color:var(--discharge);font-size:inherit;line-height:inherit}
 #usageDeleteApply,#usageDeleteApply:active,#usageDeleteApply:focus-visible{color:#fff;background:#c4443f;border-color:#c4443f}
 #usageDeleteCancel,#usageDeleteCancel:active,#usageDeleteCancel:focus-visible{color:#fff;background:#078267;border-color:#078267}

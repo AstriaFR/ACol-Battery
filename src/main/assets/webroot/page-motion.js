@@ -1,7 +1,7 @@
 // Navigation-only compositor animations. No cloned pages, canvas copies or data reads.
 const motionEase='cubic-bezier(.2,.65,.3,1)';
 export function installPageMotion(){
-  const ids=['homePage','recordsPage','settingsPanel','detail','batteryInfoPanel','batteryHistoryPanel','batteryHistoryDetail','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail','cutoffFrame'];
+  const ids=['homePage','recordsPage','settingsPanel','monitorAppearancePage','advancedPage','advancedInfoPage','coolDownDetailsPage','detail','batteryInfoPanel','batteryHistoryPanel','batteryHistoryDetail','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail'];
   const nodes=ids.map(id=>document.getElementById(id)).filter(Boolean),tabs=['home','records','settings'];
   const reduced=matchMedia('(prefers-reduced-motion: reduce)'),running=new Map();
   let last=nodes.find(node=>!node.closest('[hidden]')),state=history.state,back=false,tab=false,queued=false,interactive=false;
@@ -51,8 +51,6 @@ export function installPageMotion(){
     for(const dialog of doc.querySelectorAll('dialog'))dialogObserver.observe(dialog,{attributes:true,attributeFilter:['open']});
   };
   watchDialogs(document);
-  const frame=document.getElementById('cutoffFrame');
-  frame?.addEventListener('load',()=>{try{watchDialogs(frame.contentDocument);}catch{}});
   window.addEventListener('aco-theme-change',stopAll);
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAll();});
   reduced.addEventListener?.('change',()=>{if(reduced.matches)stopAll();});

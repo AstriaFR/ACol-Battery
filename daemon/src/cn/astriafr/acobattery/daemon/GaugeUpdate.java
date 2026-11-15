@@ -6,18 +6,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
-/** Optional OPLUS gauge publishing interval. Called under the recorder mutex. */
+/** Optional OPLUS gauge publishing interval. Shares the node lock with manual settings. */
 final class GaugeUpdate {
-    private static final Path NODE=Paths.get("/proc/oplus-votable/GAUGE_UPDATE");
+    private static final OplusVotes.Node VOTE=OplusVotes.Node.GAUGE_UPDATE;
+    interface ManualWrite {void run()throws IOException;}
     private final Path active,value;
     private final File journal;
     private final String boot;
 
-    GaugeUpdate(File data,String boot){this(NODE,new File(data,"gauge-update.state"),boot);}
+    GaugeUpdate(File data,String boot){this(VOTE.directory,new File(data,"gauge-update.state"),boot);}
 
     GaugeUpdate(Path node,File journal,String boot){
         active=node.resolve("force_active");
@@ -42,52 +42,86 @@ final class GaugeUpdate {
 
     void apply(long intervalMs){
         if(boot.isEmpty())return;
-        try {
-            Change pending=readJournal();
-            State before=read();
-            if(pending!=null){
-                completePending(pending,before);
-                before=read();
-            }
-            if(before.matches(true,intervalMs))return;
-            Change change=new Change(before,intervalMs,false);
-            // Save the pre-write state before either proc node can change.
-            writeJournal(change);
+        synchronized(VOTE){
             try {
-                if(before.value!=intervalMs)write(value,intervalMs);
-                write(active,1);
-                if(!read().matches(true,intervalMs))throw new IOException();
-            }catch(IOException|RuntimeException ignored){
-                restore(change,read());
-                return;
+                State before=readAfterRecovery();
+                if(before.matches(true,intervalMs))return;
+                Change change=new Change(before,intervalMs,false);
+                // Save the pre-write state before either proc node can change.
+                writeJournal(change);
+                try {
+                    if(before.value!=intervalMs)write(value,intervalMs);
+                    setActive(true,intervalMs);
+                }catch(IOException|RuntimeException ignored){
+                    restore(change,read());
+                    return;
+                }
+                Files.deleteIfExists(journal.toPath());
+            }catch(IOException|RuntimeException ignored){}
+        }
+    }
+
+    void applyManually(Integer interval,ManualWrite write)throws IOException {
+        synchronized(VOTE){
+            if(boot.isEmpty()){write.run();return;}
+            State before=readAfterRecovery();
+            boolean reset=interval==null;
+            if(reset&&!before.active){write.run();return;}
+            Change change=reset?new Change(new State(false,before.value),before.value,true):new Change(before,interval,false);
+            writeJournal(change);
+            try{write.run();}
+            catch(IOException failure){
+                // A manual write can explicitly release the override after a failed verification.
+                try{if(!reset&&!read().active)Files.deleteIfExists(journal.toPath());}
+                catch(IOException cleanup){failure.addSuppressed(cleanup);}
+                throw failure;
             }
             Files.deleteIfExists(journal.toPath());
-        }catch(IOException|RuntimeException ignored){}
+        }
+    }
+
+    private State readAfterRecovery()throws IOException {
+        Change pending=readJournal();
+        State current=read();
+        if(pending==null)return current;
+        completePending(pending,current);
+        return read();
     }
 
     void recoverPending(){
         if(boot.isEmpty())return;
-        try {
-            Change change=readJournal();
-            if(change!=null)completePending(change,read());
-        }catch(IOException|RuntimeException ignored){}
+        synchronized(VOTE){
+            try {
+                Change change=readJournal();
+                if(change!=null)completePending(change,read());
+            }catch(IOException|RuntimeException ignored){}
+        }
     }
 
     private void completePending(Change change,State current)throws IOException {
-        // A matching override is committed even if the process exited before clearing its journal.
-        if(!change.driverDefault&&current.matches(true,change.interval))Files.deleteIfExists(journal.toPath());
-        else restore(change,current);
+        if(current.value==change.interval&&(change.driverDefault||current.active)){
+            // Matching proc fields do not guarantee that the driver callback ran.
+            setActive(!change.driverDefault,change.interval);
+            Files.deleteIfExists(journal.toPath());
+        }else restore(change,current);
+    }
+
+    private void setActive(boolean enabled,long interval)throws IOException {
+        write(active,enabled?1:0);
+        if(!read().matches(enabled,interval))throw new IOException();
     }
 
     void restoreDriverDefault(){
         if(boot.isEmpty())return;
-        try {
-            State current=read();
-            // Keep force_val intact. With force_active off, the driver uses its current votes.
-            Change reset=new Change(new State(false,current.value),current.value,true);
-            writeJournal(reset);
-            restore(reset,current);
-        }catch(IOException|RuntimeException ignored){}
+        synchronized(VOTE){
+            try {
+                State current=read();
+                // Keep force_val intact. With force_active off, the driver uses its current votes.
+                Change reset=new Change(new State(false,current.value),current.value,true);
+                writeJournal(reset);
+                restore(reset,current);
+            }catch(IOException|RuntimeException ignored){}
+        }
     }
 
     private void writeJournal(Change change)throws IOException {

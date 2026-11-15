@@ -43,7 +43,10 @@ export class DailyUsageChart extends ScreenTimePanel{
         const a=new Date(day),b=new Date(day);a.setHours(hour,0,0,0);b.setHours(hour+1,0,0,0);const expected=Math.max(0,Math.min(b.getTime(),entry.through)-a.getTime());
         return{rows:appRowsFromTotals(new Map(values.map(row=>[row.pkg,row.ms])),labels),known:entry.hours[hour].coveredMs>0,partial:entry.hours[hour].coveredMs+1000<expected};
       }):null;
-      if(entry.through===entry.dayStart){this.data=null;this.drawEmpty();this.node('screenTimeHint').textContent='尚无已缓存的使用数据';return;}
+      if(entry.through===entry.dayStart){
+        this.data=null;this.selected=null;this.cancelPress();this.hideTip();this.drawEmpty();
+        this.node('screenTimeTotal').textContent='—';this.node('screenTimeHint').textContent='尚无已缓存的使用数据';return;
+      }
       const data=dailyView(entry);
       if(app){data.hours=app.ms;data.totalMs=app.ms.reduce((n,ms)=>n+ms,0);}
       this.draw(data);if(data.coveredMs>0)this.node('screenTimeTotal').textContent=this.formatDuration(data.totalMs);

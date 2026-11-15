@@ -42,6 +42,7 @@
 #detail .summary .summary-metric[data-metric=pct]>strong{color:var(--text)}
 #detail .summary[data-mode=live] .summary-metric:is([data-metric=cell1],[data-metric=cell2],[data-metric=voltage],[data-metric=temp])>strong{font-size:20px}
 #detail .summary .summary-meta{border-top:0;margin-top:6px;padding-top:4px}
+#detail .summary-current-integral{white-space:nowrap}
 #detail .summary-metric>strong{min-height:23px;line-height:1.2;letter-spacing:-.4px;gap:2px}
 #detail .summary-metric small{margin-top:6px;font-size:9px;line-height:1.4}
 #detail .summary .summary-metric:is([data-metric=remainingWh],[data-metric=remainingTime])>strong{color:var(--text)}

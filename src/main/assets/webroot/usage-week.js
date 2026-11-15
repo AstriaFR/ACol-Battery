@@ -1,12 +1,16 @@
 import{isoWeek,moveWeek,firstUsageWeek,calendarMonth,moveMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.2s';
 import{roundedDuration,dateText}from'./daily-usage-chart.js?v=acol-2.2s';
-import{midnight}from'./daily-usage-cache.js?v=acol-2.2s';
+import{midnight,canDeleteUsageWeek}from'./daily-usage-cache.js?v=acol-2.2s';
 const ns='http://www.w3.org/2000/svg',names=['一','二','三','四','五','六','日'];
 function svg(tag,attrs){const node=document.createElementNS(ns,tag);for(const[key,value]of Object.entries(attrs))node.setAttribute(key,String(value));return node;}
 export class UsageWeekPanel{
   constructor(getCache,navigate,options={}){
     this.node=id=>document.getElementById(id.replace(/^usageWeek/,options.prefix??'usageWeek'));this.appMode=!!options.app;this.monthMode=!!options.month;this.page=this.monthMode?'usage-month':this.appMode?'usage-app-week':'usage-week';this.period=this.monthMode?calendarMonth:isoWeek;this.firstPeriod=this.monthMode?firstUsageMonth:firstUsageWeek;this.periodText=this.monthMode?'本月':'本周';
     this.getCache=getCache;this.navigate=navigate;this.plot=this.node('usageWeekPlot');this.token=0;this.selected=null;
+    if(this.page==='usage-week'){
+      this.deleteButton=this.node('usageWeekDelete');
+      this.deleteButton.onclick=()=>this.onDeleteWeek?.(this.week);
+    }
     this.node('usageWeekPrev').onclick=()=>this.change(-1);this.node('usageWeekNext').onclick=()=>this.change(1);
     this.plot.addEventListener('click',event=>{if(Date.now()<this.suppressClickUntil)return;const bar=event.target.closest('[data-day]');if(bar)this.select(Number(bar.dataset.day));});
     this.plot.addEventListener('keydown',event=>{const bar=event.target.closest('[data-day]');if(!bar)return;if(event.key===' '){event.preventDefault();this.select(Number(bar.dataset.day));}else if(event.key==='Enter'){event.preventDefault();this.openDay(Number(bar.dataset.day));}});
@@ -35,11 +39,12 @@ export class UsageWeekPanel{
     this.node('usageWeekRange').textContent=`${dateText(week.start)}—${dateText(week.days.at(-1))}`;
     this.node('usageWeekDate').textContent=week.label;this.node('usageWeekDate').setAttribute('aria-label',this.monthMode?`${week.year}年${week.number}月`:`${week.year}年第${week.number}周`);
     this.node('usageWeekPrev').disabled=week.start<=this.firstPeriod().start;this.node('usageWeekNext').disabled=week.start>=this.period(Date.now()).start;
-    if(changed){this.rows=null;this.data=null;this.node('usageWeekAverage').textContent='—';this.node('usageWeekAverageLabel').textContent='日均';this.node('usageWeekTotal').textContent='总计 —';this.node('usageWeekHint').textContent=`正在读取${this.periodText}汇总…`;this.draw();}
+    if(changed){if(this.deleteButton)this.deleteButton.hidden=true;this.rows=null;this.data=null;this.node('usageWeekAverage').textContent='—';this.node('usageWeekAverageLabel').textContent='日均';this.node('usageWeekTotal').textContent='总计 —';this.node('usageWeekHint').textContent=`正在读取${this.periodText}汇总…`;this.draw();}
     try{
       // Monthly charts read only daily summaries; weekly app views use their bounded totals.
       const result=this.monthMode?{summaries:await this.getCache().summaries(week.start,week.end,31)}:this.appMode?await this.getCache().weeklyApp(week.start,week.end,this.pkg):await this.getCache().weeklyOverview(week.start,week.end);if(token!==this.token)return;
       this.data=result;const byDay=new Map(result.summaries.map(row=>[row.dayStart,row])),byApp=new Map((result.appTotals??[]).map(row=>[row.dayStart,row])),today=midnight(Date.now());
+      if(this.deleteButton)this.deleteButton.hidden=!canDeleteUsageWeek(week)||!result.summaries.some(row=>!row.deleted&&row.through>row.dayStart);
       this.rows=week.days.map(date=>{const data=byDay.get(date),known=date<=today&&Number.isFinite(data?.onMs)&&data.onMs>=0&&data.coveredMs>0,ms=this.appMode?(byApp.get(date)?.ms??0):(data?.onMs??0);return{day:date,known,ms:known?ms:0,future:date>today}});
       const known=this.rows.filter(row=>row.known),total=known.reduce((n,row)=>n+row.ms,0),completed=known.filter(row=>row.day<today);
       this.node('usageWeekAverageLabel').textContent=completed.length?`${completed.length}日均`:'日均';

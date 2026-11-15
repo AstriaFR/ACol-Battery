@@ -31,7 +31,7 @@ public final class DataRestore {
         Files.createDirectories(new File(appStage,"incoming").toPath());Files.createDirectories(new File(appStage,"rollback").toPath());Files.createDirectories(new File(job,"rollback/root").toPath());
         for(String name:DataArchive.APP_DIRS){File input=new File(job,"incoming/app/"+name),target=new File(appStage,"incoming/"+name);if(input.exists())DataArchive.copyTree(input,target,guard);else Files.createDirectories(target.toPath());}
         Set<String> names=new TreeSet<>();File[] current=root.listFiles(),incoming=new File(job,"incoming/root").listFiles();if(current==null||incoming==null)throw new IOException("恢复数据目录无法读取。");
-        for(File value:current)if(!DataArchive.ROOT_KEEP.contains(value.getName()))names.add(value.getName());for(File value:incoming)if(!DataArchive.ROOT_KEEP.contains(value.getName()))names.add(value.getName());
+        for(File value:current)if(!DataArchive.keepRootEntry(value.getName()))names.add(value.getName());for(File value:incoming)if(!DataArchive.keepRootEntry(value.getName()))names.add(value.getName());
         JSONArray entries=new JSONArray();for(String name:names)entries.put(new JSONObject().put("area","root").put("name",name));for(String name:DataArchive.APP_DIRS)entries.put(new JSONObject().put("area","app").put("name",name));
         for(int i=0;i<entries.length();i++){JSONObject entry=entries.getJSONObject(i);entry.put("hadOld",path(entry,"target").exists());path(entry,"incoming");path(entry,"backup");}
         writeState(new JSONObject().put("committed",false).put("entries",entries));

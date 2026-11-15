@@ -47,6 +47,7 @@
 
 /* Keep paired controls aligned even at their maximum input values. */
 .setting-heading{grid-template-columns:minmax(0,1fr) auto;column-gap:10px}
+.setting-heading.monitor-control{grid-template-columns:minmax(0,1fr) auto auto;column-gap:8px}
 .setting-heading>label,.setting-heading>span,.setting-title>span{overflow-wrap:anywhere}
 .setting-pair{gap:10px}
 .setting-input.setting-bound-input{grid-template-columns:auto minmax(0,1fr) auto;gap:4px;padding-inline:7px}

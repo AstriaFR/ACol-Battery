@@ -8,6 +8,9 @@ import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons}from'./root-
 import{LiveChannel,DETAIL_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
+import{createAdvancedPage}from'./advanced-settings.js';
+import{createCoolDownDetailsPage}from'./cool-down-details.js';
+import{createMonitorAppearancePage}from'./monitor-appearance.js';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
 import{ThemeController}from'./theme.js?v=acol-2.2s';
 import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.2s';
@@ -27,7 +30,7 @@ let activeTab='home';
 for(const type of['selectstart','copy','cut','contextmenu','dragstart'])document.addEventListener(type,e=>e.preventDefault(),{capture:true});
 // Cancel native press defaults without blocking touch-action scrolling.
 document.addEventListener('pointerdown',e=>{
-  if(e.pointerType==='touch'&&!e.target.closest('input[type=number],textarea,[contenteditable=true]'))e.preventDefault();
+  if(e.pointerType==='touch'&&!e.target.closest('input[type=number],.monitor-opacity,textarea,[contenteditable=true]'))e.preventDefault();
 },{capture:true,passive:false});
 document.addEventListener('selectionchange',()=>{const selection=getSelection();if(selection?.rangeCount)selection.removeAllRanges();});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
@@ -100,6 +103,9 @@ const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSetting
   pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage?.resumeRemaining();},
   onDeleted:id=>detailPage?.removeCaches(id),onRefresh:()=>schedulePoll(0)});
 const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();});
+const advancedPage=createAdvancedPage(api,settingsPanel);
+const coolDownDetailsPage=createCoolDownDetailsPage(api);
+const monitorAppearancePage=createMonitorAppearancePage(api,settingsPanel);
 const batteryPanel=new BatteryInfoPanel();
 const homeUsage=new HomeUsagePanel(api);
 const loadBatteryHistory=lazyPanel(async()=>{
@@ -109,22 +115,32 @@ const loadBatteryHistory=lazyPanel(async()=>{
 const loadUsageDetails=lazyPanel(async()=>{
   const{UsageDetailsPanel}=await importUsageDetails();
   const panel=new UsageDetailsPanel(api,()=>homeUsage.cache,(state,push)=>openUsage(state,push));
-  panel.dayChart.onDeleteDay=askUsageDelete;
+  panel.dayChart.onDeleteDay=day=>askUsageDelete({day});
+  panel.weekChart.onDeleteWeek=week=>askUsageDelete({day:week.start,week:true});
   return usageDetails=panel;
 });
 homeUsage.onDataChange=day=>usageDetails?.refresh(day);
-let usageDeleteDay=null,usageDeleteBusy=false;
-const askUsageDelete=day=>{if(usageDeleteBusy||$('usageDeleteConfirm').open)return;usageDeleteDay=day;$('usageDeleteConfirm').showModal();$('usageDeleteCancel').focus({preventScroll:true});};
+let usageDeleteTarget=null,usageDeleteBusy=false;
+const askUsageDelete=target=>{
+  if(usageDeleteBusy||$('usageDeleteConfirm').open)return;
+  usageDeleteTarget=target;
+  $('usageDeleteTitle').textContent=target.week?'删除整周使用时间数据？':'删除当天使用时间数据？';
+  $('usageDeleteText').textContent=target.week
+    ?'将删除这一周（周一至周日）的使用时间和应用明细，并从月统计中移除。删除后不再自动采集这些日期的数据，充放电记录不受影响。'
+    :'将删除这一天的使用时间和应用明细，并从周、月统计中移除。删除后不再自动采集该日数据，充放电记录不受影响。';
+  $('usageDeleteConfirm').showModal();$('usageDeleteCancel').focus({preventScroll:true});
+};
 $('usageDeleteCancel').onclick=()=>$('usageDeleteConfirm').close();
 $('usageDeleteConfirm').addEventListener('cancel',event=>{if(usageDeleteBusy)event.preventDefault();});
 $('usageDeleteApply').onclick=async()=>{
-  if(usageDeleteBusy||usageDeleteDay===null)return;
-  const day=usageDeleteDay,button=$('usageDeleteApply');usageDeleteBusy=true;button.disabled=true;
+  if(usageDeleteBusy||!usageDeleteTarget)return;
+  const {day,week}=usageDeleteTarget,button=$('usageDeleteApply');usageDeleteBusy=true;button.disabled=true;
   homeUsage.pause();
   try{
-    await homeUsage.cache.deleteDay(day);usageDetails.hourSelections.delete(day);
-    if(homeUsage.day===day)await homeUsage.display(day);
-    await usageDetails.refresh(day);$('usageDeleteConfirm').close();toast('当天使用时间数据已删除');
+    const days=await (week?homeUsage.cache.deleteWeek(day):homeUsage.cache.deleteDay(day));
+    for(const date of days)usageDetails.hourSelections.delete(date);
+    if(days.includes(homeUsage.day))await homeUsage.display(homeUsage.day);
+    await usageDetails.refresh(day);$('usageDeleteConfirm').close();toast(week?'整周使用时间数据已删除':'当天使用时间数据已删除');
   }catch(error){toast(error.message);}
   finally{usageDeleteBusy=false;button.disabled=false;homeUsage.lastStarted=0;homeUsage.resume(true);}
 };
@@ -161,7 +177,8 @@ function showTab(tab){
 async function activateTab(tab){
   usageNavigation++;closePendingPanel();usageDetails?.close();
   batteryHistory?.close();batteryPanel.close();
-  settingsPanel.closeEditor();
+  settingsPanel.closeEditor();monitorAppearancePage.close();advancedPage.close();$('advancedInfoPage').hidden=true;
+  coolDownDetailsPage.close();
   liveChannel.setMode(tab==='home'?HOME_WATCH_MODE:tab==='settings'?SETTINGS_WATCH_MODE:SUMMARY_WATCH_MODE);
   await detailPage?.close();
   $('appShell').hidden=false;
@@ -169,7 +186,7 @@ async function activateTab(tab){
   if(tab==='home')homeUsage.prioritize(null);
   syncTheme();
   if(tab==='records')recordsView.open();
-  if(tab==='settings'){prepareCutoff();await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);schedulePoll(0);}
+  if(tab==='settings'){await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);schedulePoll(0);}
   else refresh();
 }
 async function requestTab(tab){
@@ -184,21 +201,7 @@ async function requestTab(tab){
 }
 for(const button of tabButtons)button.onclick=()=>requestTab(button.dataset.tab);
 window.__acoOpenSettings=()=>requestTab('settings');
-const cutoffFrame=$('cutoffFrame');let cutoffReady=false;
-window.__acoCutoffExec=exec;
-window.__acoCutoffBack=()=>history.back();
-window.__acoCutoffKeypad=key=>history.pushState({...history.state,page:'cutoff',keypad:true,key},'',`${pageUrl('cutoff')}-keypad`);
-window.__acoCutoffHome=()=>returnHome();
-window.__acoCutoffReady=()=>{cutoffReady=true;if(!cutoffFrame.hidden){cutoffFrame.contentWindow.__acoCutoffOpen();cutoffFrame.contentWindow.__acoCutoffSync(history.state);}};
-function hideCutoff(){if(cutoffFrame.hidden)return;cutoffFrame.contentWindow?.__acoCutoffClose?.();cutoffFrame.hidden=true;}
-function prepareCutoff(){if(!cutoffFrame.getAttribute('src'))cutoffFrame.src='cutoff/index.html?from=settings&embedded=1';}
-function showCutoff(state){
-  cutoffFrame.hidden=false;$('appShell').hidden=true;
-  if(!cutoffFrame.getAttribute('src'))prepareCutoff();
-  else if(cutoffReady){cutoffFrame.contentWindow.__acoCutoffOpen();cutoffFrame.contentWindow.__acoCutoffSync(state);}
-}
 window.__acoBack=()=>{
-  if(!cutoffFrame.hidden){if(cutoffReady)return cutoffFrame.contentWindow.__acoBack();history.back();return'handled';}
   if(usageDetails&&(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip)){usageDetails.hideTips();return'handled';}
   if(homeUsage.tip){homeUsage.hideTip();return'handled';}
   if(cancelTopDialog())return'handled';
@@ -215,7 +218,53 @@ function applySettings(value){
   $('showSmallLabel').textContent=`显示 ≤${next.hidePct}%`;
   detailPage?.setSettings(next);
 }
-$('openCutoff').onclick=async e=>{e.preventDefault();const button=e.currentTarget;if(button.getAttribute('aria-disabled')==='true'){toast('当前设备缺少截止电压调整接口。');return;}if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}history.pushState({page:'cutoff'},'',pageUrl('cutoff'));showCutoff(history.state);};
+function showAdvanced(){
+  if(advancedPage.active)return;
+  clearTimeout(pollTimer);liveChannel.close();
+  $('appShell').hidden=true;advancedPage.open();
+}
+function showMonitorAppearance(){
+  if(monitorAppearancePage.active)return;
+  clearTimeout(pollTimer);liveChannel.close();
+  $('appShell').hidden=true;monitorAppearancePage.open();
+}
+$('openMonitorAppearance').onclick=async()=>{
+  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  if(history.state?.page!=='settings')return;
+  history.pushState({page:'monitor-appearance'},'',pageUrl('monitor-appearance'));
+  showMonitorAppearance();
+};
+$('monitorAppearanceBack').onclick=()=>window.__acoBack();
+function showAdvancedInfo(){
+  advancedPage.close();
+  clearTimeout(pollTimer);liveChannel.close();
+  $('appShell').hidden=true;$('advancedInfoPage').hidden=false;
+}
+function showCoolDownDetails(){
+  advancedPage.close();
+  clearTimeout(pollTimer);liveChannel.close();
+  $('appShell').hidden=true;$('advancedInfoPage').hidden=true;
+  coolDownDetailsPage.open();
+}
+$('openAdvanced').onclick=async()=>{
+  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  if(history.state?.page!=='settings')return;
+  history.pushState({page:'advanced'},'',pageUrl('advanced'));
+  showAdvanced();
+};
+$('advancedBack').onclick=()=>window.__acoBack();
+$('advancedInfo').onclick=()=>{
+  history.pushState({page:'advanced-info'},'',pageUrl('advanced-info'));
+  showAdvancedInfo();
+};
+$('advancedInfoBack').onclick=()=>window.__acoBack();
+$('openCoolDownDetails').onclick=event=>{
+  event.preventDefault();
+  if(history.state?.page!=='advanced-info')return;
+  history.pushState({page:'cool-down-details'},'',pageUrl('cool-down-details'));
+  showCoolDownDetails();
+};
+$('coolDownDetailsBack').onclick=()=>window.__acoBack();
 async function openBatteryInfo(){
   closePendingPanel();batteryHistory?.close();const navigation=++usageNavigation;usageDetails?.close();settingsPanel.closeEditor();
   await detailPage?.close();if(navigation!==usageNavigation)return;
@@ -245,12 +294,12 @@ async function openBatteryHistory(state,push=false){
 }
 
 function schedulePoll(delay=0){
-  clearTimeout(pollTimer);if(document.hidden||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  clearTimeout(pollTimer);if(document.hidden||monitorAppearancePage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy){queuedPoll=true;return;}pollTimer=setTimeout(pollLive,delay);
 }
 function refresh(){recordsView.refresh();}
 async function pollLive(){
-  if(document.hidden||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  if(document.hidden||monitorAppearancePage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy||detailPage?.busy||recordsView.busy){schedulePoll(200);return;}
   liveBusy=true;queuedPoll=false;
   const mode=liveChannel.mode,settingsOnly=mode===SETTINGS_WATCH_MODE;
@@ -281,7 +330,7 @@ async function pollLive(){
   }
 }
 function renderStatus(s,settingsOnly=false){
-  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);$('openCutoff').setAttribute('aria-disabled',String(s.cutoffAvailable===false));
+  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);
   if(settingsOnly)return;
   syncTheme();
   if($('homePage').hidden||$('appShell').hidden)return;
@@ -345,7 +394,6 @@ for(const [id,method]of [['openErrorLogs','openErrorLogs'],['clearAllData','clea
 };
 async function returnHome(){
   if(activeTab==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
-  hideCutoff();
   history.replaceState({page:'home'},'',baseUrl());
   await showHome();
 }
@@ -356,13 +404,22 @@ async function showHome(){
 async function applyHistory(state){
   detailPage?.syncHistory();recordsView.syncHistory();
   const page=state?.page??'home';
-  if(page==='cutoff'){if(cutoffFrame.hidden)showCutoff(state);else if(cutoffReady)cutoffFrame.contentWindow.__acoCutoffSync(state);return;}
-  if(!cutoffFrame.hidden){hideCutoff();$('appShell').hidden=false;}
+  const leavingAdvancedInfo=!$('advancedInfoPage').hidden||coolDownDetailsPage.active;
+  if(page!=='cool-down-details')coolDownDetailsPage.close();
+  if(page==='monitor-appearance'){showMonitorAppearance();monitorAppearancePage.handleHistory(state);return;}
+  const leavingMonitor=monitorAppearancePage.active;
+  if(leavingMonitor){monitorAppearancePage.close();$('appShell').hidden=false;}
+  if(page==='cool-down-details'){showCoolDownDetails();return;}
+  if(page==='advanced-info'){showAdvancedInfo();return;}
+  $('advancedInfoPage').hidden=true;
+  if(page==='advanced'){showAdvanced();advancedPage.handleHistory(state);return;}
+  const leavingAdvanced=advancedPage.active||leavingAdvancedInfo;
+  if(leavingAdvanced){advancedPage.close();$('appShell').hidden=false;}
   if(usagePages.has(page)){await openUsage(state);return;}
   if(page==='battery-history'||page==='battery-history-detail'||page==='battery-history-trend'){await openBatteryHistory(state);return;}
   if(page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(state);return;}
   if(page==='record'){settingsPanel.closeEditor();if(detailPage?.id!==state.id)openRecord(state.id,recordsView.find(state.id));return;}
-  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');settingsPanel.handleHistory(state);return;}
+  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');else if(leavingAdvanced||leavingMonitor)schedulePoll(0);settingsPanel.handleHistory(state);return;}
   if(activeTab==='settings'&&!await settingsPanel.flush()){
     history.pushState({page:'settings'},'',pageUrl('settings'));$('appShell').hidden=false;showTab('settings');toast('设置未能保存，请重试。');return;
   }
@@ -370,9 +427,9 @@ async function applyHistory(state){
 }
 $('back').onclick=()=>window.__acoBack();
 window.addEventListener('popstate',event=>applyHistory(event.state));
-document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){detailPage?.pause();settingsPanel.flush();liveChannel.close();}else{refresh();detailPage?.resume();}});
-window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);detailPage?.pause();settingsPanel.flush();liveChannel.close();});
-window.addEventListener('pageshow',e=>{if(e.persisted){refresh();detailPage?.resume();}});
+document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){advancedPage.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();}else if(advancedPage.active)advancedPage.resume();else{refresh();detailPage?.resume();}});
+window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);advancedPage.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();});
+window.addEventListener('pageshow',e=>{if(e.persisted){if(advancedPage.active)advancedPage.resume();else{refresh();detailPage?.resume();}}});
 recordsView.bind();
 themeUiReady=true;
 window.__acoPageReady=true;

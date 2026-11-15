@@ -4,7 +4,9 @@ export function recordIsLive(record,status){
   return !!record?.active&&Number.isSafeInteger(record.id)&&[status?.session,status?.normalSession,status?.gameSession].includes(record.id);
 }
 export function recordEndWall(record){
-  if(!record||record.active||![record.start_wall,record.start_elapsed,record.end_elapsed].every(valid)||record.end_elapsed<record.start_elapsed)return null;
+  if(!record||record.active)return null;
+  if(Number.isSafeInteger(record.end_wall)&&record.end_wall>0&&valid(new Date(record.end_wall).getTime()))return record.end_wall;
+  if(![record.start_wall,record.start_elapsed,record.end_elapsed].every(valid)||record.end_elapsed<record.start_elapsed)return null;
   const wall=record.start_wall+(record.end_elapsed-record.start_elapsed);
   return Number.isSafeInteger(wall)&&wall>=0?wall:null;
 }

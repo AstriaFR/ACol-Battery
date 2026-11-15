@@ -118,6 +118,11 @@ final class DeferredStats {
             new Object[]{id,Math.max(0,r.elapsed-start),r.wall,nullable(r.rm),nullable(r.voltage()),r.online?1:0,host.interactive()?1:0,quality,maxGap,discharge?1:0});
     }
     void requestCapture(){captureSchedule.schedule(SystemClock.elapsedRealtime(),0);}
+    void rebaseDischargeStart(long id){
+        db.execSQL("UPDATE usage_raw SET quality=quality|? WHERE session=? AND x>0 AND (quality&?)=0",
+            new Object[]{Core.DISCHARGE_REBASE,id,Core.DISCHARGE_REBASE});
+        db.execSQL("UPDATE usage_deferred SET dirty=1,event_revision=event_revision+1 WHERE session=? AND finalized=0",new Object[]{id});
+    }
     static final class Pending{
         final long id,from,to;
         final boolean checkTail;
@@ -310,7 +315,9 @@ final class DeferredStats {
                     if(mapped!=null){split=new LinkedHashMap<>();for(ScreenUsage.AppSpan span:mapped.apps)split.put(span.pkg,split.getOrDefault(span.pkg,0L)+span.end-span.start);}
                     boolean discharging=!game||current.discharge;
                     if(discharging&&!rebooted){
-                        double loss=gap?Double.NaN:depletion.consume(previous.rm,current.rm,dt,current.maxGap);
+                        boolean rebased=(current.quality&Core.DISCHARGE_REBASE)!=0;
+                        if(rebased)depletion.reset();
+                        double loss=gap||rebased?Double.NaN:depletion.consume(previous.rm,current.rm,dt,current.maxGap);
                         double energy=Core.dischargeEnergyMwh(previous.voltage,current.voltage,loss);
                         for(Map.Entry<String,Long> part:split.entrySet())result.apps.computeIfAbsent(part.getKey(),pkg->new UsageTotal()).add(part.getValue(),dt,loss,energy);
                         if(mapped!=null){

@@ -69,7 +69,7 @@ public final class Admin {
             StartupFailure.check(Owner.BASE,attempt);throw failure;
         }
     }
-    static RuntimeTransaction transaction(){return new RuntimeTransaction(Owner.BASE,new File("/data/adb/service.d/aco_battery_app.sh"));}
+    static RuntimeTransaction transaction(){return new RuntimeTransaction(Owner.BASE,Owner.BOOT);}
     static String ownerToken(int pid){
         try{
             String stat=Owner.read(new File("/proc/"+pid+"/stat"));String[] fields=stat.substring(stat.lastIndexOf(')')+2).split(" +");

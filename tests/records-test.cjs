@@ -105,6 +105,9 @@ assert.equal(recordEndWall({...ended,active:1}),null);
 assert.equal(recordEndWall({...ended,end_elapsed:999}),null);
 assert.equal(recordEndWall({...ended,start_wall:null}),null);
 assert.equal(recordEndWall({...ended,end_elapsed:1000}),started);
+const adjustedWall=started-3600000;
+assert.equal(recordEndWall({...ended,end_wall:adjustedWall}),adjustedWall,'the last recorded sample wins after a clock adjustment');
+assert.equal(recordEndWall({...ended,active:1,end_wall:adjustedWall}),null,'the record has not ended yet');
 assert.ok(recordIsLive({id:10,active:1},status));assert.ok(recordIsLive({id:20,active:1},status));assert.ok(!recordIsLive({id:20,active:0},status));assert.ok(!recordIsLive({id:30,active:1},status));
 assert.equal(canEstimateRemaining({fast_seconds:3},{online:true,onlineKnown:true}),false);
 assert.equal(canEstimateRemaining({fast_seconds:3},{online:null,onlineKnown:false}),false);
@@ -174,6 +177,30 @@ async function detailPaging(){
  assert.equal(stale,null);assert.equal(count,1,'leaving the page prevents additional detail pages');
 }
 
+async function pausedDetailEnding(){
+ const root=pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/')).href;
+ const{createRecordDetail}=await import(root+'record-detail.js');
+ const{Chart}=await import(root+'chart.js?v=acol-2.2s');
+ const{stamp,reasons}=await import(root+'record-display.js');
+ const{document,get}=require('./helpers.cjs').recordDom();
+ document.documentElement=get('html');
+ Object.assign(globalThis,{document,window:{addEventListener(){}},history:{state:{page:'record',id:9}},ResizeObserver:class{observe(){}}});
+ const heading=document.createElement('header');heading.className='record-detail-head';get('detailScroll').append(heading);
+ Object.assign(get('plot'),{getContext:()=>({}),after(){}});
+ const draw=Chart.prototype.draw;Chart.prototype.draw=()=>{};
+ try{
+  const start=Date.UTC(2026,10,15,13),record={id:9,kind:'charge',active:1,start_wall:start,start_elapsed:0,end_elapsed:1000};
+  const ui=createRecordDetail({api:async action=>action==='charge_integral'?{mah:null}:{record,points:[[0]]},liveChannel:{seedRecord(){},setMode(){}},toast:assert.fail,beforeOpen(){},onShow(){},onRefresh(){}});
+  ui.bind();await ui.open(9,record);assert.equal(heading.dataset.active,'1');
+  get('followLatest').click();assert.match(get('chartInfo').textContent,/已暂停跟随/);
+  const endWall=start-3600000;
+  await ui.receive({record:{...record,active:0,reason:'unplugged',end_wall:endWall},points:[]},ui.pollRequest());
+  assert.equal(get('detailState').textContent,reasons.unplugged);assert.equal(heading.dataset.active,'0');
+  assert.equal(get('detailEnd').textContent,stamp(endWall));assert.equal(get('detailEnd').dateTime,new Date(endWall).toISOString());
+  assert.equal(get('followLatest').hidden,true);await ui.close();
+ }finally{Chart.prototype.draw=draw;}
+}
+
 async function usageCompletion(){
  const{RecordUsageRefresh}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/record-usage-refresh.js')).href);
  let now=0,serial=0,shown=true,record={id:7,start_wall:1000,kind:'discharge',active:0,app_revision:0},calls=0,read;
@@ -219,4 +246,4 @@ async function usageCompletion(){
  }finally{globalThis.setTimeout=originalSet;globalThis.clearTimeout=originalClear;}
 }
 
-runCases([liveCursors,recordLists,recordDisplay,persistentListAndBatches,detailPaging,usageCompletion]).then(()=>console.log('Records: cache and staged rendering, pagination, filters, deletion, live cursors, races, display and deferred usage completion passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([liveCursors,recordLists,recordDisplay,persistentListAndBatches,detailPaging,pausedDetailEnding,usageCompletion]).then(()=>console.log('Records: cache and staged rendering, pagination, filters, deletion, live cursors, ending while paused and deferred usage completion passed')).catch(error=>{console.error(error);process.exitCode=1;});

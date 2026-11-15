@@ -7,7 +7,11 @@ public final class PowerDisplayState {
     public boolean enabled;
     private long performanceNext, batteryNext;
     public PowerDisplayState(boolean enabled){this.enabled=enabled;}
-    public long deadline(boolean interactive){return enabled&&interactive?Math.min(performanceNext,batteryNext):Long.MAX_VALUE;}
+    public long deadline(boolean interactive){return deadline(interactive,true,true);}
+    public long deadline(boolean interactive,boolean performance,boolean battery){
+        if(!enabled||!interactive)return Long.MAX_VALUE;
+        return Math.min(performance?performanceNext:Long.MAX_VALUE,battery?batteryNext:Long.MAX_VALUE);
+    }
     public boolean performanceDue(long now){return enabled&&now>=performanceNext;}
     public boolean batteryDue(long now){return enabled&&now>=batteryNext;}
     public void refresh(){performanceNext=0;batteryNext=0;}

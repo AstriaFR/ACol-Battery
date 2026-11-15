@@ -64,7 +64,7 @@ export class BatteryInfoPanel{
     }
     if(info&&!this.loaded){
       for(const key of['cycles','fcc','rawFcc','soh','rawSoh','qmax','cutoffMv','designCapacity'])this.field(key,number(info[key],['fcc','rawFcc','qmax','designCapacity'].includes(key)?'mAh':['soh','rawSoh'].includes(key)?'%':key==='cutoffMv'?'mV':'',key==='rawSoh'?2:0));
-      for(const key of['fcc','rawFcc','qmax'])this.field(key,capacityRatio(info[key],info.designCapacity));
+      this.field('qmax',capacityRatio(info.qmax,info.designCapacity));
       const cutoffKnown=finite(info.cutoffMv)&&info.cutoffMv>0,noCompensation=cutoffKnown&&info.cutoffMv<3000;
       if(noCompensation)for(const key of['rawFcc','rawSoh'])this.field(key,'——');
       const referenceFcc=noCompensation?info.fcc:info.rawFcc;
@@ -73,6 +73,7 @@ export class BatteryInfoPanel{
       for(const key of['fcc','rawFcc','rawSoh']){
         const nearActual=cutoffKnown&&(noCompensation?key==='fcc':key!=='fcc')&&finite(info[key])&&info[key]>0;
         this.panel.querySelector(`[data-info="${key}"]`).classList.toggle('battery-near-actual',nearActual);
+        if(nearActual&&key!=='rawSoh')this.field(key,capacityRatio(info[key],info.designCapacity));
       }
       this.panel.querySelector('[data-info="qmax"]').classList.toggle('battery-near-actual',finite(info.qmax)&&info.qmax>0);
       this.renderCoefficients(info);

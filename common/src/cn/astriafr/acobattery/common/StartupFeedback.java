@@ -104,7 +104,7 @@ public final class StartupFeedback {
     }
     static void appendDiagnostics(StringBuilder out,String stage,JSONObject data){
         if(data==null)return;out.append("【").append(stage).append("】\n");
-        for(String key:new String[]{"androidSdk","nativeCapabilities","capabilities","cutoffAvailable","cellCount","recordingProblem","readingRecoveryProblem","screenEventApi","screenListener","screenFallback","screenStateKnown","screenStateAvailable","screenStateSource","screenError","usageError","error","powerInputDiagnostics","diagnosticsError"})
+        for(String key:new String[]{"androidSdk","nativeCapabilities","capabilities","cellCount","recordingProblem","readingRecoveryProblem","screenEventApi","screenListener","screenFallback","screenStateKnown","screenStateAvailable","screenStateSource","screenError","usageError","error","powerInputDiagnostics","diagnosticsError","bootEntryError"})
             if(data.has(key))out.append(key).append("：").append(data.opt(key)).append('\n');
         JSONObject reading=data.optJSONObject("reading");
         if(reading!=null)for(String key:new String[]{"onlineKnown","online","onlineSource","rmSource","rm","pct","voltageSource","currentSource","fv","driverFull","enabled","source","error"})
@@ -146,6 +146,7 @@ public final class StartupFeedback {
             if(!missing.isEmpty())out.add(new Notice("部分电池数据缺失",missing+"暂时无法读取，对应数据会保留缺口。"));
         }
         if(!data.optString("usageError").isEmpty())out.add(new Notice("应用统计暂不可用","当前无法读取应用使用情况，统计可能不完整，后台会继续重试。"));
+        if(!data.optString("bootEntryError").isEmpty())out.add(new Notice("开机自启动受限","未能安装开机启动入口。手机重启后若记录服务未启动，请打开应用。"));
         return out;
     }
 }

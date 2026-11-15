@@ -9,8 +9,10 @@ import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,recordEnd
 import{createRecordDrain}from'./record-usage.js?v=acol-2.2s';
 import{bindExport,recordCsv}from'./chart-export.js?v=acol-2.2s';
 import{DETAIL_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
+import{ChargeIntegralCache}from'./charge-integral.js';
 const $=id=>document.getElementById(id);
 const fullRecordEnd=Number.MAX_SAFE_INTEGER,previewBudget=1200;
+const dischargeRebase=128;
 
 export async function readRecordDetail(api,id,from,to,budget,cancelled=()=>false,preview=false){
   const action=preview?'detail_preview':'detail';
@@ -29,6 +31,8 @@ export function createRecordDetail(options){
   let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],streamPreview=false,reversePlot=false;
   let followRedrawPending=false;
   let remainingTimer,remainingGeneration=0,remainingRecordId=null,lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
+  const chargeCache=new ChargeIntegralCache();
+  let chargeEntry=null;
   const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
   const intervalAppDetails=new IntervalAppDetails(chart,api,()=>detail?.record);
   const screenOffOverlay=new ScreenOffOverlay(chart,api,()=>!document.hidden&&!$('detail').hidden,message=>toast(message));
@@ -143,6 +147,7 @@ export function createRecordDetail(options){
     if(data)apply(data);
   }
   async function close(){
+    chargeEntry=null;
     screenOffOverlay.close();
     drain.close();
     performancePanel?.close();
@@ -154,6 +159,7 @@ export function createRecordDetail(options){
     $('detail').hidden=true;
   }
   async function openDetail(id,record){
+    chargeEntry=null;
     screenOffOverlay.close();
     beforeOpen();
     drain.close();
@@ -174,14 +180,7 @@ export function createRecordDetail(options){
     catch(e){if(current(token,id)){if(detail?.loading)$('chartInfo').textContent='曲线读取失败';else if(!detail)activeId=null;toast(e.message);}}
     finally{detailBusy--;schedulePoll(0);}
   }
-  function showDetail(data,preserve=false,live=false){
-    followRedrawPending=false;
-    detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
-    if(!data.loading)liveChannel.setMode(r.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);
-    if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
-    if(data.loading)$('apps').hidden=true;
-    $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
-    onShow();
+  function renderRecordHeading(r){
     const heading=$('detailScroll').querySelector('.record-detail-head');
     heading.dataset.kind=recordFast(r)?'game':r.kind;heading.dataset.active=r.active?'1':'0';
     $('detailType').textContent=recordFast(r)?'游戏记录':r.kind==='charge'?'充电记录':'放电记录';
@@ -191,8 +190,19 @@ export function createRecordDetail(options){
     for(const[node,wall]of[[$('detailTitle'),r.start_wall],[$('detailEnd'),endWall]]){
       if(valid(wall)&&Number.isFinite(new Date(wall).getTime()))node.dateTime=new Date(wall).toISOString();else node.removeAttribute('datetime');
     }
+  }
+  function showDetail(data,preserve=false,live=false){
+    followRedrawPending=false;
+    detail=data;const r=data.record;if($('detailScroll').dataset.recordId!==String(r.id)){$('detailScroll').dataset.recordId=r.id;$('detailScroll').scrollTop=0;}$('detail').hidden=false;$('appShell').hidden=true;
+    if(!data.loading)liveChannel.setMode(r.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);
+    if(!data.loading&&recordFast(r)){performancePanel??=new PerformancePanel(api);performancePanel.open(r);}
+    if(data.loading)$('apps').hidden=true;
+    $('resetZoom').disabled=$('followLatest').disabled=!!data.loading;
+    onShow();
+    renderRecordHeading(r);
     $('chartTitle').textContent=r.kind==='charge'?'充电曲线':'放电曲线';
     renderSummary(r);
+    if(!data.loading)scheduleChargeIntegral(r);
     syncRemainingExplanation();
     if(!preserve){followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
     syncReversePlot(false);
@@ -200,6 +210,29 @@ export function createRecordDetail(options){
     if(!data.loading)renderApps(data);
     renderDetailNote(data);
     if(!preserve&&(history.state?.page!=='record'||history.state.id!==r.id))history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);
+  }
+  function scheduleChargeIntegral(r){
+    if(r.active||r.kind!=='charge'||!valid(r.start_wall)||!valid(r.start_elapsed)||!valid(r.end_elapsed)||r.end_elapsed<r.start_elapsed)return;
+    const key=chargeCache.key(r);
+    if(chargeEntry?.key===key)return;
+    const entry=chargeEntry={key};
+    const cancelled=()=>chargeEntry!==entry||activeId!==r.id;
+    const load=async()=>{
+      try{
+        const mah=await chargeCache.read(r,api,cancelled);
+        if(cancelled()||mah===undefined)return;
+        entry.mah=mah;
+        renderChargeIntegral(detail.record);
+      }catch{}
+    };
+    if(typeof requestIdleCallback==='function')requestIdleCallback(load,{timeout:1500});
+    else setTimeout(load,100);
+  }
+  function renderChargeIntegral(r){
+    const label=$('summary').querySelector('.summary-current-integral');
+    const mah=!r.active&&r.kind==='charge'&&chargeEntry?.key===chargeCache.key(r)?chargeEntry.mah:undefined;
+    label.hidden=mah===undefined;
+    if(!label.hidden)label.textContent=`电流积分：${mah===null?'—':Math.round(mah)+'mAh'}`;
   }
   function renderSummary(r,failed=false){
     const summary=$('summary'),active=!!r.active,live=!failed&&recordIsLive(r,lastStatus);
@@ -247,7 +280,7 @@ export function createRecordDetail(options){
         item.append(value,el('small','','metric-label'));grid.append(item);
       }
       const meta=el('div',undefined,'summary-meta');
-      meta.append(el('span','','summary-state'),el('span','','summary-capacity'),el('span','','summary-change'),el('time','','summary-time'));
+      meta.append(el('span','','summary-state'),el('span','','summary-capacity'),el('span','','summary-current-integral'),el('span','','summary-change'),el('time','','summary-time'));
       summary.append(grid);
       summary.append(meta);
     }
@@ -260,6 +293,7 @@ export function createRecordDetail(options){
     const state=summary.querySelector('.summary-state'),delta=summary.querySelector('.summary-change'),time=summary.querySelector('.summary-time');
     state.textContent=active?`${failed?'连接失败':live?(reading.error?'读取异常':'实时'):'正在读取'} · ${duration(elapsed-r.start_elapsed)}`:
       (reasons[r.reason]??r.reason)+(r.reason==='full_tail_confirmed'?` · ${valid(r.tail_cycles)?fmt(r.tail_cycles):'—'} 次循环`:'');
+    renderChargeIntegral(r);
     const endRm=live&&valid(reading.rm)?reading.rm:r.rm_end,capacity=summary.querySelector('.summary-capacity');
     capacity.textContent=`${valid(r.rm_start)?r.rm_start.toFixed(0):'—'} → ${valid(endRm)?endRm.toFixed(0):'—'}`;
     if(recordFast(r)){capacity.dataset.flow=changeFlow;delta.dataset.flow=changeFlow;}else{delete capacity.dataset.flow;delete delta.dataset.flow;}
@@ -350,6 +384,13 @@ export function createRecordDetail(options){
     if(id&&current(token,id)){
       if(packet.record===null){toast('此记录已删除');$('back').click();return;}
       if(packet.record){
+        const peakChanged=packet.record.kind==='discharge'&&!recordFast(packet.record)&&packet.record.rm_start>detail.record.rm_start;
+        const rebasePoint=peakChanged?points.findLast(point=>point[1]===packet.record.rm_start&&(point[6]&dischargeRebase)!==0):null;
+        const rebase=rows=>rows.map(row=>{
+          if(!rebasePoint||row[0]<=0||row[0]>rebasePoint[0]||(row[6]&dischargeRebase)!==0)return row;
+          const next=[...row];next[5]=null;next[6]|=dischargeRebase;return next;
+        });
+        if(rebasePoint)streamPoints=rebase(streamPoints);
         for(const point of points)if(point[0]>streamAfter){streamPoints.push(point);streamAfter=point[0];}
         const pendingChanged=typeof packet.usagePending==='boolean'&&packet.usagePending!==detail.usagePending;
         const activeChanged=packet.record.active!==detail.record.active;
@@ -357,10 +398,19 @@ export function createRecordDetail(options){
         detail={...detail,record:packet.record,ranges:packet.ranges??detail.ranges,rawCount:packet.rawCount??detail.rawCount,statsVersion:packet.statsVersion??detail.statsVersion,statsEpoch:packet.statsEpoch??detail.statsEpoch,usagePending:packet.usagePending??detail.usagePending,apps:packet.apps??detail.apps,drainSummary:packet.drainSummary??detail.drainSummary};
         if(changed){
           if(followLive&&!chart.pointers.size)showDetail({...detail,points:streamPoints,preview:streamPreview},true,true);
-          else{followRedrawPending=followLive;chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}renderDetailNote(detail);renderFollow();renderChartInfo();}
+          else{
+            followRedrawPending=followLive;
+            if(activeChanged)renderRecordHeading(detail.record);
+            if(rebasePoint){
+              detail={...detail,points:rebase(detail.points)};
+              applyChart(detail,chart.window,true);
+            }else chart.total=Math.max(1,detail.record.end_elapsed-detail.record.start_elapsed);
+            if(packet.apps||pendingChanged){renderApps(detail);intervalAppDetails.preload(detail.record,detail.statsVersion);}
+            renderDetailNote(detail);renderFollow();renderChartInfo();
+          }
         }
         renderSummary(detail.record);screenOffOverlay.update(detail.record,detail.statsVersion);
-        if(activeChanged){liveChannel.setMode(detail.record.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);syncRemainingExplanation();}
+        if(activeChanged){liveChannel.setMode(detail.record.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);syncRemainingExplanation();scheduleChargeIntegral(detail.record);}
       }
     }
     if(current(token))startRemaining();
@@ -398,8 +448,8 @@ export function createRecordDetail(options){
     backFullscreen(){if(performancePanel?.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
     pause(){stopRemaining();drain.pause();},
     resume(){startRemaining();drain.resume();},pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
-    prune(){drain.prune();intervalAppDetails.prune();},
-    removeCaches(id){drain.remove(id);intervalAppDetails.remove(id);if(activeId===id)drain.close();},
+    prune(){drain.prune();intervalAppDetails.prune();chargeCache.prune(api).catch(()=>{});},
+    removeCaches(id){drain.remove(id);intervalAppDetails.remove(id);chargeCache.remove(id);if(activeId===id){drain.close();chargeEntry=null;}},
     failure(){if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}
   };
 }
