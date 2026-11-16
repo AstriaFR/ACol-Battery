@@ -24,6 +24,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
+    private static final int REQUEST_DISCHARGE_NOTIFICATION=410;
+    private java.util.function.Consumer<Boolean> dischargeNotificationPermission;
     final ExecutorService worker=Executors.newSingleThreadExecutor();
     StartupController startup;WebViewHost browser;ChartExport chartExport;RecordListCache recordListCache;
     FrameLayout contentFrame;ErrorLogPages errorLogs;DataTransferUi dataTransfer;
@@ -79,6 +81,22 @@ public final class MainActivity extends Activity {
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+    void requestDischargeNotificationPermission(java.util.function.Consumer<Boolean> result){
+        if(isFinishing()||dischargeNotificationPermission!=null){result.accept(false);return;}
+        String permission=android.Manifest.permission.POST_NOTIFICATIONS;
+        if(checkSelfPermission(permission)==android.content.pm.PackageManager.PERMISSION_GRANTED){
+            result.accept(DischargeNotificationReceiver.canPost(this));return;
+        }
+        dischargeNotificationPermission=result;
+        requestPermissions(new String[]{permission},REQUEST_DISCHARGE_NOTIFICATION);
+    }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] grants){
+        super.onRequestPermissionsResult(request,permissions,grants);
+        if(request!=REQUEST_DISCHARGE_NOTIFICATION||dischargeNotificationPermission==null)return;
+        java.util.function.Consumer<Boolean> result=dischargeNotificationPermission;
+        dischargeNotificationPermission=null;
+        result.accept(DischargeNotificationReceiver.canPost(this));
     }
     @Override protected void onActivityResult(int request,int result,android.content.Intent intent){
         super.onActivityResult(request,result,intent);if(dataTransfer!=null&&(request==DataTransferUi.PICK_RESTORE||request==DataTransferUi.SAVE_BACKUP))dataTransfer.result(request,result,intent);

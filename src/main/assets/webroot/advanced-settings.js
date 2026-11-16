@@ -1,3 +1,4 @@
+const LOW_VOLTAGE_CONFIRM_MV=2700;
 const dischargeVoltageFields=[
   {key:'GAUGE_TERM_VOLTAGE',label:'电量计截止电压',unit:'mV',confirmVoltage:true},
   {key:'GAUGE_SHUTDOWN_VOLTAGE',label:'软件关机电压',unit:'mV',confirmVoltage:true}
@@ -106,6 +107,14 @@ export function createAdvancedPage(api,keypad){
 
   const visible=()=>!root.hidden&&!document.hidden;
   const displayValue=(field,value)=>String(value/(field.scale??1));
+  function inputRange(field){
+    const node=state?.nodes?.[field.key];
+    return {min:node?.min??field.min??0,max:node?.max??field.max};
+  }
+  function rangeLabel(field){
+    const {min,max}=inputRange(field);
+    return Number.isFinite(max)?`${min}–${max}${field.unit?' '+field.unit:''}\n${field.scale?'步进 0.1 s':'整数'}`:'';
+  }
   function render(data,error=''){
     state=data;
     const nodes=data?.nodes??{};
@@ -128,6 +137,8 @@ export function createAdvancedPage(api,keypad){
       if(button.textContent!==text)button.textContent=text;
       button.disabled=!canEdit||applying;
     }
+    const editing=keypad.keypad.open&&fields.find(field=>field.key===keypad.editor?.key);
+    if(editing)$('keypadRange').textContent=rangeLabel(editing);
     const available=limitedModes.some(mode=>typeof nodes[mode.key]?.forced==='boolean');
     const missing=limitedModes.every(mode=>nodes[mode.key]?.missing);
     const known=limitedModes.every(mode=>nodes[mode.key]?.missing||typeof nodes[mode.key]?.forced==='boolean');
@@ -210,16 +221,17 @@ export function createAdvancedPage(api,keypad){
       restoring?'确定恢复厂商截止电压？':'确定修改截止电压？',
       restoring?`取消「${field.label}」的手动覆盖，交回厂商动态策略。恢复值由驱动决定。`:`${field.label}：${value} mV`);
     if(!accepted||root.hidden)return false;
-    if(value!==null&&value<2600){
+    if(value!==null&&value<LOW_VOLTAGE_CONFIRM_MV){
       const low=await askChange('低电压风险确认',
-        `${field.label}：${value} mV\n\n设置低于 2600 mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用');
+        `${field.label}：${value} mV\n\n设置低于 ${LOW_VOLTAGE_CONFIRM_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用');
       if(!low||root.hidden)return false;
     }
     return true;
   }
-  async function apply(field,value,min,max){
+  async function apply(field,value){
     let raw=null;
     if(value!==null){
+      const {min,max}=inputRange(field);
       const tenths=Math.round(value*10);
       if(!Number.isFinite(max))throw Error('暂时无法读取可填范围。');
       if(value<min||value>max||!(field.scale?value===tenths/10:Number.isInteger(value)))
@@ -257,15 +269,13 @@ export function createAdvancedPage(api,keypad){
   };
   function openEditor(field,push){
     if(root.hidden||applying||buttons.get(field.key).disabled)return;
-    const node=state.nodes[field.key],min=node.min??field.min??0;
-    const max=node.max??field.max;
+    const node=state.nodes[field.key];
     const current=node.forced?node.forceValue:node.effective;
-    const range=Number.isFinite(max)?`${min}–${max}${field.unit?' '+field.unit:''}\n${field.scale?'步进 0.1 s':'整数'}`:'';
     keypad.openEditor({
-      draft:Number.isFinite(current)?displayValue(field,current):'',decimal:!!field.scale,signed:!!field.signed,digits:1,
+      key:field.key,draft:Number.isFinite(current)?displayValue(field,current):'',decimal:!!field.scale,signed:!!field.signed,digits:1,
       applyDisabled:node.writeUnavailable===true,
-      commit:value=>apply(field,value,min,max),restore:()=>apply(field,null,min,max)
-    },field.label,field.unit,range,
+      commit:value=>apply(field,value),restore:()=>apply(field,null)
+    },field.label,field.unit,rangeLabel(field),
     push?{page:'advanced',keypad:true,key:field.key}:null);
   }
   function syncKeypad(entry){

@@ -1,7 +1,8 @@
 import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.2s';
 export class SettingsPanel{
-  constructor(api,onSaved){
-    this.api=api;this.onSaved=onSaved;this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
+  constructor(api,onSaved,requestNotificationPermission){
+    this.api=api;this.onSaved=onSaved;this.requestNotificationPermission=requestNotificationPermission;
+    this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
     this.ready=false;this.dirty=false;this.running=null;this.timer=null;this.lastSaved='';this.editor=null;
     this.fastButton=document.getElementById('toggleFast');this.fastBusy=false;this.fastValue=false;this.editorBusy=false;
     this.fastButton.onclick=()=>this.toggleFast();
@@ -24,6 +25,8 @@ export class SettingsPanel{
     this.changeConfirm.addEventListener('click',e=>{const r=this.changeConfirm.getBoundingClientRect();if(e.target===this.changeConfirm&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))this.dismissChange(false);});
     this.recording=document.getElementById('recordingEnabled');this.recordingBusy=false;
     this.recording.onchange=()=>this.toggleRecording(this.recording.checked);
+    this.dischargeNotification=document.getElementById('dischargeNotificationEnabled');this.dischargeNotificationBusy=false;
+    this.dischargeNotification.onchange=()=>this.toggleDischargeNotification(this.dischargeNotification.checked);
     this.powerDisplay=document.getElementById('powerDisplayEnabled');this.powerDisplayBusy=false;
     this.powerDisplay.onchange=()=>this.togglePowerDisplay(this.powerDisplay.checked);
     this.recordingConfirm=document.getElementById('recordingConfirm');this.recordingResolve=null;
@@ -82,16 +85,35 @@ export class SettingsPanel{
     this.powerDisplayValue=enabled;this.powerDisplay.checked=enabled;this.powerDisplay.disabled=false;
     if(error)this.setStatus(error,true);
   }
+  updateDischargeNotification(enabled){
+    if(!this.dischargeNotification)return;
+    if(typeof enabled==='boolean'&&!this.dischargeNotificationBusy)this.dischargeNotificationValue=enabled;
+    this.dischargeNotification.checked=this.dischargeNotificationValue===true;
+    this.dischargeNotification.disabled=this.dischargeNotificationBusy||!!this.resetPromise||typeof this.dischargeNotificationValue!=='boolean';
+  }
+  async toggleDischargeNotification(enabled){
+    if(this.dischargeNotificationBusy||this.resetPromise)return;
+    this.dischargeNotificationBusy=true;this.updateDischargeNotification();this.setStatus('');
+    try{
+      if(enabled&&!await this.requestNotificationPermission())return;
+      const result=await this.api('set_discharge_notification',enabled?1:0);
+      this.dischargeNotificationValue=result.settings.dischargeNotificationEnabled;
+      this.onSaved(result.settings);
+    }catch(error){this.setStatus(error.message,true);}
+    finally{this.dischargeNotificationBusy=false;this.updateDischargeNotification();}
+  }
   async resetDefaults(){
-    if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy)return false;
+    if(!this.ready||this.resetBusy||this.fastBusy||this.recordingBusy||this.powerDisplayBusy||this.dischargeNotificationBusy)return false;
     this.resetBusy=true;const button=document.getElementById('resetSettings');button.disabled=true;
     try{
       if(!await this.askChange('恢复默认设置？','恢复默认设置和跟随系统主题。游戏性能统计与性能监视器将关闭，记录总开关将开启。已有记录和备份会保留。'))return false;
       if(!await this.flush())throw Error('当前设置未能保存，请重试。');
       let finishReset;this.resetPromise=new Promise(resolve=>{finishReset=resolve;});this.finishReset=finishReset;
+      this.updateDischargeNotification();
       for(const field of this.form.elements)field.disabled=true;
       this.fastButton.disabled=true;this.recording.disabled=true;this.powerDisplay.disabled=true;document.getElementById('themeToggle').disabled=true;
       const result=await this.api('reset_settings');
+      this.updateDischargeNotification(result.settings.dischargeNotificationEnabled);
       this.lastSaved=JSON.stringify(encodeSettings(result.settings));this.dirty=false;this.fill(result.settings);this.onSaved(result.settings);
       if(this.fastValue){const fast=await this.api('set_fast',0);this.updateFast(fast.fastEnabled);this.onSaved(fast.settings);}
       if(this.powerDisplayValue){const power=await this.api('set_power_display',0);this.updatePowerDisplay(power.powerDisplayEnabled,power.powerDisplayError);this.onSaved(power.settings);}
@@ -100,7 +122,7 @@ export class SettingsPanel{
     }catch(error){this.setStatus(`恢复未全部完成，请检查当前设置。${error.message}`,true);return false;}
     finally{
       if(this.resetPromise){for(const field of this.form.elements)field.disabled=!this.ready;this.recording.disabled=false;this.powerDisplay.disabled=false;document.getElementById('themeToggle').disabled=false;this.updateFast();this.finishReset?.();this.resetPromise=null;this.finishReset=null;}
-      this.resetBusy=false;button.disabled=false;
+      this.resetBusy=false;button.disabled=false;this.updateDischargeNotification();
     }
   }
   async togglePowerDisplay(enabled){
@@ -323,7 +345,7 @@ export class SettingsPanel{
   }
   async open(cached){
     if(cached){
-      const value={...DEFAULT_SETTINGS,...cached};this.fill(value);this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.dirty=false;this.setStatus('');
+      const value={...DEFAULT_SETTINGS,...cached};this.fill(value);this.updateDischargeNotification(value.dischargeNotificationEnabled);this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.dirty=false;this.setStatus('');
       for(const field of this.form.elements)field.disabled=false;
       this.updateFast();
       return;
@@ -332,7 +354,7 @@ export class SettingsPanel{
     for(const field of this.form.elements)field.disabled=true;
     this.setStatus('');
     try{
-      const data=await this.api('settings'),value={...DEFAULT_SETTINGS,...data.settings};this.fill(value);this.updateRecording(data.recordingEnabled,data.recordingProblem);this.updateFast(data.fastEnabled);this.updatePowerDisplay(data.powerDisplayEnabled,data.powerDisplayError);
+      const data=await this.api('settings'),value={...DEFAULT_SETTINGS,...data.settings};this.fill(value);this.updateRecording(data.recordingEnabled,data.recordingProblem);this.updateDischargeNotification(value.dischargeNotificationEnabled);this.updateFast(data.fastEnabled);this.updatePowerDisplay(data.powerDisplayEnabled,data.powerDisplayError);
       this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.setStatus('');
     }catch(e){this.setStatus(e.message,true);}
     finally{for(const field of this.form.elements)field.disabled=!this.ready;this.updateFast();}

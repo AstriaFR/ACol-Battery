@@ -42,6 +42,18 @@ public final class BatteryDetails {
         long value=row==null?fcc:(long)fcc-(long)row[1]*rawSoh.intValue()/100;
         return value>0&&value<=Integer.MAX_VALUE?(int)value:null;
     }
+    public static Integer rawFccAbove(Integer fcc,Integer soh,Integer cutoff,List<int[]> coefficients,Integer design){
+        if(fcc==null||design==null||design<=0||fcc<design||cutoff==null||cutoff<3000)return null;
+        int[] row=coefficient(coefficients,cutoff);
+        if(row==null||row[1]<=0)return null;
+        // The driver truncates the compensated SOH and caps it at 100.
+        long maxRawSoh=100;
+        if(soh!=null&&soh>0&&soh<100&&row[2]>=0)
+            maxRawSoh=Math.min(maxRawSoh,((soh+1L)*100-1)/(100L+row[2]));
+        // Equality is possible at the FCC cap. Use the preceding integer for a strict lower bound.
+        long bound=(long)fcc-row[1]*maxRawSoh/100-1;
+        return bound>0?(int)bound:null;
+    }
     public static Integer normalizeQmax(Integer qmax,Integer fcc){
         return normalizeQmax(qmax,fcc,null);
     }

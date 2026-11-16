@@ -16,14 +16,14 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class OplusVotes {
-    private static final Path BASE=Paths.get("/proc/oplus-votable");
     private static final Path DEVICE_TREE=Paths.get("/proc/device-tree/soc");
     private static final String WIRED_DT="oplus,wired";
     private static final String VOOC_DT="oplus,vooc";
     private static final String PPS_DT="oplus,pps_charge";
     private static final String UFCS_DT="oplus,ufcs_charge";
     private static final String[] WIRED_COOL_DOWN_TYPES={"normal","pdqc","vooc"};
-    private static final int PPS_UFCS_MAX_COOL_DOWN_LEVEL=30;
+    private static final int WIRED_COOL_DOWN_TABLE_LIMIT=31;
+    private static final int DISCHARGE_VOLTAGE_MIN_MV=2500,DISCHARGE_VOLTAGE_MAX_MV=3500;
     private static final Path DEC_CV=Paths.get("/proc/charger/dec_cv_cc");
     private static final Path DEC_DELTA=Paths.get("/sys/class/oplus_chg/common/dec_delta");
     private static final Path CHARGING_ENABLE=Paths.get("/sys/class/oplus_chg/battery/mmi_charging_enable");
@@ -37,11 +37,11 @@ final class OplusVotes {
     private static final int PLC_UNSUPPORTED=0,PLC_NOT_ALLOWED=1,PLC_ENABLED=3,PLC_WAIT=4,PLC_UNKNOWN=6;
     enum Node {
         WIRED_FCC(4000), WIRED_ICL(4000), PPS_CURR(8000), UFCS_CURR(15000), VOOC_CURR(15000),
-        GAUGE_UPDATE(20000), GAUGE_TERM_VOLTAGE(3400), GAUGE_SHUTDOWN_VOLTAGE(3400),
-        FV_MAX(5000), FV_MIN(5000), FV_DEC, DEC_DELTA(100), COOL_DOWN(31),
+        GAUGE_UPDATE(20000), GAUGE_TERM_VOLTAGE(DISCHARGE_VOLTAGE_MAX_MV), GAUGE_SHUTDOWN_VOLTAGE(DISCHARGE_VOLTAGE_MAX_MV),
+        FV_MAX(5000), FV_MIN(5000), FV_DEC, DEC_DELTA(100), COOL_DOWN(30),
         CHG_DISABLE, WIRED_CHARGE_SUSPEND, PLC, TARGET_TERM_VOLTAGE, TARGET_SHUTDOWN_VOLTAGE;
 
-        final Path directory=BASE.resolve(name());
+        final Path directory=Paths.get("/proc/oplus-votable",name());
         final int maximum;
         Node(){this(0);}
         Node(int maximum){this.maximum=maximum;}
@@ -58,15 +58,15 @@ final class OplusVotes {
         throw new IllegalArgumentException("投票节点无效。");
     }
 
-    static synchronized JSONObject snapshot(int voltageMin)throws JSONException {
+    static synchronized JSONObject snapshot()throws JSONException {
         JSONObject result=new JSONObject();
         Range floating=floatRange();
-        Range coolDown=coolDownRange();
         for(Node node:Node.values()){
             try{
                 JSONObject item;
                 synchronized(node){item=read(node);}
-                Range range=node.dischargeVoltage()?new Range(voltageMin,node.maximum):node.floatingVoltage()?floating:node==Node.COOL_DOWN?coolDown:null;
+                Range range=node.dischargeVoltage()?new Range(DISCHARGE_VOLTAGE_MIN_MV,node.maximum)
+                    :node.floatingVoltage()?floating:node==Node.COOL_DOWN?new Range(0,node.maximum):null;
                 if(range!=null)item.put("min",range.min).put("max",range.max);
                 if(node==Node.GAUGE_SHUTDOWN_VOLTAGE&&!Files.isReadable(SHUTDOWN_READBACK))item.put("writeUnavailable",true);
                 result.put(node.name(),item);
@@ -112,9 +112,9 @@ final class OplusVotes {
         return result;
     }
 
-    static synchronized void apply(Node node,Integer value,int voltageMin,GaugeUpdate gaugeUpdate)throws IOException {
+    static synchronized void apply(Node node,Integer value,GaugeUpdate gaugeUpdate)throws IOException {
         if(value!=null){
-            Range range=node.dischargeVoltage()?new Range(voltageMin,node.maximum):node.floatingVoltage()?floatRange():node==Node.COOL_DOWN?coolDownRange():
+            Range range=node.dischargeVoltage()?new Range(DISCHARGE_VOLTAGE_MIN_MV,node.maximum):node.floatingVoltage()?floatRange():
                 new Range(node==Node.DEC_DELTA?-node.maximum:0,node.maximum);
             if(range==null||value<range.min||value>range.max||node==Node.GAUGE_UPDATE&&(value<500||value%100!=0))
                 throw new IOException("设置值超出范围。");
@@ -133,6 +133,7 @@ final class OplusVotes {
 
     private static void applyForce(Node node,Integer value)throws IOException {
         boolean enable=value!=null&&(value>0||node==Node.COOL_DOWN);
+        boolean restoringShutdown=!enable&&node==Node.GAUGE_SHUTDOWN_VOLTAGE;
         Path active=node.directory.resolve("force_active"), setting=node.directory.resolve("force_val");
         String before=read(active), previous=read(setting);
         if(!before.equals("0")&&!before.equals("1"))throw new IOException("无法识别强制覆盖状态。");
@@ -141,12 +142,12 @@ final class OplusVotes {
             if(enable){
                 if(!previous.equals(target))write(setting,target);
                 write(active,"1");
-            }else if(before.equals("1"))write(active,"0");
+            }else if(before.equals("1")||restoringShutdown)write(active,"0");
             if(!enable&&node.dischargeVoltage()&&!previous.equals("0"))write(setting,"0");
             if(!read(active).equals(enable?"1":"0")||enable&&!read(setting).equals(target))
                 throw new IOException("写入读回不一致。");
             if(!enable&&node.dischargeVoltage()&&!read(setting).equals("0"))throw new IOException("写入读回不一致。");
-            if(node.dischargeVoltage())verifyDischargeVoltage(node,enable,target);
+            if(node.dischargeVoltage())verifyDischargeVoltage(node,enable,target,!restoringShutdown);
             else verifyForce(node,enable,target);
         }catch(IOException e){
             if(node.dischargeVoltage()){
@@ -154,6 +155,7 @@ final class OplusVotes {
                     if(!read(setting).equals(previous))write(setting,previous);
                     if(!before.equals("0")||!read(active).equals(before))write(active,before);
                     if(!read(active).equals(before)||!read(setting).equals(previous))throw new IOException();
+                    verifyDischargeVoltage(node,before.equals("1"),previous,true);
                 }catch(IOException reset){e.addSuppressed(reset);throw new IOException("修改失败，无法确认原值已恢复。",e);}
                 throw e;
             }
@@ -163,21 +165,31 @@ final class OplusVotes {
             }catch(IOException reset){throw new IOException("修改失败，无法确认是否已解除覆盖。",reset);}
             throw new IOException("驱动未能应用该设置，已关闭强制覆盖。",e);
         }
+        if(restoringShutdown){
+            // Once the driver's vote is released, leave it released even if the hardware readback fails.
+            try{
+                if(!Files.isReadable(SHUTDOWN_READBACK))throw new IOException("当前驱动不支持关机阈值读回。");
+                verifyDischargeVoltage(node,false,target,true);
+            }
+            catch(IOException error){throw new IOException("已解除强制覆盖，未能确认厂商关机电压已生效。",error);}
+        }
     }
 
-    private static void verifyForce(Node node,boolean enabled,String target)throws IOException{
+    private static String verifyForce(Node node,boolean enabled,String target)throws IOException{
         Matcher effective=EFFECTIVE.matcher(read(node.directory.resolve("status")));
         if(!effective.find()||enabled!=effective.group(1).equals("DEBUG_FORCE_CLIENT")||
             enabled&&!effective.group(2).equals(target))throw new IOException("投票生效值校验失败。");
+        return effective.group(2);
     }
 
-    private static void verifyDischargeVoltage(Node node,boolean enabled,String target)throws IOException{
+    private static void verifyDischargeVoltage(Node node,boolean enabled,String target,boolean checkShutdownReadback)throws IOException{
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
         while(true){
             try{
-                verifyForce(node,enabled,target);
-                if(enabled&&node==Node.GAUGE_SHUTDOWN_VOLTAGE&&!read(SHUTDOWN_READBACK).equals(target))
-                    throw new IOException("关机阈值未下发，已尝试恢复原值。");
+                String effective=verifyForce(node,enabled,target);
+                if(checkShutdownReadback&&node==Node.GAUGE_SHUTDOWN_VOLTAGE
+                    &&(effective.startsWith("-")||effective.equals("0")||!read(SHUTDOWN_READBACK).equals(effective)))
+                    throw new IOException("实际关机阈值与生效投票不一致。");
                 return;
             }catch(IOException pending){
                 if(System.nanoTime()-deadline>=0)throw pending;
@@ -194,7 +206,7 @@ final class OplusVotes {
                 synchronized(node){
                     if(!isAdjusted(node))continue;
                     if(node.chargingMode())writeChargingMode(node,false);
-                    else apply(node,null,0,gaugeUpdate);
+                    else apply(node,null,gaugeUpdate);
                 }
             }
             catch(IOException e){
@@ -361,24 +373,6 @@ final class OplusVotes {
         return null;
     }
 
-    private static Range coolDownRange(){
-        int max=0;
-        for(String type:WIRED_COOL_DOWN_TYPES){
-            try{
-                byte[] table=Files.readAllBytes(DEVICE_TREE.resolve(WIRED_DT+"/oplus_spec,cool_down_"+type+"_curr_ma"));
-                max=Math.max(max,table.length/Integer.BYTES);
-            }catch(IOException ignored){}
-        }
-        if(Files.isReadable(Node.VOOC_CURR.directory.resolve("status"))&&deviceTreeInt(VOOC_DT+"/oplus,vooc_data_width",0)==7){
-            max=Math.max(max,deviceTreeInt(VOOC_DT+"/oplus,vooc_curr_max",0));
-        }
-        // PPS and UFCS use built-in driver tables. Their shorter variants clamp to the last entry.
-        if(hasChargeProtocol(PPS_DT,Node.PPS_CURR)||hasChargeProtocol(UFCS_DT,Node.UFCS_CURR)){
-            max=Math.max(max,PPS_UFCS_MAX_COOL_DOWN_LEVEL);
-        }
-        return max>0?new Range(0,Math.min(max,Node.COOL_DOWN.maximum)):null;
-    }
-
     static JSONObject coolDownDetails()throws JSONException {
         JSONObject result=new JSONObject();
         if(!Files.isReadable(Node.COOL_DOWN.directory.resolve("status")))return result;
@@ -412,7 +406,7 @@ final class OplusVotes {
         JSONArray values=new JSONArray();
         try{
             ByteBuffer table=ByteBuffer.wrap(Files.readAllBytes(path));
-            while(table.remaining()>=Integer.BYTES&&values.length()<Node.COOL_DOWN.maximum)values.put(table.getInt());
+            while(table.remaining()>=Integer.BYTES&&values.length()<WIRED_COOL_DOWN_TABLE_LIMIT)values.put(table.getInt());
         }catch(IOException ignored){}
         return values;
     }

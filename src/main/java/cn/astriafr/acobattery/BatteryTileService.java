@@ -18,6 +18,7 @@ import org.json.JSONObject;
 
 /** A listening-only root connection. The independent recorder is never owned by this service. */
 public abstract class BatteryTileService extends TileService {
+    private static final long REFRESH_MS=2000,RETRY_MS=5000;
     protected abstract boolean gameMode();
     private final Handler ui=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
@@ -95,7 +96,10 @@ public abstract class BatteryTileService extends TileService {
                 else if(action>0&&result!=null)Toast.makeText(this,label()+(result.enabled?"已开启":"已关闭"),Toast.LENGTH_SHORT).show();
                 int next=queued;queued=-1;
                 if(next>0){request(next);return;}
-                if(listening&&failure==null)ui.postDelayed(refresh,epoch==generation?2000:0);else if(!listening)disconnect();
+                if(listening){
+                    long delay=epoch!=generation?0:failure==null?REFRESH_MS:RETRY_MS;
+                    ui.postDelayed(refresh,delay);
+                }else disconnect();
             });
         });
     }

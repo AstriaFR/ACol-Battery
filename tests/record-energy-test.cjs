@@ -1,4 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const {recordDom}=require('./helpers.cjs');
 const root=path.resolve(__dirname,'../src/main/assets/webroot'),context=vm.createContext({console,setTimeout,clearTimeout,Intl,Date}),modules=new Map();
 function load(file){
   file=file.split('?')[0];if(modules.has(file))return modules.get(file);
@@ -35,6 +36,21 @@ function load(file){
   const panel=load(path.join(root,'record-usage.js'));
   await panel.link((specifier,parent)=>load(path.resolve(path.dirname(parent.identifier),specifier)));await panel.evaluate();
   const {RecordUsagePanel}=panel.namespace,p=Object.create(RecordUsagePanel.prototype);p.mode='energy';
+  const {document,get}=recordDom(),drainRecord={id:6,start_wall:1000,kind:'discharge',active:0};
+  context.document=document;context.window={addEventListener(){}};
+  const updateUsagePanel=RecordUsagePanel.prototype.update;RecordUsagePanel.prototype.update=()=>{};
+  try{
+    const drain=panel.namespace.createRecordDrain(async()=>{throw Error('summary needs no extra query')},{getData:()=>null,onSettled(){},readAppIcons:()=>({})});
+    const energy=[40,30,50],summary=energy.map(energyMwh=>({ms:120000,energyMwh,energyMs:120000}));
+    drain.render({record:drainRecord,drainSummary:summary,apps:[]});
+    const host=get('drainRows'),total=energy.reduce((sum,value)=>sum+value,0);
+    assert.equal(Number(host.querySelector('.drain-center strong').textContent),total/1000);
+    for(const [i,name] of ['on','off'].entries()){
+      const [length,circumference]=host.querySelector('.drain-ring-'+name).attributes['stroke-dasharray'].split(' ').map(Number);
+      assert.ok(Math.abs(length/circumference-energy[i]/total)<1e-8,'unknown energy should not fill either confirmed segment');
+    }
+    drain.close();
+  }finally{RecordUsagePanel.prototype.update=updateUsagePanel;delete context.document;delete context.window;}
   const day=new Date(2026,9,20).getTime(),end=day+3600000,entry={revision:0,spans:[[day,end,1]],appSpans:[],appLabels:{},attempts:{},appAttempts:{},appFinal:{},settledEnd:end};
   const view=Object.create(RecordUsagePanel.prototype);let appCalls=0;
   Object.assign(view,{mode:'time',record:{id:9,start_wall:day,start_elapsed:0,end_elapsed:3600000,active:0,kind:'discharge'},day,token:0,busyKey:null,key:null,force:false,cache:{get:async()=>entry,save:async()=>{}},node:()=>({}),drawEmpty(){},draw(){},scheduleRetry(){},api:async()=>{appCalls++;return {segments:appCalls===1?[]:[[day,end,'repaired']],labels:{},complete:appCalls!==1,appRevision:0};}});

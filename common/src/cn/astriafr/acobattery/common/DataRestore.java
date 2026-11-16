@@ -32,6 +32,9 @@ public final class DataRestore {
         for(String name:DataArchive.APP_DIRS){File input=new File(job,"incoming/app/"+name),target=new File(appStage,"incoming/"+name);if(input.exists())DataArchive.copyTree(input,target,guard);else Files.createDirectories(target.toPath());}
         Set<String> names=new TreeSet<>();File[] current=root.listFiles(),incoming=new File(job,"incoming/root").listFiles();if(current==null||incoming==null)throw new IOException("恢复数据目录无法读取。");
         for(File value:current)if(!DataArchive.keepRootEntry(value.getName()))names.add(value.getName());for(File value:incoming)if(!DataArchive.keepRootEntry(value.getName()))names.add(value.getName());
+        // A trial can create these after the original data has been moved aside.
+        Collections.addAll(names,"records.db-wal","records.db-shm","records.db-journal",
+            RecordingGate.DISABLED,RecordingGate.PROBLEM);
         JSONArray entries=new JSONArray();for(String name:names)entries.put(new JSONObject().put("area","root").put("name",name));for(String name:DataArchive.APP_DIRS)entries.put(new JSONObject().put("area","app").put("name",name));
         for(int i=0;i<entries.length();i++){JSONObject entry=entries.getJSONObject(i);entry.put("hadOld",path(entry,"target").exists());path(entry,"incoming");path(entry,"backup");}
         writeState(new JSONObject().put("committed",false).put("entries",entries));
@@ -46,14 +49,18 @@ public final class DataRestore {
     }
     public void commit()throws Exception{JSONObject data=state();data.put("committed",true);writeState(data);}
     public void recover()throws Exception{
-        if(!journal.exists())return;JSONObject data=state();if(data.optBoolean("committed"))return;JSONArray entries=data.getJSONArray("entries");
+        if(!started())return;
+        JSONObject data=state();if(data.optBoolean("committed")||data.optBoolean("rolledBack"))return;
+        JSONArray entries=data.getJSONArray("entries");
         for(int i=entries.length()-1;i>=0;i--){
             JSONObject entry=entries.getJSONObject(i);File target=path(entry,"target"),backup=path(entry,"backup");
             if(backup.exists()){if(target.exists())DataArchive.removeTree(entry.getString("area").equals("app")?app:root,target);Files.move(backup.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE);}
             else if(!entry.getBoolean("hadOld")&&target.exists())DataArchive.removeTree(entry.getString("area").equals("app")?app:root,target);
         }
+        writeState(data.put("rolledBack",true));
     }
-    public boolean committed()throws Exception{return journal.exists()&&state().optBoolean("committed");}
+    public boolean started(){return journal.exists();}
+    public boolean committed()throws Exception{return started()&&state().optBoolean("committed");}
     public void clean()throws Exception{
         if(appStage.exists())DataArchive.removeTree(app,appStage);File rollback=new File(job,"rollback");if(rollback.exists())DataArchive.removeTree(job,rollback);
     }

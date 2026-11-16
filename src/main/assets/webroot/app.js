@@ -4,7 +4,7 @@ import{createRecords}from'./records.js?v=acol-2.2s';
 import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
-import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons}from'./root-bridge.js?v=acol-2.2s';
+import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons,requestDischargeNotificationPermission}from'./root-bridge.js?v=acol-2.2s';
 import{LiveChannel,DETAIL_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
@@ -102,7 +102,7 @@ const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSetting
   getTab:()=>activeTab,openRecord,onKindChange:syncTheme,
   pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage?.resumeRemaining();},
   onDeleted:id=>detailPage?.removeCaches(id),onRefresh:()=>schedulePoll(0)});
-const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();});
+const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();},requestDischargeNotificationPermission);
 const advancedPage=createAdvancedPage(api,settingsPanel);
 const coolDownDetailsPage=createCoolDownDetailsPage(api);
 const monitorAppearancePage=createMonitorAppearancePage(api,settingsPanel);
@@ -330,7 +330,7 @@ async function pollLive(){
   }
 }
 function renderStatus(s,settingsOnly=false){
-  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);
+  applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateDischargeNotification(s.settings?.dischargeNotificationEnabled);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);
   if(settingsOnly)return;
   syncTheme();
   if($('homePage').hidden||$('appShell').hidden)return;

@@ -167,6 +167,11 @@ final class WebViewHost {
         }
         @JavascriptInterface public void clearRecordListCache(){if(active())app.recordListCache.clear();}
         @JavascriptInterface public void post(String text){if(active())app.startup.post(text);}
+        @JavascriptInterface public void requestDischargeNotificationPermission(){
+            ui(()->app.requestDischargeNotificationPermission(allowed->{
+                if(active())web.evaluateJavascript("window.__acoDischargeNotificationPermission?.("+allowed+")",null);
+            }));
+        }
         @JavascriptInterface public String beginChartExport(String name){return active()?app.chartExport.begin(name):"";}
         @JavascriptInterface public boolean appendChartExport(String token,String text){return active()&&app.chartExport.append(token,text);}
         @JavascriptInterface public boolean finishChartExport(String token){return active()&&app.chartExport.finish(token);}

@@ -68,7 +68,10 @@ export class PerformancePanel{
         const first=this.cursor===0;
         data=await this.api('performance',this.id,this.cursor,first?600:2000);
         if(token!==this.token)return;
-        this.active=!!data.active;this.end=Math.max(this.end,data.end??1);if(data.intervalMs>0)this.interval=Math.max(500,data.intervalMs);
+        const active=!!data.active,end=Math.max(this.end,data.end??1);
+        if(active!==this.active||!active&&end!==this.end)changed=true;
+        this.active=active;this.end=end;
+        if(data.intervalMs>0)this.interval=Math.max(500,data.intervalMs);
         for(const[x,wall]of data.wallTimes??[])if(valid(x)&&valid(wall))this.chart.wallByX.set(x,wall);
         if(data.meta&&JSON.stringify(data.meta)!==this.metaText){this.configure(data.meta);changed=true;}
         const fresh=(data.points??[]).filter(p=>!this.points.length||p[0]>this.points.at(-1)[0]);

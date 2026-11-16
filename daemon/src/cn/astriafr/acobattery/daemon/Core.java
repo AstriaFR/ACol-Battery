@@ -285,6 +285,7 @@ public final class Core {
         String activityKey() { return pkg+"\u0000"+(instance!=0?"#"+instance:Objects.toString(activity,"")); }
     }
     public static final String OTHER = "__other__", OFF = "__screenoff__";
+    static final String UNATTRIBUTED = "__unattributed__";
     public interface ScreenSpan {
         void accept(long start,long end,boolean on);
         default void accept(long start,long end,boolean on,String pkg){accept(start,end,on);}

@@ -254,7 +254,9 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     const layout=el('div',undefined,'drain-layout'),chart=el('div',undefined,'drain-chart');
     const ns='http://www.w3.org/2000/svg',ring=document.createElementNS(ns,'svg');
     ring.setAttribute('viewBox','0 0 100 100');ring.setAttribute('class','drain-ring');ring.setAttribute('aria-hidden','true');
-    const circumference=2*Math.PI*40,onLength=total?Math.min(circumference,energy(stats[0])/total*circumference):0,offLength=total?Math.max(0,circumference-onLength):0;
+    const circumference=2*Math.PI*40;
+    const onLength=total?energy(stats[0])/total*circumference:0;
+    const offLength=total?energy(stats[1])/total*circumference:0;
     const segment=(cls,dash,offset)=>{
       const circle=document.createElementNS(ns,'circle');
       circle.setAttribute('cx','50');circle.setAttribute('cy','50');circle.setAttribute('r','40');

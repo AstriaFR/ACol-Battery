@@ -26,7 +26,12 @@
   <section id="settingsPanel" class="app-page settings-page settings-panel" aria-label="设置" hidden>
     <header class="page-head settings-head"><div><h1>设置</h1></div><div class="settings-header-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="主题：跟随系统"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z"/></svg><span class="theme-auto-badge" aria-hidden="true">A</span></button><button id="openAdvanced" class="advanced-button" type="button">进阶设置</button></div></header>
     <div class="page-scroll">
-    <section class="card setting-card recording-control"><label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label><p id="recordingHint">正在连接后台…</p><div class="setting-group power-display-control"><div class="setting-heading setting-switch monitor-control"><label for="powerDisplayEnabled">性能监视器</label><button id="openMonitorAppearance" class="settings-button" type="button">自定义</button><input id="powerDisplayEnabled" type="checkbox" role="switch" disabled></div></div></section>
+    <section class="card setting-card recording-control">
+      <label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label>
+      <p id="recordingHint">正在连接后台…</p>
+      <div class="setting-group"><label class="setting-heading setting-switch" for="dischargeNotificationEnabled"><span>通知栏显示</span><input id="dischargeNotificationEnabled" type="checkbox" role="switch" disabled></label></div>
+      <div class="setting-group power-display-control"><div class="setting-heading setting-switch monitor-control"><label for="powerDisplayEnabled">性能监视器</label><button id="openMonitorAppearance" class="settings-button" type="button">自定义</button><input id="powerDisplayEnabled" type="checkbox" role="switch" disabled></div></div>
+    </section>
     <form id="settingsForm" novalidate>
       <section class="card setting-card fast-control">
         <div class="setting-heading"><div class="setting-title"><span>游戏性能统计</span><button id="gameModeInfo" class="setting-info" type="button" aria-label="游戏性能统计介绍" aria-haspopup="dialog">i</button></div><button id="toggleFast" type="button" disabled>开启</button></div>
@@ -89,10 +94,12 @@
       </section>
       <section class="card setting-card" aria-labelledby="monitorStyleTitle">
         <h2 id="monitorStyleTitle">外观</h2>
+        <div class="setting-heading"><label for="monitorSize">悬浮窗大小</label><output for="monitorSize">—</output></div>
+        <input id="monitorSize" class="monitor-slider" type="range" min="75" max="125" step="5" data-monitor-slider="15">
         <div class="setting-heading"><label for="monitorWhiteOpacity">白字背景不透明度</label><output for="monitorWhiteOpacity">—</output></div>
-        <input id="monitorWhiteOpacity" class="monitor-opacity" type="range" min="0" max="100" step="1" data-monitor-opacity="4">
+        <input id="monitorWhiteOpacity" class="monitor-slider" type="range" min="0" max="100" step="1" data-monitor-slider="4">
         <div class="setting-heading"><label for="monitorBlackOpacity">黑字背景不透明度</label><output for="monitorBlackOpacity">—</output></div>
-        <input id="monitorBlackOpacity" class="monitor-opacity" type="range" min="0" max="100" step="1" data-monitor-opacity="14">
+        <input id="monitorBlackOpacity" class="monitor-slider" type="range" min="0" max="100" step="1" data-monitor-slider="14">
         <label class="setting-heading setting-switch" for="monitorFollowSystem"><span>跟随系统主题</span><input id="monitorFollowSystem" type="checkbox" role="switch"></label>
         <div class="setting-heading"><span id="monitorTextColorLabel">文字颜色</span><div class="monitor-options" role="group" aria-labelledby="monitorTextColorLabel"><button type="button" data-monitor-option="5" value="1" aria-pressed="false">黑色</button><button type="button" data-monitor-option="5" value="0" aria-pressed="false">白色</button></div></div>
         <div class="setting-heading"><span id="monitorLandscapeLabel">横屏位置</span><div class="monitor-options" role="group" aria-labelledby="monitorLandscapeLabel"><button type="button" data-monitor-option="6" value="0" aria-pressed="false">顶部</button><button type="button" data-monitor-option="6" value="1" aria-pressed="false">底部</button></div></div>
@@ -116,7 +123,7 @@
       <div id="advancedDischargeVoltageFields"></div>
       <p class="advanced-setting-note">两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。</p>
       <div id="advancedFloatCorrection"></div>
-      <p class="advanced-setting-note">设为FV_DEC的正数值，可以抵消系统判断的浮充电压下降(FV_DEC)，不能实际增高浮充电压。</p>
+      <p class="advanced-setting-note">设为FV_DEC的正数值，可以抵消系统判断的浮充电压下降(FV_DEC)。无法实际让电压超出厂商限制。</p>
       <div id="advancedFloatFields"></div>
       <p class="advanced-setting-note">一般无需修改，仅能降低浮充电压。</p>
     </section>

@@ -94,10 +94,8 @@ compiled=build/'res/compiled'
 compiled.mkdir(exist_ok=True)
 resource_inputs=[build/'res/drawable/acol_icon.png',*sorted((app/'src/main/res').rglob('*.xml'))]
 for resource in resource_inputs:run(tools/('aapt2'+exe),'compile','--no-crunch',resource,'-o',compiled)
-resource_args=[]
-for resource in sorted(compiled.glob('*.flat')):resource_args.extend(['-R',resource])
-run(tools/('aapt2'+exe),'link','--manifest',app/'src/main/AndroidManifest.xml','-I',android,*resource_args,'--java',build/'generated','-o',build/'resources.apk')
-run(jdk/('javac'+exe),'--release','8','-encoding','UTF-8','-cp',android,'-d',build/'classes',*sorted((app/'src/main/java').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')))
+run(tools/('aapt2'+exe),'link','--manifest',app/'src/main/AndroidManifest.xml','-I',android,'--java',build/'generated','-o',build/'resources.apk',*sorted(compiled.glob('*.flat')))
+run(jdk/('javac'+exe),'--release','8','-encoding','UTF-8','-cp',android,'-d',build/'classes',*sorted((app/'src/main/java').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')),*sorted((build/'generated').rglob('*.java')))
 jar_classes(build/'classes',build/'app.jar')
 run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api',min_api,'--lib',android,'--output',build/'dex',build/'app.jar')
 shutil.copyfile(build/'resources.apk',build/'unsigned.apk')

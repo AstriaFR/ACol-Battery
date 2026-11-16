@@ -21,6 +21,7 @@ import static cn.astriafr.acobattery.daemon.MonitorAppearance.*;
 /** One bounded, asynchronous snapshot per fast sample. No polling loop or child processes. */
 final class PerformanceCollector implements AutoCloseable {
     private static final int MAX_FPS_FRAMES=60;
+    private static final long FPS_WAIT_MS=300;
     private static final long LAYER_ACTIVE_REFRESH_MS=10000,LAYER_IDLE_REFRESH_MS=5000;
     private static final long[] NO_FRAMES=new long[0];
     interface Sink { void accept(long session,long start,long wall,JSONArray row,JSONObject meta) throws Exception; }
@@ -29,8 +30,11 @@ final class PerformanceCollector implements AutoCloseable {
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{
         Thread t=new Thread(r,"curve-performance");t.setDaemon(true);t.setPriority(Thread.MIN_PRIORITY);return t;
     });
+    private final ExecutorService fpsWorker=Executors.newSingleThreadExecutor(r->{
+        Thread t=new Thread(r,"curve-fps");t.setDaemon(true);t.setPriority(Thread.MIN_PRIORITY);return t;
+    });
     private final AtomicBoolean recordingPending=new AtomicBoolean();
-    private final AtomicBoolean monitorPending=new AtomicBoolean();
+    private final AtomicBoolean fpsPending=new AtomicBoolean();
     private volatile boolean closed;
     private List<Cluster> clusters;
     private Gpu gpu;
@@ -59,9 +63,8 @@ final class PerformanceCollector implements AutoCloseable {
         final double[] policyMHz;
         final double gpuMHz, gpuUsage;
         final int metrics;
-        // Accessed only by the worker, including when both consumers share this snapshot.
-        boolean fpsSampled;
-        double fps;
+        // Guarded by this snapshot so both consumers can share the same request.
+        CompletableFuture<Double> fps;
 
         HardwareSnapshot(long elapsed,long wall,Set<Integer> online,Map<Integer,long[]> cpu,double[] policyMHz,double gpuMHz,double gpuUsage,int metrics){
             this.elapsed=elapsed;this.wall=wall;this.online=online;this.cpu=cpu;this.policyMHz=policyMHz;
@@ -89,19 +92,26 @@ final class PerformanceCollector implements AutoCloseable {
     void sample(long session,long start,boolean screen){sample(session,start,screen,60000);}
     void sample(long session,long start,boolean screen,long interval){sample(session,start,screen,interval,null);}
     void sample(long session,long start,boolean screen,long interval,MonitorSample shared){
-        boolean scheduled=submit(recordingPending,()->{
+        boolean scheduled=submit(worker,recordingPending,()->{
             try{
                 HardwareSnapshot hardware=shared==null?hardware(PERFORMANCE):shared.hardware;
                 long elapsed=hardware.elapsed,wall=hardware.wall;
                 boolean same=previousSession==session;
                 if(same&&elapsed<=previousAt)return;
+                long fpsDeadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(FPS_WAIT_MS);
+                CompletableFuture<Double> frames=screen?sampleFps(hardware,interval):null;
                 double maxTemperature=maximumCpuGpuTemperature();
                 MemoryStats memory=MemoryStats.parse(read("/proc/meminfo"));
                 if(memory!=null&&memory.totalBytes!=memoryTotalBytes){memoryTotalBytes=memory.totalBytes;meta=null;}
-                // CPU/GPU are captured before Binder calls, so slow rendering services cannot delay them.
-                double fps=screen?sampleFps(hardware,interval):Double.NaN;
-                if(screen&&same&&!previousScreen)fps=Double.NaN; // Discard a stale surface immediately after wake.
-                if(shared!=null&&shared.showFps&&!closed)monitorFps.accept(shared,fps);
+                // A stalled Binder query must neither hold the recording worker nor queue more FPS work.
+                boolean useFrames=screen&&(!same||previousScreen);
+                double fps=useFrames?awaitFps(frames,fpsDeadline):Double.NaN;
+                if(shared!=null&&shared.showFps&&!closed){
+                    monitorFps.accept(shared,fps);
+                    if(useFrames&&!Double.isFinite(fps))frames.thenAccept(value->{
+                        if(!closed&&Double.isFinite(value))monitorFps.accept(shared,value);
+                    });
+                }
                 JSONArray row=new JSONArray().put(Math.max(0,elapsed-start)).put(number(fps))
                     .put(number(hardware.gpuMHz)).put(number(hardware.gpuUsage)).put(JSONObject.NULL).put(JSONObject.NULL)
                     .put(!same||elapsed-previousAt>Math.max(5000,interval*3)?1:0).put(same?elapsed-previousAt:0);
@@ -119,26 +129,41 @@ final class PerformanceCollector implements AutoCloseable {
         if(!scheduled)sampleMonitorFps(shared,interval);
     }
     void sampleMonitorFps(MonitorSample sample,long interval){
-        if(sample!=null&&sample.showFps)submit(monitorPending,()->{
-            double fps=sampleFps(sample.hardware,interval);
+        if(sample!=null&&sample.showFps)sampleFps(sample.hardware,interval).thenAccept(fps->{
             if(!closed)monitorFps.accept(sample,fps);
         });
     }
-    private boolean submit(AtomicBoolean pending,Runnable work){
+    private boolean submit(ExecutorService executor,AtomicBoolean pending,Runnable work){
         if(closed||!pending.compareAndSet(false,true))return false;
         try{
-            worker.execute(()->{
+            executor.execute(()->{
                 try{if(!closed)work.run();}
                 finally{pending.set(false);}
             });
             return true;
         }catch(RejectedExecutionException e){pending.set(false);return false;}
     }
-    private double sampleFps(HardwareSnapshot hardware,long interval){
-        if(!hardware.fpsSampled){hardware.fps=fps(TimeUnit.MILLISECONDS.toNanos(interval));hardware.fpsSampled=true;}
-        return hardware.fps;
+    private CompletableFuture<Double> sampleFps(HardwareSnapshot hardware,long interval){
+        synchronized(hardware){
+            if(hardware.fps!=null)return hardware.fps;
+            CompletableFuture<Double> result=new CompletableFuture<>();
+            hardware.fps=result;
+            if(!submit(fpsWorker,fpsPending,()->{
+                try{result.complete(fps(TimeUnit.MILLISECONDS.toNanos(interval)));}
+                catch(Throwable unavailable){result.complete(Double.NaN);}
+            }))result.complete(Double.NaN);
+            return result;
+        }
     }
-    @Override public void close(){closed=true;worker.shutdownNow();}
+    private static double awaitFps(CompletableFuture<Double> frames,long deadline){
+        try{return frames.get(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);}
+        catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+        catch(ExecutionException|TimeoutException unavailable){}
+        return Double.NaN;
+    }
+    @Override public void close(){
+        closed=true;worker.shutdownNow();fpsWorker.shutdownNow();
+    }
     private HardwareSnapshot hardware(int metrics){
         synchronized(hardwareLock){
             long now=SystemClock.elapsedRealtime();
@@ -246,16 +271,23 @@ final class PerformanceCollector implements AutoCloseable {
     }
     private static final class ThermalSensor {
         final String label,path;
-        ThermalSensor(String label,String path){this.label=label;this.path=path;}
+        final boolean millidegrees;
+        ThermalSensor(String label,String path,boolean millidegrees){this.label=label;this.path=path;this.millidegrees=millidegrees;}
+    }
+    static double temperatureCelsius(String text,boolean millidegrees){
+        try{
+            double value=Double.parseDouble(text.trim());
+            if(millidegrees||Math.abs(value)>=1000)value/=1000;
+            if(value>=-50&&value<=200)return value;
+        }catch(NumberFormatException ignored){}
+        return Double.NaN;
     }
     private double maximumCpuGpuTemperature(){
         if(thermalSensors==null)thermalSensors=discoverThermalSensors();
         double maximum=Double.NaN;
         for(ThermalSensor sensor:thermalSensors){
-            double value=first(read(sensor.path));
+            double value=temperatureCelsius(read(sensor.path),sensor.millidegrees);
             if(!Double.isFinite(value))continue;
-            if(Math.abs(value)>=1000)value/=1000.0;
-            if(value< -50||value>200)continue;
             if(!Double.isFinite(maximum)||value>maximum)maximum=value;
         }
         return maximum;
@@ -270,7 +302,7 @@ final class PerformanceCollector implements AutoCloseable {
         if(zones!=null)for(File zone:zones){
             if(!zone.getName().matches("thermal_zone[0-9]+"))continue;
             String type=read(zone+"/type");if(!cpuOrGpu(type))continue;
-            String path=existing(zone+"/temp");if(!path.isEmpty())found.put(path,new ThermalSensor(type,path));
+            String path=existing(zone+"/temp");if(!path.isEmpty())found.put(path,new ThermalSensor(type,path,true));
         }
         File[] hwmons=new File("/sys/class/hwmon").listFiles();
         if(hwmons!=null)for(File hwmon:hwmons){
@@ -279,11 +311,11 @@ final class PerformanceCollector implements AutoCloseable {
                 String name=input.getName();if(!name.matches("temp[0-9]+_input"))continue;
                 String stem=name.substring(0,name.length()-6),label=read(hwmon+"/"+stem+"_label");
                 if(!cpuOrGpu(label)&&!cpuOrGpu(device))continue;
-                String path=existing(input.toString());if(!path.isEmpty())found.putIfAbsent(path,new ThermalSensor(label.isEmpty()?device+" "+stem:label,path));
+                String path=existing(input.toString());if(!path.isEmpty())found.putIfAbsent(path,new ThermalSensor(label.isEmpty()?device+" "+stem:label,path,true));
             }
         }
         String kgsl=existing("/sys/class/kgsl/kgsl-3d0/temp","/sys/class/kgsl/kgsl-3d0/gpu_temp");
-        if(!kgsl.isEmpty())found.putIfAbsent(kgsl,new ThermalSensor("KGSL GPU",kgsl));
+        if(!kgsl.isEmpty())found.putIfAbsent(kgsl,new ThermalSensor("KGSL GPU",kgsl,false));
         return new ArrayList<>(found.values());
     }
     private static final class Cluster {

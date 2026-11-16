@@ -9,8 +9,8 @@ const thresholdGroup=index=>thresholdGroups.find(group=>index>=group.first&&inde
 export function createMonitorAppearancePage(api,keypad){
   const root=$('monitorAppearancePage'),controls=$('monitorAppearanceControls');
   const status=$('monitorAppearanceStatus');
-  const opacityInputs=[...root.querySelectorAll('[data-monitor-opacity]')].map(input=>({
-    input,output:root.querySelector(`output[for="${input.id}"]`),index:Number(input.dataset.monitorOpacity)
+  const sliders=[...root.querySelectorAll('[data-monitor-slider]')].map(input=>({
+    input,output:root.querySelector(`output[for="${input.id}"]`),index:Number(input.dataset.monitorSlider)
   }));
   const followSystem=$('monitorFollowSystem');
   const options=[...root.querySelectorAll('[data-monitor-option]')];
@@ -30,7 +30,7 @@ export function createMonitorAppearancePage(api,keypad){
       const index=Number(button.dataset.monitorThreshold);
       button.textContent=`${saved[index]}${thresholdGroup(index).unit}`;
     }
-    for(const {input,output,index} of opacityInputs){
+    for(const {input,output,index} of sliders){
       input.value=saved[index];
       output.textContent=`${saved[index]}%`;
     }
@@ -68,7 +68,7 @@ export function createMonitorAppearancePage(api,keypad){
     const bit=Number(input.dataset.monitorBit);
     change(0,input.checked?values[0]|bit:values[0]&~bit)?.catch(()=>{});
   };
-  for(const {input,output,index} of opacityInputs){
+  for(const {input,output,index} of sliders){
     input.oninput=()=>{output.textContent=`${input.value}%`;};
     input.onchange=()=>change(index,Number(input.value))?.catch(()=>{});
   }

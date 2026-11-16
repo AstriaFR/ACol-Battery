@@ -58,6 +58,13 @@ export function validateApiArgs(action,args){
 }
 export function spawn(command,args=[]){return send([command,...args].join(' '),true);}
 export function fullScreen(enabled){AcoNative.fullScreen(!!enabled);}
+export function requestDischargeNotificationPermission(){
+  return new Promise(resolve=>{
+    const finish=allowed=>{delete window.__acoDischargeNotificationPermission;resolve(allowed);};
+    window.__acoDischargeNotificationPermission=finish;
+    try{AcoNative.requestDischargeNotificationPermission();}catch{finish(false);}
+  });
+}
 export function readAppIcons(packages){
   try{return JSON.parse(AcoNative.appIcons(JSON.stringify(packages)))||{};}catch{return{};}
 }

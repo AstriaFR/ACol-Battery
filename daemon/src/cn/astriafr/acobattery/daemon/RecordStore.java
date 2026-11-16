@@ -8,6 +8,7 @@ import cn.astriafr.acobattery.common.*;
 import static cn.astriafr.acobattery.daemon.BatteryService.*;
 /** One shared connection: lifecycle transactions remain owned by the recorder. */
 final class RecordStore {
+    static final int SCHEMA_VERSION=16;
     static final String SAMPLING_DEFAULTS_MIGRATION="sampling_defaults_14184";
     final SQLiteDatabase db;
     long rangeId=-1,rangeEnd=-1,rangeCount;
@@ -74,7 +75,7 @@ final class RecordStore {
                 db.execSQL("ALTER TABLE apps ADD COLUMN mah_ms INTEGER NOT NULL DEFAULT 0");
                 db.execSQL("UPDATE apps SET mah_ms=ms");
             }
-            db.setVersion(16);db.setTransactionSuccessful();
+            db.setVersion(SCHEMA_VERSION);db.setTransactionSuccessful();
         } finally {db.endTransaction();}
     }
     void backfillHistory(){

@@ -20,7 +20,8 @@ public final class BatteryHistorySnapshot {
         out.put("lockedCapacity",Double.isFinite(qmax)&&Double.isFinite(reference)?qmax-reference:JSONObject.NULL);
         JSONArray green=new JSONArray();
         if(positive(info,"qmax"))green.put("qmax");
-        if(known)for(String key:noCompensation?new String[]{"fcc"}:new String[]{"rawFcc","rawSoh"})if(positive(info,key))green.put(key);
+        String capacityKey=noCompensation?"fcc":"rawFcc";
+        if(known&&positive(info,capacityKey))green.put(capacityKey);
         return out.put("nearActual",green).put("noCompensation",noCompensation).put("snapshotVersion",1);
     }
 }

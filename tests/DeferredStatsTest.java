@@ -143,10 +143,40 @@ public final class DeferredStatsTest {
         m.store.deleteSession(id);m.deferred.capture(true,id);
         check(m.deferred.eventRead==null&&m.usageError.isEmpty(),"completed queries for deleted records cannot violate foreign keys");close(m);
     }
+    static void clockAdjustments(Context ctx,File dir)throws Exception{
+        Main m=open(ctx,dir);
+        try{
+            m.state=0;m.begin(reading(0,5000,false));long id=m.session;
+            m.append(reading(120000,4990,false));
+            m.sampling.interactive=false;
+            Core.Reading forward=reading(240000,4990,false);forward.wall+=600000;m.append(forward);
+            Core.Reading stable=reading(360000,4980,false);stable.wall+=600000;m.append(stable);
+            m.db.execSQL("UPDATE usage_deferred SET event_wall=? WHERE session=?",new Object[]{stable.wall,id});
+            m.deferred.calculate(id);
+            JSONArray drain=m.deferred.drainSummary(id);
+            near(drain.getJSONObject(0).getDouble("mah"),10,"clock jump preserves earlier screen-on drain");
+            near(drain.getJSONObject(1).getDouble("mah"),10,"stable screen-off interval after a clock jump");
+
+            Core.Reading backward=reading(480000,4980,false);backward.wall=wall+180000;m.append(backward);
+            m.deferred.calculate(id); // Settle the jump separately to check the saved cursor.
+            Core.Reading overlap=reading(600000,4970,false);overlap.wall=wall+300000;m.append(overlap);
+            m.deferred.saveEvents(Collections.singletonList(new DeferredStats.Pending(id,wall,stable.wall)),
+                Collections.singletonList(new Core.Event(wall+210000,15,null)));
+            m.deferred.calculate(id);
+            drain=m.deferred.drainSummary(id);
+            near(drain.getJSONObject(0).getDouble("mah"),10,"overlapping timestamps must not become screen-on drain");
+            near(drain.getJSONObject(1).getDouble("mah"),10,"a repeated timestamp cannot confirm screen-off drain either");
+            near(amount(m,id,"mah"),30,"ambiguous intervals retain measured drain in app totals");
+            near(drain.getJSONObject(2).getDouble("mah"),10,"unclassified drain remains separate in the summary");
+            double summaryEnergy=0;
+            for(int i=0;i<drain.length();i++)summaryEnergy+=drain.getJSONObject(i).getDouble("energyMwh");
+            near(summaryEnergy,amount(m,id,"energy_mwh"),"summary and app energy totals match");
+        }finally{close(m);}
+    }
     public static void main(String[] args)throws Exception{
         File root=new File(args[0]);check(root.getPath().startsWith("/data/local/tmp/acol-deferred-test-")&&!root.exists(),"new isolated directory required");
         Looper.prepareMainLooper();Class<?> at=Class.forName("android.app.ActivityThread");Object thread=at.getMethod("systemMain").invoke(null);Context ctx=(Context)at.getMethod("getSystemContext").invoke(thread);
-        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));wall=System.currentTimeMillis();baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));
+        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));wall=System.currentTimeMillis();baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));clockAdjustments(ctx,new File(root,"clock-adjustments"));
         System.out.println("PASS: raw-only background, screen-aware event cadence, foreground incremental/idempotent/persistent accounting, late-event repair, game charge boundaries, active legacy baseline");System.exit(0);
     }
 }

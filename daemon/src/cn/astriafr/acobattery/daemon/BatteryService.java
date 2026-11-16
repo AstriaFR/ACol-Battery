@@ -283,10 +283,11 @@ final class BatteryService {
         for(int[] row:table)relationships.put(new JSONObject().put("cutoffMv",row[0]).put("fccOffset",row[1]).put("sohOffset",row[2]));
         Double rawSoh=BatteryDetails.rawSoh(soh,cutoff,table);
         Integer rawFcc=BatteryDetails.rawFcc(fcc,rawSoh,cutoff,table,design);
+        Integer rawFccAbove=BatteryDetails.rawFccAbove(fcc,soh,cutoff,table,design);
         String[] keys=read(BAT+"battery_log_head").split(",",-1),values=read(BAT+"battery_log_content").split(",",-1);
         Integer qmax=null;if(keys.length==values.length)for(int i=1;i<keys.length;i++)if("batt_qmax".equals(keys[i].trim()))qmax=integer(values[i]);
         Integer cycles=readCycleCount();
-        return new JSONObject().put("cycles",jsonValue(cycles)).put("fcc",jsonValue(fcc)).put("rawFcc",jsonValue(rawFcc))
+        return new JSONObject().put("cycles",jsonValue(cycles)).put("fcc",jsonValue(fcc)).put("rawFcc",jsonValue(rawFcc)).put("rawFccAbove",jsonValue(rawFccAbove))
             .put("soh",jsonValue(soh)).put("rawSoh",jsonValue(rawSoh)).put("qmax",jsonValue(BatteryDetails.normalizeQmax(qmax,fcc,design)))
             .put("cutoffMv",jsonValue(cutoff)).put("designCapacity",jsonValue(design))
             .put("serial",jsonValue(optionalText(read(BAT+"battery_sn"))))
@@ -309,6 +310,5 @@ final class BatteryService {
         return designCapacityMah!=null&&designCapacityMah>=7400;
     }
 
-    int dischargeVoltageMin(){return highDesignCapacity(designCapacityMah)?2500:2600;}
 
 }

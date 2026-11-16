@@ -374,4 +374,41 @@ async function deletedDailyUsage(){
  assert.equal(nodes.screenTimeTotal.textContent,'—');assert.equal(chart.data,null);assert.equal(chart.selected,null);assert.ok(cleared&&tipHidden);
 }
 
-runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications,deletedDailyUsage]).then(()=>console.log('Charts: scales, time axes, hit geometry, temperature, RAM, interval apps, day navigation and deleted usage passed')).catch(error=>{console.error(error);process.exitCode=1;});
+async function incompleteUsageAverage(){
+ const root=path.join(__dirname,'../src/main/assets/webroot');
+ const {UsageWeekPanel}=await import(pathToFileURL(path.join(root,'usage-week.js')).href);
+ const {calendarMonth,firstUsageMonth,isoWeek,firstUsageWeek}=await import(pathToFileURL(path.join(root,'usage-calendar.js')).href);
+ const day=new Date(2026,0,5).getTime(),next=new Date(2026,0,6).getTime(),after=new Date(2026,0,7).getTime();
+ const summaries=[{dayStart:day,through:next,onMs:7200000,coveredMs:next-day},{dayStart:next,through:after,onMs:600000,coveredMs:600000}];
+ const result={summaries,appTotals:[{dayStart:day,ms:3600000},{dayStart:next,ms:600000}]};
+ for(const [monthMode,appMode] of [[false,false],[true,false],[false,true]]){
+   const nodes=new Map(),panel=Object.assign(Object.create(UsageWeekPanel.prototype),{
+     monthMode,appMode,token:0,period:monthMode?calendarMonth:isoWeek,firstPeriod:monthMode?firstUsageMonth:firstUsageWeek,
+     node:id=>{if(!nodes.has(id))nodes.set(id,{setAttribute(){}});return nodes.get(id);},draw(){},select(){},
+     getCache:()=>({summaries:async()=>summaries,weeklyOverview:async()=>result,weeklyApp:async()=>result})
+   });
+   await panel.display(day,'example.app');
+   assert.equal(panel.rows.find(row=>row.day===next).known,true,'partial data remains visible');
+   assert.equal(panel.rows.find(row=>row.day===next).complete,false,'a past day is incomplete until its whole span is covered');
+   assert.equal(nodes.get('usageWeekAverage').textContent,appMode?'1时':'2时');
+   assert.equal(nodes.get('usageWeekTotal').textContent,appMode?'总计 1时10分':'总计 2时10分');
+ }
+}
+
+async function performanceEndWithoutSample(){
+ const {PerformancePanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/performance-panel.js')).href);
+ const nodes={performanceFollow:{hidden:false,classList:{toggle(){}}},performanceHint:{},performanceLegend:{}};
+ globalThis.document={hidden:false,getElementById:id=>nodes[id]};
+ let renderEnd;
+ const panel=Object.assign(Object.create(PerformancePanel.prototype),{
+   id:3,token:1,active:true,follow:true,end:5000,cursor:2,interval:1500,points:[[0],[1500]],
+   chart:{window:[0,5000],total:5000,metrics:[],set(_points,total){renderEnd=total;}},
+   api:async()=>({points:[],active:false,end:5800,cursor:2})
+ });
+ await panel.poll(1);
+ assert.equal(renderEnd,5800,'final render includes the end after the last sample');
+ assert.equal(nodes.performanceFollow.hidden,true,'real-time controls close with the record');
+ assert.equal(panel.timer,undefined,'polling does not continue after the end');
+}
+
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications,deletedDailyUsage,incompleteUsageAverage,performanceEndWithoutSample]).then(()=>console.log('Charts: scales, sampling details, active and ended charts, and daily/period usage passed')).catch(error=>{console.error(error);process.exitCode=1;});

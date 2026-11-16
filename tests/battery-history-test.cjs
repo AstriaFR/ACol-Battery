@@ -2,7 +2,7 @@ const path=require('node:path'),assert=require('node:assert/strict');const{pathT
 (async()=>{
  const{batteryHistoryFields,batteryHistoryDate,BatteryHistoryPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/battery-history.js')).href);
  const saved={qmax:6200,designCapacity:6500,fcc:6100,rawFcc:5800,lockedCapacity:400,soh:99,rawSoh:94.5,cutoffMv:3150,nearActual:['qmax','rawFcc','rawSoh'],noCompensation:false};
- const a=batteryHistoryFields(saved);assert.equal(a.values.qmax,'6,200 mAh (95.4%)');assert.equal(a.values.lockedCapacity,'400 mAh (-6.5%)');assert.ok(a.green.has('rawFcc')&&!a.green.has('fcc'));assert.equal(a.values.cutoffMv,'3,150 mV');
+ const a=batteryHistoryFields(saved);assert.equal(a.values.qmax,'6,200 mAh (95.4%)');assert.equal(a.values.lockedCapacity,'400 mAh (-6.5%)');assert.ok(a.green.has('rawFcc')&&!a.green.has('fcc')&&!a.green.has('rawSoh'));assert.equal(a.values.cutoffMv,'3,150 mV');
  const b=batteryHistoryFields({...saved,noCompensation:true,nearActual:['fcc','qmax']});assert.equal(b.values.rawFcc,'——');assert.equal(b.values.rawSoh,'——');assert.ok(b.green.has('fcc')&&!b.green.has('rawFcc'));
  assert.doesNotMatch(a.values.fcc,/%/);assert.match(a.values.rawFcc,/ \(.+%\)$/);assert.match(b.values.fcc,/ \(.+%\)$/);
  assert.equal(batteryHistoryFields(null).values.fcc,'—');assert.equal(batteryHistoryFields(null).green.size,0);

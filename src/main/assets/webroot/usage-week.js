@@ -45,8 +45,14 @@ export class UsageWeekPanel{
       const result=this.monthMode?{summaries:await this.getCache().summaries(week.start,week.end,31)}:this.appMode?await this.getCache().weeklyApp(week.start,week.end,this.pkg):await this.getCache().weeklyOverview(week.start,week.end);if(token!==this.token)return;
       this.data=result;const byDay=new Map(result.summaries.map(row=>[row.dayStart,row])),byApp=new Map((result.appTotals??[]).map(row=>[row.dayStart,row])),today=midnight(Date.now());
       if(this.deleteButton)this.deleteButton.hidden=!canDeleteUsageWeek(week)||!result.summaries.some(row=>!row.deleted&&row.through>row.dayStart);
-      this.rows=week.days.map(date=>{const data=byDay.get(date),known=date<=today&&Number.isFinite(data?.onMs)&&data.onMs>=0&&data.coveredMs>0,ms=this.appMode?(byApp.get(date)?.ms??0):(data?.onMs??0);return{day:date,known,ms:known?ms:0,future:date>today}});
-      const known=this.rows.filter(row=>row.known),total=known.reduce((n,row)=>n+row.ms,0),completed=known.filter(row=>row.day<today);
+      this.rows=week.days.map((date,index)=>{
+        const data=byDay.get(date),end=week.days[index+1]??week.end;
+        const known=date<=today&&Number.isFinite(data?.onMs)&&data.onMs>=0&&data.coveredMs>0;
+        const complete=known&&end<=today&&data.through>=end&&data.coveredMs>=end-date;
+        const ms=this.appMode?(byApp.get(date)?.ms??0):(data?.onMs??0);
+        return{day:date,known,complete,ms:known?ms:0,future:date>today};
+      });
+      const known=this.rows.filter(row=>row.known),total=known.reduce((n,row)=>n+row.ms,0),completed=known.filter(row=>row.complete);
       this.node('usageWeekAverageLabel').textContent=completed.length?`${completed.length}日均`:'日均';
       this.node('usageWeekAverage').textContent=completed.length?roundedDuration(completed.reduce((n,row)=>n+row.ms,0)/completed.length):'—';
       this.node('usageWeekTotal').textContent=known.length?`总计 ${roundedDuration(total)}`:'总计 —';

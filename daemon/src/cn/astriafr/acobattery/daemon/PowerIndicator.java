@@ -55,6 +55,7 @@ final class PowerIndicator implements AutoCloseable {
     private volatile BatteryValues battery;
     private volatile String error="";
     private boolean interactive,queued,legacyCleared;
+    private int displayState=Display.STATE_UNKNOWN;
     private long generation;
     private SurfaceControl layer;
     private Surface surface;
@@ -164,10 +165,12 @@ final class PowerIndicator implements AutoCloseable {
         if(power&&temperature)contentWidth+=FIELD_GAP;
         float fullWidth=2*PADDING+3*ICON_ADVANCE+CPU_CHART_WIDTH+GPU_BAR_WIDTH+3*FIELD_GAP+3*GROUP_GAP+(18+FPS_CELLS)*cell
             +MonitorGlyphs.width("W")+MonitorGlyphs.width("°C");
-        float scaleX=Math.min(metrics.density,metrics.widthPixels/fullWidth);
-        if(!(scaleX>0)){removeLayer();return;}
+        float baseScaleX=Math.min(metrics.density,metrics.widthPixels/fullWidth);
+        if(!(baseScaleX>0)){removeLayer();return;}
+        float size=Math.min(appearance.sizePercent/100f,metrics.widthPixels/(contentWidth*baseScaleX));
+        float scaleX=baseScaleX*size,scaleY=metrics.density*size;
         int width=Math.max(1,Math.round(contentWidth*scaleX));
-        int height=Math.max(1,Math.round(HEIGHT*metrics.density));
+        int height=Math.max(1,Math.round(HEIGHT*scaleY));
         boolean atBottom=appearance.landscapeBottom&&metrics.widthPixels>metrics.heightPixels;
         boolean newLayer=layer==null||width!=surfaceWidth||height!=surfaceHeight;
         if(newLayer){
@@ -178,7 +181,7 @@ final class PowerIndicator implements AutoCloseable {
         Canvas canvas=surface.lockCanvas(null);
         try{
             canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
-            canvas.save();canvas.scale(scaleX,metrics.density);
+            canvas.save();canvas.scale(scaleX,scaleY);
             drawMonitor(canvas,contentWidth,cell,performance,battery,appearance,atBottom);
             canvas.restore();
         }finally{surface.unlockCanvasAndPost(canvas);}
@@ -403,10 +406,30 @@ final class PowerIndicator implements AutoCloseable {
         if(enabled)themeChanged=true;
         state.enabled=enabled;resetSamples();queue();
     }
-    synchronized void screen(boolean interactive){
-        if(this.interactive==interactive)return;
-        if(interactive)themeChanged=true;
-        this.interactive=interactive;resetSamples();if(state.enabled)queue();
+    synchronized boolean canSample(){
+        return interactive&&(displayState==Display.STATE_ON||displayState==Display.STATE_UNKNOWN);
+    }
+    synchronized boolean screen(boolean interactive){
+        int nextDisplayState=readDisplayState();
+        boolean interactiveChanged=this.interactive!=interactive;
+        if(!interactiveChanged&&displayState==nextDisplayState)return false;
+        boolean wasSampling=canSample();
+        this.interactive=interactive;displayState=nextDisplayState;
+        boolean sampling=canSample();
+        if(interactiveChanged){
+            if(interactive)themeChanged=true;
+            resetSamples();
+        }
+        if(sampling&&!wasSampling)state.refresh();
+        if(state.enabled)queue();
+        return state.enabled&&sampling!=wasSampling;
+    }
+    private int readDisplayState(){
+        try{
+            Display display=displays==null?null:displays.getDisplay(Display.DEFAULT_DISPLAY);
+            if(display!=null)return display.getState();
+        }catch(RuntimeException ignored){}
+        return Display.STATE_UNKNOWN;
     }
     private void resetSamples(){performance=null;battery=null;state.refresh();}
     PerformanceCollector.MonitorSample performance(){return performance;}

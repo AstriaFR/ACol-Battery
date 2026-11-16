@@ -315,13 +315,20 @@ public final class SamplingTest {
         check(PerformanceCollector.frameRate(main,now+window,window)==0);
         check(PerformanceCollector.bestFrameHistory(new long[][]{{},{}},now,window)==-1);
     }
+    static void thermalUnits(){
+        check(PerformanceCollector.temperatureCelsius("-12000\n",true)==-12);
+        check(PerformanceCollector.temperatureCelsius("900",true)==0.9);
+        check(PerformanceCollector.temperatureCelsius("-8",false)==-8);
+        check(PerformanceCollector.temperatureCelsius("48000",false)==48);
+        check(Double.isNaN(PerformanceCollector.temperatureCelsius("unavailable",true)));
+    }
     public static void main(String[] args)throws Exception{
         MemoryStats memory=MemoryStats.parse("MemTotal: 11392228 kB\nMemFree: 824840 kB\nMemAvailable: 4639988 kB\n");
         check(memory!=null&&memory.totalBytes==11665641472L&&memory.usedBytes==6914293760L);
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();
+        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();thermalUnits();
         System.out.println("Sampling: 500 ms charging reuse, tail rules, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

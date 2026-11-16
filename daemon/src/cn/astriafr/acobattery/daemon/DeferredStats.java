@@ -17,10 +17,13 @@ import cn.astriafr.acobattery.common.FallbackDiagnostics;
 /** Captures raw events and settles attribution on detail reads or before backup. */
 final class DeferredStats {
     static final long TAIL_GRACE_MS=60000;
+    private static final int ATTRIBUTION_UNAVAILABLE=16;
+    static final int SCREEN_INTERVAL_UNCERTAIN=256;
+    private static final String CLOCK_ATTRIBUTION_MIGRATION="clock_attribution_v1";
     interface Host {
         boolean activeSession(long id);
         Core.Reading settledReading(long id);
-        long startWall();boolean clockAdjusted();boolean interactive();double credit();
+        boolean interactive();double credit();
         void usageError(Throwable error);void observe(Throwable error);void statsChanged();
         default void eventsReady(){}
     }
@@ -64,6 +67,19 @@ final class DeferredStats {
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_events(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,time INTEGER NOT NULL,type INTEGER NOT NULL,pkg TEXT NOT NULL,activity TEXT NOT NULL,instance INTEGER NOT NULL,UNIQUE(session,time,type,pkg,activity,instance))");
         db.execSQL("CREATE INDEX IF NOT EXISTS usage_events_time ON usage_events(session,time)");
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_baseline(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,pkg TEXT NOT NULL,ms INTEGER NOT NULL,mah REAL NOT NULL,energy_mwh REAL NOT NULL,energy_ms INTEGER NOT NULL,mah_ms INTEGER NOT NULL,PRIMARY KEY(session,pkg)) WITHOUT ROWID");
+        migrateClockAttribution();
+    }
+    private void migrateClockAttribution(){
+        try(Cursor c=db.rawQuery("SELECT 1 FROM runtime WHERE key=?",new String[]{CLOCK_ATTRIBUTION_MIGRATION})){
+            if(c.moveToFirst())return;
+        }
+        db.beginTransaction();
+        try{
+            // Finalized records no longer retain raw samples for reclassification.
+            db.execSQL("UPDATE usage_deferred SET dirty=1,event_revision=event_revision+1 WHERE finalized=0 AND computed_x>=start_x AND session IN (SELECT id FROM sessions WHERE clock_adjusted=1)");
+            db.execSQL("INSERT INTO runtime(key,value) VALUES(?,'1')",new Object[]{CLOCK_ATTRIBUTION_MIGRATION});
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
     boolean owns(long id){
         if(id<1)return false;
@@ -110,10 +126,9 @@ final class DeferredStats {
         raw(id,start,r,quality,maxGap,true);
     }
     void raw(long id,long start,Core.Reading r,int quality,long maxGap,boolean discharge){
-        if(host.clockAdjusted()||Math.abs(r.wall-(host.startWall()+r.elapsed-start))>2000)quality|=16;
         // Preserve the existing main-user attribution boundary without querying usage events.
-        try{if((Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null)!=0)quality|=16;}
-        catch(Throwable unavailable){quality|=16;}
+        try{if((Integer)Class.forName("android.app.ActivityManager").getMethod("getCurrentUser").invoke(null)!=0)quality|=ATTRIBUTION_UNAVAILABLE;}
+        catch(Throwable unavailable){quality|=ATTRIBUTION_UNAVAILABLE;}
         db.execSQL("INSERT OR IGNORE INTO usage_raw(session,x,wall,rm,voltage,online,screen_on,quality,max_gap,discharge_interval) VALUES(?,?,?,?,?,?,?,?,?,?)",
             new Object[]{id,Math.max(0,r.elapsed-start),r.wall,nullable(r.rm),nullable(r.voltage()),r.online?1:0,host.interactive()?1:0,quality,maxGap,discharge?1:0});
     }
@@ -276,42 +291,56 @@ final class DeferredStats {
     }
     /** Prepare a bounded snapshot without holding the sampling mutex or a write transaction. */
     Settlement plan(long id)throws Exception{
-        long startX,cursor,eventWall,revision,wallStart,endX;double credit,baselineCredit;String saved;boolean dirty,game;
-        try(Cursor c=db.rawQuery("SELECT d.start_x,d.computed_x,d.event_wall,d.credit,d.timeline,d.dirty,s.fast_seconds,s.start_wall,d.baseline_credit,d.event_revision,(SELECT MAX(x) FROM usage_raw WHERE session=d.session) FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0",new String[]{""+id})){
+        long startX,cursor,eventWall,revision,wallStart,endX;double credit,baselineCredit;String saved;boolean dirty,game,clockAdjusted;
+        try(Cursor c=db.rawQuery("SELECT d.start_x,d.computed_x,d.event_wall,d.credit,d.timeline,d.dirty,s.fast_seconds,s.start_wall,d.baseline_credit,d.event_revision,(SELECT MAX(x) FROM usage_raw WHERE session=d.session),s.clock_adjusted FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0",new String[]{""+id})){
             if(!c.moveToFirst()||c.isNull(2))return null;
             startX=c.getLong(0);cursor=c.getLong(1);eventWall=c.getLong(2);credit=c.getDouble(3);saved=c.getString(4);dirty=c.getInt(5)!=0;game=c.getDouble(6)>0;wallStart=c.getLong(7);baselineCredit=c.getDouble(8);revision=c.getLong(9);endX=c.isNull(10)?-1:c.getLong(10);
+            clockAdjusted=c.getInt(11)!=0;
         }
         Settlement result=new Settlement(id,revision,cursor,wallStart+startX,dirty);
         if(!dirty&&cursor>=endX)return result;
         List<Core.Event> events=events(id);Core.Timeline timeline=new Core.Timeline();Core.Depletion depletion=new Core.Depletion();
         boolean ready=cursor>=0&&!saved.isEmpty()&&!dirty;
         if(ready){decode(timeline,saved);depletion.restore(credit);}else{cursor=-1;depletion.restore(baselineCredit);}
+        long latestWall=0;
+        if(ready&&clockAdjusted)try(Cursor c=db.rawQuery("SELECT MAX(wall) FROM usage_raw WHERE session=? AND x<?",new String[]{""+id,""+cursor})){
+            if(c.moveToFirst())latestWall=c.getLong(0);
+        }
         int eventIndex=0;Sample previous=null;
         try(Cursor c=db.rawQuery("SELECT x,wall,rm,voltage,online,screen_on,quality,max_gap,discharge_interval FROM usage_raw WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+Math.max(startX,cursor),""+endX})){
                 while(c.moveToNext()){
                     Sample current=sample(c);if(current.wall>eventWall)break;
                     if(previous==null){
                         previous=current;result.processed=current.x;result.wall=current.wall;
+                        latestWall=Math.max(latestWall,current.wall);
                         if(!ready){timeline.seed(current.screen,false);while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)timeline.apply(events.get(eventIndex++));}
                         else while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)eventIndex++;
                         continue;
                     }
                     long dt=current.x-previous.x;if(dt<=0)continue;
-                    boolean gap=(current.quality&9)!=0||Math.abs(current.wall-previous.wall-dt)>2000;
+                    boolean clockJump=current.wall<=previous.wall||Math.abs(current.wall-previous.wall-dt)>2000;
+                    boolean gap=(current.quality&9)!=0||clockJump;
                     boolean rebooted=(current.quality&Core.REBOOT_GAP)!=0;
-                    boolean unknown=((current.quality|previous.quality)&16)!=0;
-                    if(rebooted||current.wall<=previous.wall){
-                        timeline.seed(current.screen,false);eventIndex=0;
-                        while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall){
-                            Core.Event event=events.get(eventIndex++);
-                            if(!rebooted)timeline.apply(event);
-                        }
+                    // Events can reuse earlier timestamps after the clock is set back.
+                    boolean overlapping=previous.wall<latestWall;
+                    latestWall=Math.max(latestWall,current.wall);
+                    boolean unknown=overlapping||((current.quality|previous.quality)&ATTRIBUTION_UNAVAILABLE)!=0;
+                    boolean attributable=!gap&&!unknown&&!rebooted;
+                    boolean resetTimeline=clockJump||rebooted||overlapping
+                        ||(previous.quality&ATTRIBUTION_UNAVAILABLE)!=0&&(current.quality&ATTRIBUTION_UNAVAILABLE)==0;
+                    if(resetTimeline){
+                        timeline.seed(current.screen,false);
+                        if(current.wall<=previous.wall)eventIndex=0;
                     }
                     int first=eventIndex;while(eventIndex<events.size()&&events.get(eventIndex).time<=current.wall)eventIndex++;
                     ScreenUsage.Builder spans=new ScreenUsage.Builder();Map<String,Long> split;
-                    if(gap||unknown){split=Collections.singletonMap(Core.OTHER,dt);for(int i=first;i<eventIndex;i++)timeline.apply(events.get(i));if(gap)depletion.reset();}
+                    if(!attributable){
+                        split=Collections.singletonMap(Core.UNATTRIBUTED,dt);
+                        if(!resetTimeline)for(int i=first;i<eventIndex;i++)timeline.apply(events.get(i));
+                        if(gap)depletion.reset();
+                    }
                     else split=timeline.split(previous.wall,current.wall,events.subList(first,eventIndex),spans);
-                    ScreenUsage.Builder mapped=!gap&&!unknown?spans.onRecordClock(previous.wall,current.wall,wallStart+previous.x,wallStart+current.x):null;
+                    ScreenUsage.Builder mapped=attributable?spans.onRecordClock(previous.wall,current.wall,wallStart+previous.x,wallStart+current.x):null;
                     if(mapped!=null){split=new LinkedHashMap<>();for(ScreenUsage.AppSpan span:mapped.apps)split.put(span.pkg,split.getOrDefault(span.pkg,0L)+span.end-span.start);}
                     boolean discharging=!game||current.discharge;
                     if(discharging&&!rebooted){
@@ -687,7 +716,7 @@ final class DeferredStats {
             while(c.moveToNext()) {
                 String pkg=c.getString(0);long ms=c.getLong(1);double mah=c.getDouble(2);
                 double energy=c.getDouble(3);long energyMs=c.getLong(4),mahMs=c.getLong(5);
-                if(pkg.equals(Core.OTHER)||(!pkg.equals(Core.OFF)&&ms<=60000)){otherMs+=ms;otherMah+=mah;otherEnergy+=energy;otherEnergyMs+=energyMs;otherMahMs+=mahMs;continue;}
+                if(pkg.equals(Core.OTHER)||pkg.equals(Core.UNATTRIBUTED)||(!pkg.equals(Core.OFF)&&ms<=60000)){otherMs+=ms;otherMah+=mah;otherEnergy+=energy;otherEnergyMs+=energyMs;otherMahMs+=mahMs;continue;}
                 String label=pkg.equals(Core.OFF)?"息屏待机":pkg;
                 if(!pkg.equals(Core.OFF))try{label=ctx.getPackageManager().getApplicationLabel(ctx.getPackageManager().getApplicationInfo(pkg,0)).toString();}catch(Exception ignored){}
                 result.put(appJson(pkg,label,ms,mah,energy,energyMs,mahMs));
@@ -697,14 +726,15 @@ final class DeferredStats {
         return result;
     }
     JSONArray drainSummary(long id)throws Exception {
-        double[] mah=new double[2],energy=new double[2];long[] ms=new long[2],energyMs=new long[2],mahMs=new long[2];
+        double[] mah=new double[3],energy=new double[3];long[] ms=new long[3],energyMs=new long[3],mahMs=new long[3];
         // Aggregate the original app rows before short apps are merged into Other.
-        try(Cursor c=db.rawQuery("SELECT CASE WHEN pkg=? THEN 1 ELSE 0 END,SUM(ms),SUM(mah),SUM(energy_mwh),SUM(energy_ms),SUM(mah_ms) FROM apps WHERE session=? GROUP BY 1",
-                new String[]{Core.OFF,""+id})) {
+        try(Cursor c=db.rawQuery("SELECT CASE WHEN pkg=? THEN 1 WHEN pkg=? THEN 2 ELSE 0 END,SUM(ms),SUM(mah),SUM(energy_mwh),SUM(energy_ms),SUM(mah_ms) FROM apps WHERE session=? GROUP BY 1",
+                new String[]{Core.OFF,Core.UNATTRIBUTED,""+id})) {
             while(c.moveToNext()) {int i=c.getInt(0);ms[i]=c.getLong(1);mah[i]=c.getDouble(2);energy[i]=c.getDouble(3);energyMs[i]=c.getLong(4);mahMs[i]=c.getLong(5);}
         }
         return new JSONArray().put(appJson("__screenon__","亮屏耗电",ms[0],mah[0],energy[0],energyMs[0],mahMs[0]))
-            .put(appJson(Core.OFF,"息屏耗电",ms[1],mah[1],energy[1],energyMs[1],mahMs[1]));
+            .put(appJson(Core.OFF,"息屏耗电",ms[1],mah[1],energy[1],energyMs[1],mahMs[1]))
+            .put(appJson(Core.UNATTRIBUTED,"其他",ms[2],mah[2],energy[2],energyMs[2],mahMs[2]));
     }
     static JSONObject appJson(String pkg,String label,long ms,double mah,double energy,long energyMs,long mahMs)throws Exception {
         return new JSONObject().put("pkg",pkg).put("label",label).put("ms",ms).put("mah",mah)

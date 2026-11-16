@@ -42,6 +42,7 @@ export function batteryHistoryDate(wall,dateOnly=false){
 }
 export function batteryHistoryFields(snapshot){
   const info=snapshot??{},green=new Set(Array.isArray(info.nearActual)?info.nearActual:[]),noCompensation=info.noCompensation===true;
+  green.delete('rawSoh');
   const fcc=key=>green.has(key)?ratio(info[key],info.designCapacity):number(info[key],'mAh');
   const locked=finite(info.lockedCapacity)&&finite(info.qmax)&&info.qmax>0?`${number(info.lockedCapacity,'mAh')} (${(-Math.abs(info.lockedCapacity)/info.qmax*100).toFixed(1)}%)`:'—';
   const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};

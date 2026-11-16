@@ -43,9 +43,26 @@ public final class DataTransferTest {
             String token=UUID.randomUUID().toString();Path job=root.resolve("transfer/"+token);Files.createDirectories(job);DataArchive.inspect(archive,job.resolve("incoming").toFile(),()->{});DataRestore restore=new DataRestore(root.toFile(),app.toFile(),job.toFile(),token);restore.prepare(()->{});
             int[] steps={0};try{restore.apply(()->{if(++steps[0]==3)throw new IOException("simulated interruption");});throw new AssertionError("Interruption missing");}catch(IOException expected){}
             restore.recover();restore.recover();check(text(root.resolve("records.db")).equals("original-records")&&text(app.resolve("app_webview/old.bin")).equals("original-hours"),"Interrupted overwrite did not roll back");restore.clean();
+            String trialToken=UUID.randomUUID().toString();Path trialJob=root.resolve("transfer/"+trialToken);Files.createDirectories(trialJob);
+            DataArchive.inspect(archive,trialJob.resolve("incoming").toFile(),()->{});
+            DataRestore trial=new DataRestore(root.toFile(),app.toFile(),trialJob.toFile(),trialToken);trial.prepare(()->{});trial.apply(()->{});
+            put(root.resolve("records.db-wal"),"trial WAL");put(root.resolve("records.db-shm"),"trial shared memory");
+            RecordingGate.pause(root.toFile(),"simulated unavailable battery read");
+            trial.recover();
+            check(text(root.resolve("records.db")).equals("original-records")&&text(app.resolve("files/old.txt")).equals("original-app"),"Failed recorder startup lost the original data");
+            check(!Files.exists(root.resolve("records.db-wal"))&&!Files.exists(root.resolve("records.db-shm")),"Trial sidecars remained beside the original database");
+            check(text(root.resolve(RecordingGate.DISABLED)).equals("old setting")&&!Files.exists(root.resolve(RecordingGate.PROBLEM)),"Retry needs the previous pause setting and its original reason");
+            put(root.resolve("records.db-wal"),"WAL after original recorder restarted");trial.recover();trial.clean();
+            check(text(root.resolve("records.db-wal")).equals("WAL after original recorder restarted"),"Retry removed a sidecar written after rollback");
             String token2=UUID.randomUUID().toString();Path job2=root.resolve("transfer/"+token2);Files.createDirectories(job2);DataArchive.inspect(legacy,job2.resolve("incoming").toFile(),()->{});DataRestore success=new DataRestore(root.toFile(),app.toFile(),job2.toFile(),token2);success.prepare(()->{});success.apply(()->{});success.commit();success.recover();success.clean();
             check(text(root.resolve("gauge-update.state")).equals("current boot interruption")&&!Files.exists(root.resolve("gauge-update.state.next")),"Restore replaced current driver recovery state with a backup copy");
             check(text(root.resolve("records.db")).equals("backup-records"),"Root data was not replaced");check(!Files.exists(root.resolve("recording.disabled")),"Obsolete root setting remained");check(text(app.resolve("app_webview/Default/IndexedDB/day.bin")).equals("逐小时使用时间"),"Hourly cache missing");check(!Files.exists(app.resolve("files/old.txt")),"Restore merged old app files instead of replacing");check(text(root.resolve("runtime/program")).equals("protected-program")&&text(app.resolve("no_backup/acol-transfer.pending")).equals("operation-marker"),"Runtime or operation marker replaced");
+            String enabledToken=UUID.randomUUID().toString();Path enabledJob=root.resolve("transfer/"+enabledToken);Files.createDirectories(enabledJob);
+            DataArchive.inspect(archive,enabledJob.resolve("incoming").toFile(),()->{});
+            DataRestore enabled=new DataRestore(root.toFile(),app.toFile(),enabledJob.toFile(),enabledToken);
+            enabled.prepare(()->{});enabled.apply(()->{});RecordingGate.pause(root.toFile(),"simulated unavailable battery read");
+            enabled.recover();enabled.clean();
+            check(!Files.exists(root.resolve(RecordingGate.DISABLED))&&!Files.exists(root.resolve(RecordingGate.PROBLEM)),"Failed trial left an enabled recorder paused");
             if(args.length==3){File payload=test.resolve("payload").toFile();payload.mkdir();RuntimePayload.extract(new File(args[1]),payload,args[2]);check(new File(payload,"transfer.sh").isFile(),"Transfer worker missing from actual runtime payload");RuntimePayload.discard(payload);}
             System.out.println("Data transfer checks passed: archive round trip, corruption and path rejection, interrupted rollback, committed replacement and protected runtime");
         }finally{try(java.util.stream.Stream<Path> paths=Files.walk(test)){for(Path path:(Iterable<Path>)paths.sorted(Comparator.reverseOrder())::iterator){if(!path.toAbsolutePath().normalize().startsWith(test))throw new IOException("Test cleanup escaped temporary directory");Files.deleteIfExists(path);}}}

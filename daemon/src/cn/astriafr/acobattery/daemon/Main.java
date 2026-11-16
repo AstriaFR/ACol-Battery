@@ -117,6 +117,7 @@ public final class Main {
     FileLock lock;
     final PerformanceCollector performance;
     final PowerIndicator powerIndicator;
+    final DischargeNotification dischargeNotification;
     private final GaugeUpdate gaugeUpdate;
     final DeferredStats deferred;
     long performanceSession=-1,performanceMetaSession=-1;
@@ -169,13 +170,14 @@ public final class Main {
         if(!app.usageError.isEmpty()){app.usageErrorAt=System.currentTimeMillis();FallbackDiagnostics.record("应用使用统计服务",app.usageError);}
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 2.6 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 2.6.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
             catch(Throwable e){
                 if(app.framework!=null)app.framework.close();
                 app.powerIndicator.close();
+                app.dischargeNotification.close();
                 try{StartupFailure.record(Owner.BASE,attempt,e);}catch(Throwable reportError){e.addSuppressed(reportError);}
                 StartupFailure.print(e,System.err);System.exit(1);
             }
@@ -185,7 +187,6 @@ public final class Main {
 
     Main(Context ctx,File module,File data) throws Exception {
         this.ctx=ctx;this.module=module;this.data=data;data.mkdirs();
-        if(DataTransfer.PENDING.exists())throw new IOException("数据备份或恢复尚未结束，请打开应用完成处理。");
         if(new File(data,AllDataReset.PENDING).exists())throw new IOException("清除全部数据未完成，请重新打开应用继续清除。");
         FallbackDiagnostics.setSink((title,report)->{try{new ErrorLogStore(new File(data,"error-logs")).append("runtime",title,report);}catch(Exception ignored){}});
         screenState=createScreenState();
@@ -194,6 +195,7 @@ public final class Main {
         lockFile=new RandomAccessFile(new File(data,"daemon.lock"),"rw");
         lock=lockFile.getChannel().tryLock();
         if(lock==null){System.exit(73);throw new IOException("already running");}
+        DataTransfer.checkPending(System.getenv(DataTransfer.RESTORE_TOKEN_ENV));
         File resetFlag=new File(module,"reset-data");
         boolean reset=resetFlag.isFile();
         if(reset) {
@@ -206,13 +208,12 @@ public final class Main {
         // OPLUS Android 17's default sync-mode resolver expects an app-bound array.
         // Supply both modes explicitly so a root app_process needs no app binding.
         store=new RecordStore(data);db=store.db;battery=new BatteryService(ctx);
+        dischargeNotification=new DischargeNotification(db,data);
         loadSettings();
         store.upgrade();
         deferred=new DeferredStats(ctx,store,new DeferredStats.Host(){
             public boolean activeSession(long id){synchronized(mutex){return Main.this.activeSession(id);}}
             public Core.Reading settledReading(long id){synchronized(mutex){return Main.this.settledReading(id);}}
-            public long startWall(){return startWall;}
-            public boolean clockAdjusted(){return clockAdjusted;}
             public boolean interactive(){return sampling.interactive;}
             public double credit(){return depletion.checkpoint();}
             public void usageError(Throwable error){usageError=error==null?"":error.toString();usageErrorAt=error==null?0:System.currentTimeMillis();}
@@ -400,7 +401,9 @@ public final class Main {
         defaults.put(14,capacity*76/1000*50);
         return defaults;
     }
-    JSONObject defaultSettings()throws Exception {return decodeSettings(defaultSettingsValues());}
+    JSONObject defaultSettings()throws Exception {
+        return decodeSettings(defaultSettingsValues()).put(DischargeNotification.SETTING,false);
+    }
     void loadSettings()throws Exception {
         settings=defaultSettings();
         boolean resetSamplingDefaults=runtimeValue(RecordStore.SAMPLING_DEFAULTS_MIGRATION).isEmpty();
@@ -425,6 +428,7 @@ public final class Main {
                 db.setTransactionSuccessful();
             }finally{db.endTransaction();}
         }
+        settings.put(DischargeNotification.SETTING,"1".equals(runtimeValue(DischargeNotification.RUNTIME_KEY)));
     }
     static void applySamplingDefaults(JSONArray values)throws JSONException{
         // Temperature limits, screen-on/off, power, charging and performance intervals.
@@ -528,13 +532,15 @@ public final class Main {
         if(values.length()==13)values.put(settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS));
         if(values.length()==14)values.put(settings.isNull("energyWh")?10001:Math.round(settings.optDouble("energyWh",0)*100));
         if(values.length()==15)values.put(gaugeIntervalOverride()?1:0);
-        return saveSettingsValues(values,p.getInt(count)==1);
+        return saveSettingsValues(values,p.getInt(count)==1,false);
     }
-    private JSONObject saveSettingsValues(JSONArray values,boolean prune)throws Exception {
+    private JSONObject saveSettingsValues(JSONArray values,boolean prune,boolean reset)throws Exception {
         JSONObject next=decodeSettings(values);int removed=0;
+        next.put(DischargeNotification.SETTING,!reset&&settings.optBoolean(DischargeNotification.SETTING));
         db.beginTransaction();
         try {
             db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('module_settings',?)",new Object[]{values.toString()});
+            if(reset)db.delete("runtime","key=?",new String[]{DischargeNotification.RUNTIME_KEY});
             if(prune)removed=db.delete("sessions",smallRecordWhere(next),null);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
@@ -543,8 +549,26 @@ public final class Main {
         settings=next;settingsVersion++;store.rangeId=-1;store.rangeValues=null;
         if(oldPowerInterval!=powerIntervalMs()||oldGaugeOverride!=gaugeIntervalOverride())updateGaugeInterval();
         if(removed>0)usageSnapshots.clear();
+        if(reset)dischargeNotification.clear();
         configureSampling(true);powerIndicator.state.refresh();wakeCollector();
         return new JSONObject().put("ok",true).put("settings",settings).put("removed",removed);
+    }
+    void syncDischargeNotification(){
+        if(stopping||!recordingEnabled||state!=0||session<0||previous==null||previous.online
+                ||!settings.optBoolean(DischargeNotification.SETTING)){
+            dischargeNotification.clear();return;
+        }
+        dischargeNotification.sample(session,previous.elapsed-startElapsed,highDesignCapacity(battery.designCapacityMah()));
+    }
+    JSONObject setDischargeNotification(JSONArray args)throws Exception {
+        if(stopping)throw new IOException("后台正在结束，请稍后重试。");
+        String value=args.optString(0);
+        if(args.length()!=1||!value.matches("[01]"))throw new IOException("参数无效");
+        JSONObject next=new JSONObject(settings.toString()).put(DischargeNotification.SETTING,value.equals("1"));
+        db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES(?,?)",
+            new Object[]{DischargeNotification.RUNTIME_KEY,value});
+        settings=next;settingsVersion++;syncDischargeNotification();
+        return new JSONObject().put("ok",true).put("settings",settings);
     }
     static final class PowerUnavailable extends IOException {PowerUnavailable(){super("暂时无法确认充电连接状态，请稍后重试。");}}
     static void requirePower(Core.Reading r)throws PowerUnavailable {
@@ -596,8 +620,9 @@ public final class Main {
         }
     }
     void updatePerformanceMonitor(long now){
-        if(stopping||!sampling.interactive||!powerIndicator.state.enabled)return;
+        if(stopping||!powerIndicator.state.enabled)return;
         MonitorAppearance appearance=powerIndicator.appearance();
+        if(!powerIndicator.canSample())return;
         if(appearance.shows(PERFORMANCE)&&powerIndicator.state.performanceDue(now))
             performance.sampleMonitorFps(sampleMonitorPerformance(now,appearance,false),performanceCadence.interval);
         if(appearance.shows(BATTERY)&&powerIndicator.state.batteryDue(now)){
@@ -611,7 +636,8 @@ public final class Main {
         }
     }
     private void shareGameBattery(Core.Reading reading){
-        if(stopping||!sampling.interactive||!powerIndicator.state.enabled||!powerIndicator.appearance().shows(BATTERY))return;
+        MonitorAppearance appearance=powerIndicator.appearance();
+        if(stopping||!powerIndicator.state.enabled||!appearance.shows(BATTERY)||!powerIndicator.canSample())return;
         long intervalMs=powerIntervalMs();
         if(SystemClock.elapsedRealtime()-reading.elapsed>=intervalMs)return;
         powerIndicator.state.batterySampled(reading.elapsed,intervalMs);
@@ -624,10 +650,11 @@ public final class Main {
         else screenError="采样事件通知不可用，屏幕切换可能延迟";
     }
     void screenChanged(long now,boolean first,boolean changed){
-        powerIndicator.screen(sampling.interactive);
+        boolean monitorChanged=powerIndicator.screen(sampling.interactive);
+        dischargeNotification.screen(screenStateAvailable()&&sampling.interactive);
         if((first&&screenState.known)||changed)fastScreenOffAt=fastEnabled&&!sampling.interactive?now:-1;
         boolean captureChanged=deferred.captureSchedule.screen(screenState.available&&sampling.interactive,now);
-        if(changed||!first&&captureChanged)wakeCollector();
+        if(changed||!first&&(captureChanged||monitorChanged))wakeCollector();
     }
     void refreshScreen(boolean initial){
         long now=SystemClock.elapsedRealtime();boolean first=!screenState.known;
@@ -705,6 +732,7 @@ public final class Main {
             sampling.sampled(state,r.elapsed);
             StartupFailure.clear(Owner.BASE,attempt);
             recorderReady=true;
+            syncDischargeNotification();
         }
         releaseWait();
         while(!stopping) {
@@ -716,7 +744,7 @@ public final class Main {
                 due=Math.min(due,ownerNext);
                 due=Math.min(due,fastAutoDeadline());
                 MonitorAppearance appearance=powerIndicator.appearance();
-                due=Math.min(due,powerIndicator.state.deadline(sampling.interactive,appearance.shows(PERFORMANCE),appearance.shows(BATTERY)));
+                due=Math.min(due,powerIndicator.state.deadline(powerIndicator.canSample(),appearance.shows(PERFORMANCE),appearance.shows(BATTERY)));
                 if(collecting)due=Math.min(due,deferred.captureSchedule.deadline);
                 if(powerRetryAt==0&&fastEnabled&&candidateAt<0){
                     if(gameTrack.session<0)due=Math.min(due,0);
@@ -771,6 +799,7 @@ public final class Main {
                 synchronized(mutex){powerUnavailable(SystemClock.elapsedRealtime());}
             } finally {
                 try{synchronized(mutex){
+                    syncDischargeNotification();
                     deferred.captureAsync(false,0);
                     updatePerformanceMonitor(SystemClock.elapsedRealtime());
                 }}finally{releaseWait();}
@@ -778,7 +807,7 @@ public final class Main {
         }
         stopScreenFallback();
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
-        framework.close();performance.close();powerIndicator.close();usageWorker.shutdownNow();
+        framework.close();performance.close();powerIndicator.close();dischargeNotification.close();usageWorker.shutdownNow();
         synchronized(mutex) {
             // Updating code or reconnecting framework proxies suspends ownership,
             // not the charge/discharge session. Completed samples are already durable.
@@ -817,7 +846,7 @@ public final class Main {
             if(!powerReady)recoverWhenReady(r);
             else{powerError="";powerRetryAt=0;state=r.online?1:0;stableOnline=r.online;begin(r);sampling.sampled(state,r.elapsed);}
         }
-        candidate=null;candidateAt=-1;sampling.takeScreenSample();settingsVersion++;wakeCollector();
+        candidate=null;candidateAt=-1;sampling.takeScreenSample();settingsVersion++;syncDischargeNotification();wakeCollector();
         return recordingResult();
     }
     void requestStop(String reason)throws Exception {
@@ -1060,7 +1089,13 @@ public final class Main {
                 depletion.reset();timelineReady=false;fastStatsPrevious=r;fastStatsNext=r.elapsed+60000;
             }else if(fast)sampleFastStats(r,resumed,resumed);
             else if(state==0&&previous!=null&&!rebooted&&!deferred.owns(session))attribute(previous,r,loss,(quality&3)!=0,energy);
-            if(state==0&&!fast&&deferred.owns(session))deferred.raw(session,startElapsed,r,newClock?quality|16:quality,sampling.maxGap());
+            if(state==0&&!fast&&deferred.owns(session)){
+                // Retain screen continuity for the notification without changing curve quality flags.
+                boolean screenInterval=screenStateAvailable()&&sampling.interactive
+                    &&previous!=null&&screenState.changedAt<=previous.elapsed;
+                int usageQuality=screenInterval?quality:quality|DeferredStats.SCREEN_INTERVAL_UNCERTAIN;
+                deferred.raw(session,startElapsed,r,usageQuality,sampling.maxGap());
+            }
             db.execSQL("UPDATE sessions SET end_elapsed=?,pct_end=?,rm_end=?,missed=missed+?,anomalies=anomalies+? WHERE id=?",
                 new Object[]{r.elapsed,nullable(r.pct),nullable(r.rm),missed,(quality&6)!=0?1:0,session});
             // Minute checkpoints suffice for fast accounting. Avoid adding a WAL
@@ -1085,7 +1120,7 @@ public final class Main {
         if(!performanceCadence.due(now))return;
         performanceCadence.sampled(now);
         MonitorAppearance appearance=powerIndicator.appearance();
-        PerformanceCollector.MonitorSample shared=sampling.interactive&&powerIndicator.state.enabled&&appearance.shows(PERFORMANCE)
+        PerformanceCollector.MonitorSample shared=sampling.interactive&&powerIndicator.state.enabled&&appearance.shows(PERFORMANCE)&&powerIndicator.canSample()
             ?sampleMonitorPerformance(now,appearance,true):null;
         performance.sample(session,startElapsed,sampling.interactive,performanceCadence.interval,shared);
     }
@@ -1126,8 +1161,8 @@ public final class Main {
             db.execSQL("UPDATE sessions SET clock_adjusted=1 WHERE id=? AND clock_adjusted=0",new Object[]{session});
             clockAdjusted=true;
         }
-        if(gap||Math.abs((b.wall-a.wall)-dt)>2000) {
-            split=Collections.singletonMap(Core.OTHER,dt);timelineReady=false;
+        if(gap||b.wall<=a.wall||Math.abs((b.wall-a.wall)-dt)>2000) {
+            split=Collections.singletonMap(Core.UNATTRIBUTED,dt);timelineReady=false;
         } else {
             try {
                 usageCheckedAt=System.currentTimeMillis();
@@ -1151,7 +1186,7 @@ public final class Main {
                 Throwable cause=FrameworkWatch.cause(e);String diagnostic=cause.toString();
                 if(!diagnostic.equals(usageError)){System.err.println("Application attribution unavailable: "+diagnostic);cause.printStackTrace();}
                 FallbackDiagnostics.record("应用使用事件读取",cause);usageError=diagnostic;usageErrorAt=System.currentTimeMillis();if(framework!=null)framework.observe(e);
-                timelineReady=false;split=Collections.singletonMap(Core.OTHER,dt);
+                timelineReady=false;split=Collections.singletonMap(Core.UNATTRIBUTED,dt);
             }
         }
         if(screenSpans!=null){deferred.saveScreenSpans(session,screenSpans.spans);deferred.saveScreenApps(session,screenSpans.apps);}
@@ -1375,7 +1410,7 @@ public final class Main {
         JSONObject o=new JSONObject().put("ok",true);
         if(action.equals("oplus_votes")){
             if(p.length()!=0)throw new IOException("参数无效。");
-            return o.put("nodes",OplusVotes.snapshot(battery.dischargeVoltageMin()));
+            return o.put("nodes",OplusVotes.snapshot());
         }
         if(action.equals("cool_down_details")){
             if(p.length()!=0)throw new IOException("参数无效。");
@@ -1396,7 +1431,7 @@ public final class Main {
                 }else{
                     String value=p.optString(1);
                     if(p.length()!=2||!value.matches("(?:-?[0-9]{1,5}|stock)"))throw new IOException("参数无效。");
-                    OplusVotes.apply(OplusVotes.editable(p.optString(0)),value.equals("stock")?null:Integer.valueOf(value),battery.dischargeVoltageMin(),gaugeUpdate);
+                    OplusVotes.apply(OplusVotes.editable(p.optString(0)),value.equals("stock")?null:Integer.valueOf(value),gaugeUpdate);
                 }
                 return o;
             }catch(IOException|IllegalArgumentException e){
@@ -1429,13 +1464,14 @@ public final class Main {
             return o.put("powerDisplayEnabled",enabled).put("powerDisplayError",powerIndicator.error()).put("settings",settings);
         }
         if(action.equals("set_recording"))return setRecording(p.optInt(0,0)==1);
+        if(action.equals("set_discharge_notification"))return setDischargeNotification(p);
         if(action.equals("set_fast")){if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("游戏模式参数无效");return setFast(p.getInt(0)==1,p.getInt(0)==1?"fast_started":"fast_stopped");}
         if(action.equals("shutdown")){requestStop("app_uninstalled".equals(p.optString(0))?"app_uninstalled":"service_updated");return o;}
         if(action.equals("settings"))return o.put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem).put("fastEnabled",fastEnabled).put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
         if(action.equals("default_settings"))return o.put("settings",defaultSettings());
         if(action.equals("reset_settings")){
             if(p.length()!=0)throw new IOException("恢复默认设置参数无效");
-            return saveSettingsValues(defaultSettingsValues(),false);
+            return saveSettingsValues(defaultSettingsValues(),false,true);
         }
         if(action.equals("set_settings"))return saveSettings(p);
         if(action.equals("cache_records"))return store.cacheRecords(p);
@@ -1527,7 +1563,7 @@ public final class Main {
     }
     JSONObject status()throws Exception {return status(true);}
     private JSONObject status(boolean includeReading)throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.6").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.6.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi)
             .put("highDesignCapacity",highDesignCapacity(battery.designCapacityMah()));
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());

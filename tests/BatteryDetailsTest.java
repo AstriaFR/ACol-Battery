@@ -24,6 +24,10 @@ public final class BatteryDetailsTest {
         if(Math.abs(raw-99/1.07)>0.001)throw new AssertionError("Incorrect SOH coefficient");
         equal(BatteryDetails.rawSoh(99,2999,table),null);
         equal(BatteryDetails.rawFcc(6304,raw,2999,table,6500),null);
+        // Saturation gives a bound even when the compensated SOH is itself capped.
+        equal(BatteryDetails.rawFccAbove(6500,99,3000,table,6500),5723);
+        equal(BatteryDetails.rawFccAbove(6500,100,3000,table,6500),5699);
+        equal(BatteryDetails.rawFccAbove(6499,99,3000,table,6500),null);
         System.out.println("BatteryDetails: term status parsing and driver floor selection passed");
     }
 }

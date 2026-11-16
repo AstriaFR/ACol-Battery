@@ -42,7 +42,14 @@ public final class Admin {
     static JSONObject ensure()throws Exception{long deadline=OperationTimeout.deadline();return ensure(status(deadline),deadline);}
     static JSONObject ensure(JSONObject current)throws Exception{return ensure(current,OperationTimeout.deadline());}
     static JSONObject ensure(JSONObject current,long deadline)throws Exception{
-        if(DataTransfer.PENDING.exists())throw new IOException("数据备份或恢复尚未结束，请打开应用完成处理。");
+        return ensure(current,deadline,null);
+    }
+    static void ensureDuringRestore(String token)throws Exception{
+        long deadline=OperationTimeout.deadline();
+        ensure(status(deadline),deadline,token);
+    }
+    private static JSONObject ensure(JSONObject current,long deadline,String restoreToken)throws Exception{
+        DataTransfer.checkPending(restoreToken);
         if(new File(Owner.BASE,AllDataReset.PENDING).exists())throw new IOException("清除全部数据未完成，请重新打开应用继续清除。");
         if(ready(current))return current;
         // A living collector reconnects framework services and resumes its session.
@@ -54,7 +61,9 @@ public final class Admin {
         SafeDatabase.inspectExisting(new File(Owner.BASE,"records.db"));
         String attempt=StartupFailure.begin(Owner.BASE);
         try{
-            Process p=new ProcessBuilder(new File(Owner.RUNTIME,"bin/aco-launcher").getPath(),new File(Owner.RUNTIME,"service.sh").getPath()).redirectErrorStream(true).start();
+            ProcessBuilder launcher=new ProcessBuilder(new File(Owner.RUNTIME,"bin/aco-launcher").getPath(),new File(Owner.RUNTIME,"service.sh").getPath()).redirectErrorStream(true);
+            if(restoreToken!=null)launcher.environment().put(DataTransfer.RESTORE_TOKEN_ENV,restoreToken);
+            Process p=launcher.start();
             if(!p.waitFor(OperationTimeout.remaining(deadline),java.util.concurrent.TimeUnit.MILLISECONDS)){p.destroy();throw new IOException("后台启动超时，请重试。");}
             if(p.exitValue()!=0)throw new IOException("后台启动失败。");
             for(int i=0;i<100;i++){
