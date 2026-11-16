@@ -40,7 +40,7 @@ public final class Main {
     static final String SOCKET="cn.astriafr.aco_battery_app.v1";
     private static final int DETAIL_WATCH_MODE=0, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
     private static final long LIVE_READING_REFRESH_MS=1500;
-    private static final int DEFAULT_DELETE_PCT=3, DEFAULT_CHARGE_SECONDS=3;
+    private static final int DEFAULT_DELETE_PCT=1, DEFAULT_HIDE_PCT=10, DEFAULT_CHARGE_SECONDS=3;
     private static final double DEFAULT_GAME_SECONDS=1.5;
     JSONObject settings;
     volatile boolean recordingEnabled,stopping;
@@ -117,7 +117,8 @@ public final class Main {
     FileLock lock;
     final PerformanceCollector performance;
     final PowerIndicator powerIndicator;
-    final DischargeNotification dischargeNotification;
+    final RecordNotification recordNotification;
+    long chargeNoticeSession=-1,chargeNoticeX=-1;
     private final GaugeUpdate gaugeUpdate;
     final DeferredStats deferred;
     long performanceSession=-1,performanceMetaSession=-1;
@@ -137,10 +138,7 @@ public final class Main {
     static void run(String[] args,String attempt)throws Exception {
         if(android.os.Process.myUid()!=0) { System.err.println("root required");System.exit(1); }
         if(args.length>0 && args[0].equals("--client")) { client(Arrays.copyOfRange(args,1,args.length));return; }
-        Looper.prepareMainLooper();
-        Class<?> activityThread=Class.forName("android.app.ActivityThread");
-        Object thread=activityThread.getMethod("systemMain").invoke(null);
-        Context ctx=(Context)activityThread.getMethod("getSystemContext").invoke(thread);
+        Context ctx=Admin.context();
         if(args.length>0 && args[0].equals("--probe")) {
             System.load(args[1]+"/bin/libcurvewait.so");
             JSONObject report=new JSONObject();
@@ -170,14 +168,14 @@ public final class Main {
         if(!app.usageError.isEmpty()){app.usageErrorAt=System.currentTimeMillis();FallbackDiagnostics.record("应用使用统计服务",app.usageError);}
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 2.6.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 2.6.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
             catch(Throwable e){
                 if(app.framework!=null)app.framework.close();
                 app.powerIndicator.close();
-                app.dischargeNotification.close();
+                app.recordNotification.close();
                 try{StartupFailure.record(Owner.BASE,attempt,e);}catch(Throwable reportError){e.addSuppressed(reportError);}
                 StartupFailure.print(e,System.err);System.exit(1);
             }
@@ -208,7 +206,7 @@ public final class Main {
         // OPLUS Android 17's default sync-mode resolver expects an app-bound array.
         // Supply both modes explicitly so a root app_process needs no app binding.
         store=new RecordStore(data);db=store.db;battery=new BatteryService(ctx);
-        dischargeNotification=new DischargeNotification(db,data);
+        recordNotification=new RecordNotification(ctx,db,data);
         loadSettings();
         store.upgrade();
         deferred=new DeferredStats(ctx,store,new DeferredStats.Host(){
@@ -359,7 +357,7 @@ public final class Main {
         if(!gameFirst)collectGame(recordingEnabled&&!stableOnline?null:reading,screenBoundary,now);
     }
 
-    private static final Number[] SETTING_DEFAULTS={DEFAULT_DELETE_PCT,30,500,1,300,450,40,60,2,30,DEFAULT_GAME_SECONDS,1,DEFAULT_CHARGE_SECONDS,DEFAULT_GAME_SECONDS,10001,0};
+    private static final Number[] SETTING_DEFAULTS={DEFAULT_DELETE_PCT,DEFAULT_HIDE_PCT,500,1,300,450,40,60,2,30,DEFAULT_GAME_SECONDS,1,DEFAULT_CHARGE_SECONDS,DEFAULT_GAME_SECONDS,10001,0};
 
     static JSONObject decodeSettings(JSONArray p)throws Exception {
         if(p.length()!=8&&(p.length()<12||p.length()>16))throw new IOException("设置项数量无效");
@@ -402,7 +400,7 @@ public final class Main {
         return defaults;
     }
     JSONObject defaultSettings()throws Exception {
-        return decodeSettings(defaultSettingsValues()).put(DischargeNotification.SETTING,false);
+        return decodeSettings(defaultSettingsValues()).put(RecordNotification.SETTING,false);
     }
     void loadSettings()throws Exception {
         settings=defaultSettings();
@@ -428,7 +426,7 @@ public final class Main {
                 db.setTransactionSuccessful();
             }finally{db.endTransaction();}
         }
-        settings.put(DischargeNotification.SETTING,"1".equals(runtimeValue(DischargeNotification.RUNTIME_KEY)));
+        settings.put(RecordNotification.SETTING,"1".equals(runtimeValue(RecordNotification.RUNTIME_KEY)));
     }
     static void applySamplingDefaults(JSONArray values)throws JSONException{
         // Temperature limits, screen-on/off, power, charging and performance intervals.
@@ -536,11 +534,11 @@ public final class Main {
     }
     private JSONObject saveSettingsValues(JSONArray values,boolean prune,boolean reset)throws Exception {
         JSONObject next=decodeSettings(values);int removed=0;
-        next.put(DischargeNotification.SETTING,!reset&&settings.optBoolean(DischargeNotification.SETTING));
+        next.put(RecordNotification.SETTING,!reset&&settings.optBoolean(RecordNotification.SETTING));
         db.beginTransaction();
         try {
             db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES('module_settings',?)",new Object[]{values.toString()});
-            if(reset)db.delete("runtime","key=?",new String[]{DischargeNotification.RUNTIME_KEY});
+            if(reset)db.delete("runtime","key=?",new String[]{RecordNotification.RUNTIME_KEY});
             if(prune)removed=db.delete("sessions",smallRecordWhere(next),null);
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
@@ -549,25 +547,31 @@ public final class Main {
         settings=next;settingsVersion++;store.rangeId=-1;store.rangeValues=null;
         if(oldPowerInterval!=powerIntervalMs()||oldGaugeOverride!=gaugeIntervalOverride())updateGaugeInterval();
         if(removed>0)usageSnapshots.clear();
-        if(reset)dischargeNotification.clear();
+        if(reset)recordNotification.clear();
         configureSampling(true);powerIndicator.state.refresh();wakeCollector();
         return new JSONObject().put("ok",true).put("settings",settings).put("removed",removed);
     }
-    void syncDischargeNotification(){
-        if(stopping||!recordingEnabled||state!=0||session<0||previous==null||previous.online
-                ||!settings.optBoolean(DischargeNotification.SETTING)){
-            dischargeNotification.clear();return;
+    void syncRecordNotification(){
+        if(!stopping&&recordingEnabled&&session>=0&&previous!=null&&settings.optBoolean(RecordNotification.SETTING)){
+            if(state==0&&!previous.online){
+                recordNotification.sample(session,previous.elapsed-startElapsed,false,highDesignCapacity(battery.designCapacityMah()));
+                return;
+            }
+            if(state==1&&previous.online&&chargeNoticeSession==session){
+                recordNotification.sample(session,chargeNoticeX,true,false);
+                return;
+            }
         }
-        dischargeNotification.sample(session,previous.elapsed-startElapsed,highDesignCapacity(battery.designCapacityMah()));
+        recordNotification.clear();
     }
     JSONObject setDischargeNotification(JSONArray args)throws Exception {
         if(stopping)throw new IOException("后台正在结束，请稍后重试。");
         String value=args.optString(0);
         if(args.length()!=1||!value.matches("[01]"))throw new IOException("参数无效");
-        JSONObject next=new JSONObject(settings.toString()).put(DischargeNotification.SETTING,value.equals("1"));
+        JSONObject next=new JSONObject(settings.toString()).put(RecordNotification.SETTING,value.equals("1"));
         db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES(?,?)",
-            new Object[]{DischargeNotification.RUNTIME_KEY,value});
-        settings=next;settingsVersion++;syncDischargeNotification();
+            new Object[]{RecordNotification.RUNTIME_KEY,value});
+        settings=next;settingsVersion++;syncRecordNotification();
         return new JSONObject().put("ok",true).put("settings",settings);
     }
     static final class PowerUnavailable extends IOException {PowerUnavailable(){super("暂时无法确认充电连接状态，请稍后重试。");}}
@@ -651,7 +655,7 @@ public final class Main {
     }
     void screenChanged(long now,boolean first,boolean changed){
         boolean monitorChanged=powerIndicator.screen(sampling.interactive);
-        dischargeNotification.screen(screenStateAvailable()&&sampling.interactive);
+        recordNotification.screen(screenStateAvailable()&&sampling.interactive);
         if((first&&screenState.known)||changed)fastScreenOffAt=fastEnabled&&!sampling.interactive?now:-1;
         boolean captureChanged=deferred.captureSchedule.screen(screenState.available&&sampling.interactive,now);
         if(changed||!first&&(captureChanged||monitorChanged))wakeCollector();
@@ -732,7 +736,7 @@ public final class Main {
             sampling.sampled(state,r.elapsed);
             StartupFailure.clear(Owner.BASE,attempt);
             recorderReady=true;
-            syncDischargeNotification();
+            syncRecordNotification();
         }
         releaseWait();
         while(!stopping) {
@@ -799,7 +803,7 @@ public final class Main {
                 synchronized(mutex){powerUnavailable(SystemClock.elapsedRealtime());}
             } finally {
                 try{synchronized(mutex){
-                    syncDischargeNotification();
+                    syncRecordNotification();
                     deferred.captureAsync(false,0);
                     updatePerformanceMonitor(SystemClock.elapsedRealtime());
                 }}finally{releaseWait();}
@@ -807,7 +811,7 @@ public final class Main {
         }
         stopScreenFallback();
         if(displays!=null&&displayListener!=null)try{displays.unregisterDisplayListener(displayListener);}catch(RuntimeException ignored){}
-        framework.close();performance.close();powerIndicator.close();dischargeNotification.close();usageWorker.shutdownNow();
+        framework.close();performance.close();powerIndicator.close();recordNotification.close();usageWorker.shutdownNow();
         synchronized(mutex) {
             // Updating code or reconnecting framework proxies suspends ownership,
             // not the charge/discharge session. Completed samples are already durable.
@@ -846,7 +850,7 @@ public final class Main {
             if(!powerReady)recoverWhenReady(r);
             else{powerError="";powerRetryAt=0;state=r.online?1:0;stableOnline=r.online;begin(r);sampling.sampled(state,r.elapsed);}
         }
-        candidate=null;candidateAt=-1;sampling.takeScreenSample();settingsVersion++;syncDischargeNotification();wakeCollector();
+        candidate=null;candidateAt=-1;sampling.takeScreenSample();settingsVersion++;syncRecordNotification();wakeCollector();
         return recordingResult();
     }
     void requestStop(String reason)throws Exception {
@@ -1107,7 +1111,12 @@ public final class Main {
             depletion.restore(oldCredit);
             throw error;
         }finally{db.endTransaction();}
-        if(state==1)fullGate.observe(r);
+        if(state==1){
+            fullGate.observe(r);
+            if(r.online&&screenStateAvailable()&&sampling.interactive&&(quality&RecordNotification.INVALID_QUALITY)==0){
+                chargeNoticeSession=session;chargeNoticeX=r.elapsed-startElapsed;
+            }
+        }
         if(newClock)clockAdjusted=true;
         if(rebased){settingsVersion++;store.rangeId=-1;store.rangeValues=null;usageSnapshots.remove(session);}
         store.updateRanges(session,startElapsed,state,gameContext,previous,r,recordedPower);
@@ -1488,7 +1497,7 @@ public final class Main {
             return o.put("item",store.recordBatteryHistory(battery.batteryInfoSnapshot(),System.currentTimeMillis()));
         }
         if(Arrays.asList("battery_history","battery_history_detail","battery_history_delete","battery_history_trend").contains(action))return store.history(action,p);
-        if(action.equals("list"))return store.list(p,settings.optInt("hidePct",30),settingsVersion);
+        if(action.equals("list"))return store.list(p,settings.optInt("hidePct",DEFAULT_HIDE_PCT),settingsVersion);
         long id=p.optLong(0,-1);if(id<1)throw new IOException("无效记录 ID");
         if(action.equals("settle_usage")){
             requestUsage(id);
@@ -1563,11 +1572,11 @@ public final class Main {
     }
     JSONObject status()throws Exception {return status(true);}
     private JSONObject status(boolean includeReading)throws Exception {
-        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.6.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.6.2").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi)
             .put("highDesignCapacity",highDesignCapacity(battery.designCapacityMah()));
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());
-        o.put("retentionThresholdPct",settings.optInt("deletePct",DEFAULT_DELETE_PCT)).put("hideThresholdPct",settings.optInt("hidePct",30)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
+        o.put("retentionThresholdPct",settings.optInt("deletePct",DEFAULT_DELETE_PCT)).put("hideThresholdPct",settings.optInt("hidePct",DEFAULT_HIDE_PCT)).put("settings",settings).put("recordingEnabled",recordingEnabled).put("recordingProblem",recordingProblem);
         o.put("recordingEnabled",recordingEnabled).put("state",state).put("session",preferredSession()).put("normalSession",session).put("gameSession",gameTrack.session).put("capabilities",capabilities).put("cellCount",cellCount).put("listVersion",settingsVersion);
         o.put("tailProgress",fullGate.progress(SystemClock.elapsedRealtime()));
         o.put("interactive",screenState.known?sampling.interactive:JSONObject.NULL).put("sampleIntervalMs",interval());

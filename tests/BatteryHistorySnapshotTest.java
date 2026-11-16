@@ -10,6 +10,9 @@ public final class BatteryHistorySnapshotTest {
   source.put("qmax",1).put("cutoffMv",2900);check(saved.getInt("qmax")==6200&&saved.getInt("cutoffMv")==3150&&green(saved,"rawFcc"));
   source.put("qmax",6200);JSONObject low=BatteryHistorySnapshot.capture(source);check(low.getBoolean("noCompensation")&&low.getInt("lockedCapacity")==100);check(green(low,"fcc")&&!green(low,"rawFcc")&&!green(low,"rawSoh"));
   check(BatteryHistorySnapshot.trustedFcc(low)==6100);check(BatteryHistorySnapshot.trustedFcc(new JSONObject().put("fcc",6000))==null);
+  source.put("qmax",6000);check(BatteryHistorySnapshot.capture(source).getInt("lockedCapacity")==0);
+  source.put("cutoffMv",3150).put("rawFccAbove",5700);
+  JSONObject bounded=BatteryHistorySnapshot.capture(source);check(bounded.isNull("lockedCapacity")&&bounded.getInt("rawFccAbove")==5700);
   JSONObject missing=BatteryHistorySnapshot.capture(new JSONObject());check(missing.isNull("qmax")&&missing.isNull("lockedCapacity")&&missing.getJSONArray("nearActual").length()==0);
   System.out.println("Battery history: frozen values, capture-time trust flags, low-cutoff policy, null fields and data-only snapshot passed");
  }

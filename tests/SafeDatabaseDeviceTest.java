@@ -54,6 +54,7 @@ public final class SafeDatabaseDeviceTest {
         File root=new File(args[0]);String path=root.getCanonicalPath();check(path.equals("/data/adb/aco_battery_init_test/database-safety-test")||path.matches("/data/local/tmp/acol-database-maintenance-test-[a-zA-Z0-9-]+"),"Test path rejected");
         check(!root.exists(),"Refusing to overwrite previous test files");check(root.mkdir(),"Test directory unavailable");
         try{
+            Admin.context();
             compact(root);
             File healthy=new File(root,"healthy.db");
             try(SQLiteDatabase db=SafeDatabase.open(healthy)){db.execSQL("CREATE TABLE sentinel(value INTEGER)");db.execSQL("INSERT INTO sentinel VALUES(42)");}

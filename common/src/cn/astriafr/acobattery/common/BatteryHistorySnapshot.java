@@ -17,7 +17,9 @@ public final class BatteryHistorySnapshot {
         double cutoff=info.optDouble("cutoffMv",Double.NaN),qmax=info.optDouble("qmax",Double.NaN);
         boolean known=Double.isFinite(cutoff)&&cutoff>0,noCompensation=known&&cutoff<3000;
         double reference=info.optDouble(noCompensation?"fcc":"rawFcc",Double.NaN);
-        out.put("lockedCapacity",Double.isFinite(qmax)&&Double.isFinite(reference)?qmax-reference:JSONObject.NULL);
+        boolean bounded=known&&!noCompensation&&positive(info,"rawFccAbove");
+        if(bounded)out.put("rawFccAbove",info.get("rawFccAbove"));
+        out.put("lockedCapacity",!bounded&&Double.isFinite(qmax)&&qmax>0&&Double.isFinite(reference)&&reference>0?Math.max(0,qmax-reference):JSONObject.NULL);
         JSONArray green=new JSONArray();
         if(positive(info,"qmax"))green.put("qmax");
         String capacityKey=noCompensation?"fcc":"rawFcc";

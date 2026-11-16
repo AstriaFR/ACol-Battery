@@ -20,7 +20,9 @@ import java.nio.file.Files;
 
 public final class Admin {
     static Context context()throws Exception{
-        Looper.prepareMainLooper();Class<?> at=Class.forName("android.app.ActivityThread");
+        Looper.prepareMainLooper();
+        SafeDatabase.initializeForStandaloneProcess();
+        Class<?> at=Class.forName("android.app.ActivityThread");
         return (Context)at.getMethod("getSystemContext").invoke(at.getMethod("systemMain").invoke(null));
     }
     static JSONObject status(){return status(OperationTimeout.deadline());}

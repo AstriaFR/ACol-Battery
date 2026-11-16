@@ -1,5 +1,6 @@
 import{Chart,systemTimeLabel}from'./chart.js?v=acol-2.2s';
 import{bindExport,exportTime}from'./chart-export.js?v=acol-2.2s';
+import{lockedCapacityText,rawFccBoundText}from'./battery-info.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const historyRefreshMs=5000;
 export const healthMetrics=[{key:'cycles',index:1,name:'循环次数',axis:'循环次数',unit:'次',color:'#5479c4',digits:0},{key:'qmax',index:2,name:'Qmax',axis:'Qmax',unit:'mAh',color:'#b47b35',digits:0},{key:'fcc',index:3,name:'满充容量',axis:'满充容量',unit:'mAh',color:'#26957d',digits:0}];
@@ -43,9 +44,11 @@ export function batteryHistoryDate(wall,dateOnly=false){
 export function batteryHistoryFields(snapshot){
   const info=snapshot??{},green=new Set(Array.isArray(info.nearActual)?info.nearActual:[]),noCompensation=info.noCompensation===true;
   green.delete('rawSoh');
+  const fccBound=noCompensation?null:rawFccBoundText(info.rawFccAbove);
+  if(fccBound)green.add('rawFcc');
   const fcc=key=>green.has(key)?ratio(info[key],info.designCapacity):number(info[key],'mAh');
-  const locked=finite(info.lockedCapacity)&&finite(info.qmax)&&info.qmax>0?`${number(info.lockedCapacity,'mAh')} (${(-Math.abs(info.lockedCapacity)/info.qmax*100).toFixed(1)}%)`:'—';
-  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};
+  const locked=lockedCapacityText(info.qmax,info.lockedCapacity,noCompensation?null:info.rawFccAbove);
+  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};
   return{values,green};
 }
 export class BatteryHistoryPanel{

@@ -7,6 +7,13 @@ import java.io.File;
 
 /** Stop on corruption; Android's default handler deletes the original database. */
 final class SafeDatabase {
+    static void initializeForStandaloneProcess(){
+        // Before ActivityThread.systemMain() creates an Application, SQLite caches its
+        // default WAL compatibility settings without contacting SettingsProvider.
+        SQLiteDatabase.createInMemory(new SQLiteDatabase.OpenParams.Builder()
+            .addOpenFlags(SQLiteDatabase.NO_LOCALIZED_COLLATORS).build()).close();
+    }
+
     static SQLiteDatabase.OpenParams parameters(int flags){
         return new SQLiteDatabase.OpenParams.Builder()
             .setOpenFlags(flags)

@@ -77,12 +77,17 @@ export function createAdvancedPage(api,keypad){
   const modeValue=rows.get(modeReading).value;
   const modeButtons=chargingModes.map((mode,index)=>{
     const button=document.createElement('button');
+    const missingLabel=document.createElement('small');
     button.type='button';
     button.textContent=mode.label;
+    missingLabel.className='advanced-field-node';
+    missingLabel.textContent='不存在';
+    missingLabel.hidden=true;
+    button.append(missingLabel);
     button.disabled=true;
     button.onclick=()=>setChargingMode(index);
     modeGroup.append(button);
-    return button;
+    return {button,missingLabel};
   });
   for(const [container,items] of groups)for(const field of items){
     const row=document.createElement('div');
@@ -117,42 +122,45 @@ export function createAdvancedPage(api,keypad){
   }
   function render(data,error=''){
     state=data;
-    const nodes=data?.nodes??{};
+    const snapshot=data?.nodes,nodes=snapshot??{};
+    const isMissing=key=>!!snapshot&&(!nodes[key]||nodes[key].missing===true);
     for(const [field,{row,value}] of rows){
       if(field===modeReading)continue;
-      const node=nodes[field.key],effective=node?.effective;
-      row.hidden=!node?.missing&&!Number.isFinite(effective);
+      const effective=nodes[field.key]?.effective;
+      row.hidden=!snapshot;
       if(row.hidden)continue;
-      const text=node.missing?'不存在':[displayValue(field,effective),field.unit].filter(Boolean).join(' ');
+      const text=isMissing(field.key)?'不存在':Number.isFinite(effective)?
+        [displayValue(field,effective),field.unit].filter(Boolean).join(' '):'—';
       if(value.textContent!==text)value.textContent=text;
     }
     capacityList.hidden=!capacityReadings.some(field=>!rows.get(field).row.hidden);
     for(const field of fields){
       const node=nodes[field.key],button=buttons.get(field.key);
-      const available=!node?.missing&&!node?.controlMissing&&typeof node?.forced==='boolean'&&
-        (!node.writeUnavailable||node.forced);
-      const canEdit=available&&(!field.deviceRange||Number.isFinite(node.max)||node.forced);
-      const text=node?.missing||node?.controlMissing?'不存在':
-        available?(node.forced?[displayValue(field,node.forceValue),field.unit].filter(Boolean).join(' '):'厂商策略'):'—';
+      const missing=isMissing(field.key)||node?.controlMissing||(node?.writeUnavailable&&!node.forced);
+      const canEdit=!missing&&typeof node?.forced==='boolean'&&(!field.deviceRange||Number.isFinite(node.max)||node.forced);
+      const text=missing?'不存在':canEdit?
+        (node.forced?[displayValue(field,node.forceValue),field.unit].filter(Boolean).join(' '):'厂商策略'):'—';
       if(button.textContent!==text)button.textContent=text;
       button.disabled=!canEdit||applying;
     }
     const editing=keypad.keypad.open&&fields.find(field=>field.key===keypad.editor?.key);
     if(editing)$('keypadRange').textContent=rangeLabel(editing);
     const available=limitedModes.some(mode=>typeof nodes[mode.key]?.forced==='boolean');
-    const missing=limitedModes.every(mode=>nodes[mode.key]?.missing);
-    const known=limitedModes.every(mode=>nodes[mode.key]?.missing||typeof nodes[mode.key]?.forced==='boolean');
+    const missing=limitedModes.every(mode=>isMissing(mode.key));
+    const known=limitedModes.every(mode=>isMissing(mode.key)||typeof nodes[mode.key]?.forced==='boolean');
     const active=limitedModes.filter(mode=>nodes[mode.key]?.forced===true);
     const selected=active.length===1?active[0]:known&&available&&active.length===0?chargingModes[0]:null;
     modeUnavailable.hidden=!missing;
     modeGroup.hidden=missing;
     const modeText=missing?'不存在':selected?.label??'—';
     if(modeValue.textContent!==modeText)modeValue.textContent=modeText;
-    modeButtons.forEach((button,index)=>{
+    modeButtons.forEach(({button,missingLabel},index)=>{
       const mode=chargingModes[index];
+      const modeMissing=index!==0&&isMissing(mode.key);
       const pressed=String(mode===selected);
       if(button.getAttribute('aria-pressed')!==pressed)button.setAttribute('aria-pressed',pressed);
-      button.disabled=applying||!available||(index!==0&&(!known||nodes[mode.key]?.missing));
+      missingLabel.hidden=!modeMissing;
+      button.disabled=applying||!available||(index!==0&&(!known||modeMissing));
     });
     reset.disabled=!data||applying||!fields.some(field=>nodes[field.key]?.forced)&&!active.length;
     const message=error||resetError||(!data?'正在读取…':Object.keys(nodes).length?'':'未读取到投票节点。');
@@ -200,7 +208,7 @@ export function createAdvancedPage(api,keypad){
   $('advancedConfirmCancel').onclick=()=>confirmation.close('cancel');
   $('advancedConfirmApply').onclick=()=>confirmation.close('apply');
   async function setChargingMode(option){
-    const button=modeButtons[option];
+    const {button}=modeButtons[option];
     if(applying||!state||button.disabled||button.getAttribute('aria-pressed')==='true')return;
     resetError='';
     applying=true;

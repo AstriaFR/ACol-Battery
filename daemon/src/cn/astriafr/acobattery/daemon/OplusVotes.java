@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -71,7 +72,8 @@ final class OplusVotes {
                 if(node==Node.GAUGE_SHUTDOWN_VOLTAGE&&!Files.isReadable(SHUTDOWN_READBACK))item.put("writeUnavailable",true);
                 result.put(node.name(),item);
             }
-            catch(IOException ignored){}
+            catch(NoSuchFileException missing){result.put(node.name(),new JSONObject().put("missing",true));}
+            catch(IOException unreadable){result.put(node.name(),new JSONObject());}
         }
         return result;
     }

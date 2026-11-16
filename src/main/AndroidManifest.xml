@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="14228" android:versionName="2.6.1">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.astriafr.acobattery" android:versionCode="14241" android:versionName="2.6.2">
   <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="37"/>
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -9,6 +9,7 @@
       <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
     </activity>
     <receiver android:name=".DischargeNotificationReceiver" android:exported="false"/>
+    <provider android:name=".DischargeNoticeProvider" android:authorities="cn.astriafr.acobattery.discharge-notice" android:exported="false"/>
     <service android:name=".GameModeTileService" android:exported="true" android:label="游戏性能统计" android:icon="@drawable/tile_game" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
       <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
       <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true"/>
