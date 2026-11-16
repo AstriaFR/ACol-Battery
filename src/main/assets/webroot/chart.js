@@ -1,14 +1,16 @@
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
-import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
+import{remainingEstimate,unclassifiedCells,gameEnergyDisabled}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
+import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
 const rebootGap=64;
 const dischargeRebase=128;
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 let chartSettings={...DEFAULT_SETTINGS};
 export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
-const scaleSettingsKey=()=>JSON.stringify([chartSettings.energyWh,chartSettings.capacityAh,chartSettings.capacityAuto,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
+const scaleSettingsKey=()=>JSON.stringify([chartSettings.energyWh,chartSettings.capacityAh,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
 const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
   &&peak-base>=(full-base)*1.1-Math.max(1,Math.abs(full-base))*1e-12;
+const powerLevels=[10,20,50,100,200],currentLevels=[1000,2000,5000,10000,20000];
 export const series=[
   {key:'rm',index:1,name:'剩余容量',axis:'容量',unit:'mAh',digits:0},
   {key:'pct',index:2,name:'系统电量',axis:'电量',unit:'%',digits:0},
@@ -34,7 +36,7 @@ export function plotPoints(points,kind,cellCount=2,fast=false,highDesignCapacity
     const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
     const cells=(p[6]&unclassifiedCells)?0:cellCount;
     if(fast&&valid(row[3]))row[3]*=-(cells===2?2:1);
-    row[11]=charging?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null,highDesignCapacity)?.wh??null;return row;
+    row[11]=charging||(fast&&(p[6]&gameEnergyDisabled))?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null,highDesignCapacity)?.wh??null;return row;
   };
   if(fast)return points.map(withEnergy);
   return points.filter(p=>!valid(p[7])||p[7]>=20000).map(p=>{
@@ -66,11 +68,11 @@ export function signalScale(s,values,kind='charge',fast=false,previous=null){
     let peak=0;for(const value of known)peak=Math.max(peak,value);
     const configured=chartSettings.energyWh;
     const observed=Math.max(peak,previous?.observed?previous.full:0);
-    const full=valid(configured)&&configured>0?(chartSettings.capacityAuto?Math.max(configured,observed):configured):observed;
+    const full=valid(configured)?Math.max(configured,observed):observed;
     return{base:0,full:full||1,min:0,observed:full>0,label:full>0?`${full.toFixed(valid(configured)&&configured>0?2:full<2?2:1)} Wh`:'暂无数据'};
   }
   if(s.key==='rm'){
-    const configured=chartSettings.capacityAh*1000,full=chartSettings.capacityAuto?Math.max(configured,previous?.full??0,...known):configured;
+    const configured=chartSettings.capacityAh*1000,full=Math.max(configured,previous?.full??0,...known);
     return{base:0,full,min:0,label:`${(full/1000).toFixed(2)} Ah`};
   }
   if(s.key==='voltage'){
@@ -79,27 +81,19 @@ export function signalScale(s,values,kind='charge',fast=false,previous=null){
     const peak=Math.max(...known);if(reachesHeadroom(peak,base,full))full=Math.ceil(peak/10)*10;
     return{base,full,min:base,label:`${(base/1000).toFixed(2)}–${(full/1000).toFixed(2)} V`};
   }
-  if(kind==='discharge'&&s.key==='power'){
-    let peak=0,min=fast?(previous?.min??0):0;
-    for(const value of known){if(fast){peak=Math.max(peak,Math.abs(value));min=Math.min(min,value);}else if(value>=0&&value<=15)peak=Math.max(peak,value);}
-    const observed=peak>0||!!previous?.observed;
-    const full=Math.max(previous?.observed?previous.full:0,peak)||1;
-    return{base:0,full,min,observed,label:observed?`${full.toFixed(2)} W`:'暂无峰值'};
-  }
   if(s.key==='current'||s.key==='power'){
-    const step=s.key==='current'?2000:10;
+    const current=s.key==='current',ordinaryPower=!current&&kind==='discharge'&&!fast;
+    const levels=current?currentLevels:powerLevels,unit=current?1000:1;
     let peak=0,min=previous?.min??0;
     for(const value of known){
+      if(ordinaryPower&&(value<0||value>15))continue;
       peak=Math.max(peak,Math.abs(value));min=Math.min(min,value);
     }
     const observed=peak>0||!!previous?.observed;
-    // The first render must honor the same 110% headroom as a live update.
-    let rounded=Math.max(step,Math.floor(peak/(step*1.1))*step);
-    while(reachesHeadroom(peak,0,rounded))rounded+=step;
-    let full=previous?.full>0?previous.full:rounded;
-    if(reachesHeadroom(peak,0,full))full=rounded;
-    const label=s.key==='current'?`${sampleText(full/1000)} A`:`${sampleText(full)} W`;
-    return{base:0,full,min,observed,label};
+    if(ordinaryPower&&!observed)return{base:0,full:1,min:0,observed,label:'暂无峰值'};
+    const tier=levels.find(level=>!reachesHeadroom(peak,0,level))??Math.ceil(peak/unit)*unit;
+    const full=Math.max(tier,previous?.full??0);
+    return{base:0,full,min,observed,label:`${sampleText(full/unit)} ${current?'A':'W'}`};
   }
   if(s.key==='temp'){
     const base=Math.floor(Math.min(chartSettings.tempMin,previous?.base??Infinity,...known));
@@ -444,11 +438,12 @@ export class Chart{
   showInspection(row,y){
     this.marker=row[0];this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
-    const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~(unclassifiedCells|dischargeRebase)?' · 数据异常':'';
+    const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~(unclassifiedCells|dischargeRebase|gameEnergyDisabled)?' · 数据异常':'';
     this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${quality}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
       this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
+        if(s.unit==='FPS')return`${s.name}  ${recordedFpsText(value)??'缺失'} ${s.unit}`;
         if(this.kind==='discharge'&&this.fast&&(s.key==='current'||s.key==='power'))return`${s.name}  ${gameSampleText(value,s.key,s.key==='current'?0:2)} ${s.unit}`;
         return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+

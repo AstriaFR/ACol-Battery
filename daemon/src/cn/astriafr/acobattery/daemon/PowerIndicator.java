@@ -60,6 +60,11 @@ final class PowerIndicator implements AutoCloseable {
     private SurfaceControl layer;
     private Surface surface;
     private int surfaceWidth,surfaceHeight;
+    private boolean displayChanged=true,drawnAtBottom;
+    private int layerStack;
+    private float layerX,layerY,drawnScaleX,drawnScaleY;
+    private MonitorAppearance drawnAppearance;
+    private String drawnContent;
     private final DisplayManager displays;
     private final DisplayManager.DisplayListener displayListener;
 
@@ -95,7 +100,10 @@ final class PowerIndicator implements AutoCloseable {
         displayListener=new DisplayManager.DisplayListener(){
             public void onDisplayAdded(int id){}
             public void onDisplayRemoved(int id){}
-            public void onDisplayChanged(int id){synchronized(PowerIndicator.this){if(id==Display.DEFAULT_DISPLAY&&state.enabled)queue();}}
+            public void onDisplayChanged(int id){
+                if(id!=Display.DEFAULT_DISPLAY)return;
+                synchronized(PowerIndicator.this){displayChanged=true;if(state.enabled)queue();}
+            }
         };
         try{displays.registerDisplayListener(displayListener,ui);}catch(Exception failure){FallbackDiagnostics.record("功耗悬浮层屏幕监听",failure);}
         queue();
@@ -109,9 +117,16 @@ final class PowerIndicator implements AutoCloseable {
         if(state.enabled)queue();
     }
     private synchronized void queue(){
+        queue(0);
+    }
+    private synchronized void queueReading(){
+        // Let a performance sample, its FPS result and a battery sample share a redraw.
+        queue(16);
+    }
+    private void queue(long delay){
         generation++;
         if(queued)return;
-        queued=true;ui.post(this::applyWindow);
+        queued=true;ui.postDelayed(this::applyWindow,delay);
     }
     private void clearLegacy(){
         if(legacyCleared)return;
@@ -125,6 +140,7 @@ final class PowerIndicator implements AutoCloseable {
         }catch(Exception e){FallbackDiagnostics.record("清理旧功耗通知",FrameworkWatch.cause(e));}
     }
     private void removeLayer()throws Exception{
+        drawnContent=null;drawnAppearance=null;
         if(surface!=null){surface.release();surface=null;}
         if(layer!=null){try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
             SurfaceControl.Transaction.class.getMethod("remove",SurfaceControl.class).invoke(tx,layer);tx.apply();
@@ -173,26 +189,87 @@ final class PowerIndicator implements AutoCloseable {
         int height=Math.max(1,Math.round(HEIGHT*scaleY));
         boolean atBottom=appearance.landscapeBottom&&metrics.widthPixels>metrics.heightPixels;
         boolean newLayer=layer==null||width!=surfaceWidth||height!=surfaceHeight;
+        float x=(metrics.widthPixels-width)/2f,y=atBottom?Math.max(0,metrics.heightPixels-height):0;
+        int stack=layerStack;
+        if(newLayer||displayChanged){
+            stack=(Integer)Display.class.getMethod("getLayerStack").invoke(display);
+            displayChanged=false;
+        }
+        boolean positionChanged=newLayer||stack!=layerStack||x!=layerX||y!=layerY;
         if(newLayer){
             removeLayer();surfaceWidth=width;surfaceHeight=height;
             layer=new SurfaceControl.Builder().setName(LAYER_NAME).setBufferSize(width,height).setFormat(PixelFormat.TRANSLUCENT).setHidden(true).build();
             surface=Surface.class.getConstructor(SurfaceControl.class).newInstance(layer);
         }
-        Canvas canvas=surface.lockCanvas(null);
-        try{
-            canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
-            canvas.save();canvas.scale(scaleX,scaleY);
-            drawMonitor(canvas,contentWidth,cell,performance,battery,appearance,atBottom);
-            canvas.restore();
-        }finally{surface.unlockCanvasAndPost(canvas);}
-        try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
-            int stack=(Integer)Display.class.getMethod("getLayerStack").invoke(display);
-            SurfaceControl.Transaction.class.getMethod("setLayerStack",SurfaceControl.class,int.class).invoke(tx,layer,stack);
-            tx.setLayer(layer,Integer.MAX_VALUE-100).setPosition(layer,(metrics.widthPixels-width)/2f,
-                atBottom?Math.max(0,metrics.heightPixels-height):0);
-            if(newLayer)configureTouchPassthrough(tx,display.getDisplayId());
-            SurfaceControl.Transaction.class.getMethod("show",SurfaceControl.class).invoke(tx,layer);tx.apply();
+        PerformanceCollector.MonitorSample sample=performance;
+        BatteryValues reading=battery;
+        double fps=sample==null?Double.NaN:sample.fps;
+        boolean blackText=appearance.followSystem?!systemDark:appearance.blackText;
+        foreground=blackText?Color.BLACK:FOREGROUND;
+        String content=visibleContent(appearance,sample,reading,fps,scaleY,blackText);
+        if(drawnAppearance!=appearance||!content.equals(drawnContent)||scaleX!=drawnScaleX||scaleY!=drawnScaleY||atBottom!=drawnAtBottom){
+            Canvas canvas=surface.lockCanvas(null);
+            try{
+                canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
+                canvas.save();canvas.scale(scaleX,scaleY);
+                drawMonitor(canvas,contentWidth,cell,sample,reading,appearance,atBottom,blackText,fps);
+                canvas.restore();
+            }finally{surface.unlockCanvasAndPost(canvas);}
+            drawnAppearance=appearance;drawnContent=content;drawnScaleX=scaleX;drawnScaleY=scaleY;drawnAtBottom=atBottom;
         }
+        if(positionChanged)try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
+            if(newLayer||stack!=layerStack)SurfaceControl.Transaction.class.getMethod("setLayerStack",SurfaceControl.class,int.class).invoke(tx,layer,stack);
+            tx.setPosition(layer,x,y);
+            if(newLayer){
+                tx.setLayer(layer,Integer.MAX_VALUE-100);
+                configureTouchPassthrough(tx,display.getDisplayId());
+                SurfaceControl.Transaction.class.getMethod("show",SurfaceControl.class).invoke(tx,layer);
+            }
+            tx.apply();layerStack=stack;layerX=x;layerY=y;
+        }
+    }
+
+    private String visibleContent(MonitorAppearance appearance,PerformanceCollector.MonitorSample sample,BatteryValues reading,
+            double fps,float scaleY,boolean blackText){
+        StringBuilder content=new StringBuilder(100).append(blackText).append('|');
+        if(appearance.shows(FPS))content.append(PowerDisplayState.fps(fps)).append('|');
+        if(appearance.shows(CPU_FREQUENCY))content.append(PowerDisplayState.frequency(sample==null?Double.NaN:sample.cpuMHz)).append('|');
+        if(appearance.shows(CPU_CHART)){
+            if(sample!=null)for(int i=0;i<sample.cpuUsage.length;i++){
+                double usage=sample.online[i]?sample.cpuUsage[i]:Double.NaN;
+                appendBar(content,usage,cpuUsageColor(usage,appearance.cpu),scaleY);
+            }
+            content.append('|');
+        }
+        if(appearance.shows(GPU_FREQUENCY))content.append(PowerDisplayState.frequency(sample==null?Double.NaN:sample.gpuMHz)).append('|');
+        if(appearance.shows(GPU_CHART)){
+            double usage=sample==null?Double.NaN:sample.gpuUsage;
+            appendBar(content,usage,usage>=90?YELLOW:usageBlue(),scaleY);
+        }
+        if(appearance.shows(BATTERY)){
+            if(reading!=null&&reading.level>0)content.append(reading.level).append('/').append(reading.charging);
+            content.append('|');
+            if(appearance.shows(POWER)){
+                double watts=reading==null?Double.NaN:reading.watts;
+                appendField(content,PowerDisplayState.power(watts),watts,true,warningColor(-watts,appearance.power));
+            }
+            if(appearance.shows(TEMPERATURE)){
+                double temperature=reading==null?Double.NaN:reading.temperature;
+                appendField(content,PowerDisplayState.temperature(temperature),temperature,false,warningColor(temperature,appearance.temperature));
+            }
+        }
+        return content.toString();
+    }
+
+    private static void appendField(StringBuilder content,String text,double reading,boolean plus,int color){
+        if(!text.equals("—"))content.append(PowerDisplayState.sign(reading,plus));
+        content.append(text).append('/').append(color).append('|');
+    }
+
+    private static void appendBar(StringBuilder content,double usage,int color,float scaleY){
+        float height=barHeight(usage);
+        if(height>0)content.append(Math.round(height*scaleY)).append('/').append(color);
+        content.append(',');
     }
 
     private static float processorWidth(MonitorAppearance appearance,int chart,int frequency,float chartWidth,float cell){
@@ -201,9 +278,7 @@ final class PowerIndicator implements AutoCloseable {
     }
 
     private void drawMonitor(Canvas canvas,float width,float cell,PerformanceCollector.MonitorSample sample,BatteryValues battery,
-            MonitorAppearance appearance,boolean atBottom){
-        boolean blackText=appearance.followSystem?!systemDark:appearance.blackText;
-        foreground=blackText?Color.BLACK:FOREGROUND;
+            MonitorAppearance appearance,boolean atBottom,boolean blackText,double fps){
         int opacity=blackText?appearance.blackOpacity:appearance.whiteOpacity;
         int alpha=Math.round(opacity*255/100f);
         paint.setStyle(Paint.Style.FILL);
@@ -219,8 +294,7 @@ final class PowerIndicator implements AutoCloseable {
         float baseline=(HEIGHT+MonitorGlyphs.CAP_HEIGHT)/2;
         float x=PADDING;
         if(appearance.shows(FPS)){
-            String fps=PowerDisplayState.fps(sample==null?Double.NaN:sample.fps);
-            x=drawField(canvas,fps,FPS_CELLS,cell,x,baseline,blackText?DARK_BLUE:FPS_COLOR)+GROUP_GAP;
+            x=drawField(canvas,PowerDisplayState.fps(fps),FPS_CELLS,cell,x,baseline,blackText?DARK_BLUE:FPS_COLOR)+GROUP_GAP;
         }
         if(appearance.shows(CPU_CHART|CPU_FREQUENCY))x=drawProcessor(canvas,x,cell,baseline,sample,appearance,false)+GROUP_GAP;
         if(appearance.shows(GPU_CHART|GPU_FREQUENCY))x=drawProcessor(canvas,x,cell,baseline,sample,appearance,true)+GROUP_GAP;
@@ -304,21 +378,26 @@ final class PowerIndicator implements AutoCloseable {
         for(int i=0;i<sample.cpuUsage.length;i++){
             float left=x+i*step,right=left+step-gap;
             double usage=sample.online[i]?sample.cpuUsage[i]:Double.NaN;
-            MonitorAppearance.Thresholds thresholds=appearance.cpu;
-            int color=usage>=thresholds.red?RED:usage>=thresholds.orange?ORANGE:usage>=thresholds.yellow?YELLOW:usageBlue();
-            drawUsageBar(canvas,left,right,usage,color);
+            drawUsageBar(canvas,left,right,usage,cpuUsageColor(usage,appearance.cpu));
         }
     }
 
+    private int cpuUsageColor(double usage,MonitorAppearance.Thresholds thresholds){
+        return usage>=thresholds.red?RED:usage>=thresholds.orange?ORANGE:usage>=thresholds.yellow?YELLOW:usageBlue();
+    }
     private int usageBlue(){return foreground==Color.BLACK?DARK_BLUE:USAGE_BLUE;}
+
+    private static float barHeight(double usage){
+        return usage>0&&usage<=100?Math.max(.5f,BAR_HEIGHT*(float)(usage/100)):0;
+    }
 
     private void drawUsageBar(Canvas canvas,float left,float right,double usage,int color){
         float bottom=(HEIGHT+BAR_HEIGHT)/2;
         paint.setColor(foreground==Color.BLACK?Color.argb(48,0,0,0):USAGE_TRACK);
         canvas.drawRect(left,bottom-BAR_HEIGHT,right,bottom,paint);
-        if(!(usage>0&&usage<=100))return;
+        float height=barHeight(usage);
+        if(height==0)return;
         paint.setColor(color);
-        float height=Math.max(.5f,BAR_HEIGHT*(float)(usage/100));
         canvas.drawRect(left,bottom-height,right,bottom,paint);
     }
 
@@ -432,13 +511,19 @@ final class PowerIndicator implements AutoCloseable {
         return Display.STATE_UNKNOWN;
     }
     private void resetSamples(){performance=null;battery=null;state.refresh();}
+    synchronized void fpsSourceChanged(){
+        state.refreshPerformance();
+        updatePerformance(null);
+    }
     PerformanceCollector.MonitorSample performance(){return performance;}
-    synchronized void updatePerformance(PerformanceCollector.MonitorSample sample){performance=sample;queue();}
+    synchronized void updatePerformance(PerformanceCollector.MonitorSample sample){performance=sample;queueReading();}
     synchronized void updateFps(PerformanceCollector.MonitorSample sample,double fps){
         if(performance!=sample)return;
-        sample.fps=fps;queue();
+        String previous=PowerDisplayState.fps(sample.fps);
+        sample.fps=fps;
+        if(!previous.equals(PowerDisplayState.fps(fps)))queueReading();
     }
-    void updateBattery(BatteryValues reading){battery=reading;queue();}
+    synchronized void updateBattery(BatteryValues reading){battery=reading;queueReading();}
     private void failed(Throwable failure){
         Throwable cause=FrameworkWatch.cause(failure);
         error=cause instanceof SecurityException||cause instanceof WindowManager.BadTokenException

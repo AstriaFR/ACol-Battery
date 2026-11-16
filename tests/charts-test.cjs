@@ -5,7 +5,7 @@ const{runCases}=require('./helpers.cjs');
 async function scales(){
 globalThis.document={documentElement:{dataset:{}}};
 const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMinimum,gameSampleText}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
-const {remainingMeanVoltage}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/estimate.js')).href);
+const {remainingMeanVoltage,gameEnergyDisabled}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/estimate.js')).href);
  const signedScale={base:0,full:20,min:-15};
  for(const kind of ['charge','discharge']){
   assert.equal(plotAxisMinimum(kind,[signedScale],false),0);
@@ -28,44 +28,34 @@ const {remainingMeanVoltage}=await import(pathToFileURL(path.join(__dirname,'../
  ];
  const gameEnergy=plotPoints(chargingRows,'discharge',2,true);
  assert.equal(gameEnergy[0][11],null);assert.equal(gameEnergy[1][11],null);assert.ok(gameEnergy[2][11]>0);
+ const masked=[...chargingRows[2]];masked[6]=gameEnergyDisabled;
+ assert.equal(plotPoints([masked],'discharge',2,true)[0][11],null);
  assert.equal(chargingRows[2][11],null,'derived energy never changes stored samples');
  const observedEnergy=energyRows.map(p=>p[11]);
  setChartSettings({energyWh:null});assert.equal(signalScale(energy,observedEnergy,'discharge').full,Math.max(...observedEnergy));
  setChartSettings({energyWh:25.34});assert.equal(signalScale(energy,[18.16],'discharge').full,25.34);
- setChartSettings({energyWh:15,capacityAuto:true});let energyScale=signalScale(energy,[18.16],'discharge');assert.equal(energyScale.full,18.16);assert.equal(signalScale(energy,[10],'discharge',false,energyScale).full,18.16);
- setChartSettings({energyWh:15,capacityAuto:false});assert.equal(signalScale(energy,[18.16],'discharge',false,energyScale).full,15);
- setChartSettings({energyWh:null,capacityAuto:false});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
+ setChartSettings({energyWh:15,capacityAh:5,capacityAuto:false});
+ const energyScale=signalScale(energy,[18.16],'discharge');assert.equal(energyScale.full,18.16);assert.equal(signalScale(energy,[10],'discharge',false,energyScale).full,18.16);
+ assert.equal(signalScale(series.find(s=>s.key==='rm'),[5230],'discharge').full,5230);
+ setChartSettings({energyWh:null});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
  setChartSettings({energyWh:0});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
  setChartSettings({});
  const current=series.find(s=>s.key==='current'),power=series.find(s=>s.key==='power');
  const next=(s,values,previous,kind='charge',fast=false)=>signalScale(s,values,kind,fast,previous);
- let scale=next(current,[0,10000]);assert.equal(scale.full,10000);assert.equal(scale.label,'10 A');
- for(const peak of [10000,10001,10999.9]){scale=next(current,[0,peak],scale);assert.equal(scale.full,10000);}
- scale=next(current,[0,11000],scale);assert.equal(scale.full,12000);assert.equal(scale.label,'12 A');
- scale=next(current,[13199.9],scale);assert.equal(scale.full,12000);
- scale=next(current,[13200],scale);assert.equal(scale.full,14000);
- scale=next(current,[500],scale);assert.equal(scale.full,14000); // The record range never shrinks.
- scale=next(current,[27500],scale);assert.equal(scale.full,26000); // Select the first tier whose 110% contains the peak.
- for(const peak of [10000,10190,10999.9])assert.equal(next(current,[peak]).full,10000);
- assert.equal(next(current,[11000]).full,12000);
- assert.equal(next(current,[13199.9]).full,12000);
- assert.equal(next(current,[13200]).full,14000);
- const negative=next(current,[-11000],next(current,[-10000]));
- assert.equal(negative.full,12000);assert.equal(negative.min,-11000);
- for(const [kind,fast]of [['charge',false]]){
-  let s=next(power,[0,50],null,kind,fast);assert.equal(s.full,50);assert.equal(s.label,'50 W');
-  for(const peak of [50,50.1,54.999]){s=next(power,[peak],s,kind,fast);assert.equal(s.full,50);}
-  s=next(power,[55],s,kind,fast);assert.equal(s.full,60);assert.equal(s.label,'60 W');
-  s=next(power,[65.999],s,kind,fast);assert.equal(s.full,60);
-  s=next(power,[66],s,kind,fast);assert.equal(s.full,70);
-  s=next(power,[129],s,kind,fast);assert.equal(s.full,120);
-  s=next(power,[1],s,kind,fast);assert.equal(s.full,120);
+ let scale;
+ for(const [peak,limit] of [[1099.9,1000],[1100,2000],[2200,5000],[5500,10000],[11000,20000],[27500,28000]]){
+  scale=next(current,[peak],scale);assert.equal(scale.full,limit);assert.equal(next(current,[peak]).full,limit);
  }
- assert.equal(next(power,[42.65118]).full,40); // Actual peak from charge record 111.
- assert.equal(next(power,[43.9999]).full,40);
- assert.equal(next(power,[44]).full,50);
- assert.equal(next(power,[54.9999]).full,50);
- assert.equal(next(power,[55]).full,60);
+ assert.equal(next(current,[500],scale).full,scale.full);
+ const negative=next(current,[-11000],next(current,[-10000]));
+ assert.equal(negative.full,20000);assert.equal(negative.min,-11000);
+ for(const [kind,fast]of [['charge',false],['discharge',true]]){
+  let s;
+  for(const [peak,limit] of [[10.99,10],[11,20],[22,50],[54.999,50],[55,100],[109.999,100],[110,200],[220.1,221]]){
+   s=next(power,[peak],s,kind,fast);assert.equal(s.full,limit);assert.equal(s.label,`${limit} W`);
+  }
+  assert.equal(next(power,[1],s,kind,fast).full,s.full);
+ }
  // Opening a complete record and growing its peak live must select identical tiers.
  for(const [signal,increment,count]of [[current,137,500],[power,.731,400]]){
   let live=null;
@@ -74,24 +64,13 @@ const {remainingMeanVoltage}=await import(pathToFileURL(path.join(__dirname,'../
    assert.equal(live.full,next(signal,[peak]).full,signal.key+' first/live mismatch at '+peak);
   }
  }
- let ordinary=next(power,[6.19],null,'discharge');assert.equal(ordinary.full,6.19);
- ordinary=next(power,[6.2],ordinary,'discharge');assert.equal(ordinary.full,6.2);
- ordinary=next(power,[6.8089],ordinary,'discharge');assert.equal(ordinary.full,6.8089);
- ordinary=next(power,[6.809],ordinary,'discharge');assert.equal(ordinary.full,6.809);
- ordinary=next(power,[20,-1],ordinary,'discharge');assert.equal(ordinary.full,6.809);assert.equal(ordinary.min,0);
+ let ordinary=next(power,[6.19],null,'discharge');assert.equal(ordinary.full,10);
+ ordinary=next(power,[11],ordinary,'discharge');assert.equal(ordinary.full,20);
+ ordinary=next(power,[100,-1],ordinary,'discharge');assert.equal(ordinary.full,20);assert.equal(ordinary.min,0);
  const absent=next(power,[null,NaN,-1,16],null,'discharge');assert.equal(absent.full,1);assert.equal(absent.label,'暂无峰值');
- let game=next(power,[50],null,'discharge',true);assert.equal(game.full,50);
- game=next(power,[50.01],game,'discharge',true);assert.equal(game.full,50.01);
- game=next(power,[54.999],game,'discharge',true);assert.equal(game.full,54.999);
- game=next(power,[55],game,'discharge',true);assert.equal(game.full,55);
- game=next(power,[60.499],game,'discharge',true);assert.equal(game.full,60.499);
- game=next(power,[60.5],game,'discharge',true);assert.equal(game.full,60.5);
- game=next(power,[1],game,'discharge',true);assert.equal(game.full,60.5);
- const chargingGame=next(power,[-35,4],null,'discharge',true);assert.equal(chargingGame.full,35);assert.equal(chargingGame.min,-35);
- assert.equal(next(current,[]).full,2000);
- assert.equal(next(power,[]).full,10);
+ const chargingGame=next(power,[-35,4],null,'discharge',true);assert.equal(chargingGame.full,50);assert.equal(chargingGame.min,-35);
  // Current range must use the displayed single-/dual-cell current basis.
- for(const [cells,expected]of [[1,6000],[2,10000]]){
+ for(const [cells,expected]of [[1,5000],[2,10000]]){
   const fake={cellCount:cells,kind:'charge',fast:false,ranges:{current:[0,5000]},points:[],scaleCache:new Map()};
   const actual=Chart.prototype.scaleFor.call(fake,current);assert.equal(actual.full,expected);
  }
@@ -120,12 +99,12 @@ const {remainingMeanVoltage}=await import(pathToFileURL(path.join(__dirname,'../
   assert.equal(actual.full,signalScale(current,[-5000*factor,1000*factor],'charge').full);
  }
  assert.equal(signalScale(current,[-10999.9],'discharge',true).full,10000);
- assert.equal(signalScale(current,[-11000],'discharge',true).full,12000);
+ assert.equal(signalScale(current,[-11000],'discharge',true).full,20000);
  const shortIntervals=[null,9999,10000,19999,20000].map((dt,i)=>[i,5000,50,null,4000,2,0,dt]);
  assert.deepEqual(plotPoints(shortIntervals,'discharge',2,false).map(row=>row[0]),[0,4]);
  assert.equal(plotPoints(shortIntervals,'discharge',2,true).length,5);
  assert.equal(plotPoints(shortIntervals,'charge',2,false).length,5);
- setChartSettings({capacityAh:5.6,capacityAuto:true});
+ setChartSettings({capacityAh:5.6});
  const capacity=series.find(s=>s.key==='rm');
  const capacityStart=next(capacity,[5600]);assert.equal(next(capacity,[5601],capacityStart).full,5601);
 }
@@ -337,6 +316,20 @@ async function performanceMemory(){
  globalThis.localStorage={getItem:()=>JSON.stringify(['ram'])};PerformancePanel.prototype.configure.call(fake,{...meta,memoryIndex:13,memoryTotalGB:11.665641472});assert.ok(fake.chart.enabled.has('ram'));
  PerformancePanel.prototype.configure.call(fake,{...meta,memoryIndex:13,memoryTotalGB:null});assert.ok(!fake.chart.metrics.some(s=>s.key==='ram'),'invalid total does not create a fake scale');
 }
+
+async function performanceMinimumFps(){
+ globalThis.document={documentElement:{dataset:{}},getElementById:()=>({})};globalThis.localStorage={getItem:()=>null};
+ const{PerformancePanel,PerformanceChart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/performance-panel.js')).href);
+ const chart=Object.assign(Object.create(PerformanceChart.prototype),{maximum:new Map(),frequencyRanges:new Map()});
+ const oldest=[0,240],latest=[1500,222.3,...Array(8).fill(null),54.2];
+ const panel={points:[oldest,latest],chart,legend(){}};
+ PerformancePanel.prototype.configure.call(panel,{});assert.ok(!chart.metrics.some(s=>s.key==='minimumFps'));
+ PerformancePanel.prototype.configure.call(panel,{minimumFpsIndex:10});
+ const fps=chart.metrics.find(s=>s.key==='fps'),minimum=chart.metrics.find(s=>s.key==='minimumFps');
+ assert.equal(chart.maximum.get(minimum.key),latest[minimum.index]);
+ assert.equal(chart.scaleFor(fps).full,chart.scaleFor(minimum).full);
+ assert.equal(oldest[minimum.index],undefined);
+}
 async function intervalApplications(){
  globalThis.document={hidden:false};const{IntervalAppDetails}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/interval-app-details.js')).href);
  let record={id:3,start_wall:1000,start_elapsed:0,end_elapsed:240000,kind:'discharge',fast_seconds:0},calls=0;
@@ -411,4 +404,4 @@ async function performanceEndWithoutSample(){
  assert.equal(panel.timer,undefined,'polling does not continue after the end');
 }
 
-runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,intervalApplications,deletedDailyUsage,incompleteUsageAverage,performanceEndWithoutSample]).then(()=>console.log('Charts: scales, sampling details, active and ended charts, and daily/period usage passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,performanceMinimumFps,intervalApplications,deletedDailyUsage,incompleteUsageAverage,performanceEndWithoutSample]).then(()=>console.log('Charts: scales, sampling details, active and ended charts, and daily/period usage passed')).catch(error=>{console.error(error);process.exitCode=1;});

@@ -163,33 +163,39 @@ final class BatteryService {
         return new MonitorTemperature(Core.batteryTemperature(temp)?temp:Double.NaN,"Charging".equalsIgnoreCase(status));
     }
     static Core.Reading readGauge(Context ctx,int cells,boolean withTemperature) {
+        return readGauge(ctx,cells,true,true,withTemperature);
+    }
+    private static Core.Reading readGauge(Context ctx,int cells,boolean withVoltage,boolean withCurrent,boolean withTemperature) {
         Core.Reading r=new Core.Reading();r.elapsed=SystemClock.elapsedRealtime();r.wall=System.currentTimeMillis();
         r.cellCount=cells;r.onlineKnown=false;
+        if(!withVoltage&&!withCurrent&&!withTemperature)return r;
         // Reading bcc_parms requests a new ADSP gauge response. GET_BATT_VOL alone
         // can return a stale BCC cache on some drivers.
         Core.applyBcc(r,read(BAT+"bcc_parms"));
+        if(!withVoltage)r.vmin=r.vmax=r.cell1=r.cell2=Double.NaN;
+        if(!withCurrent)r.current=Double.NaN;
         if(!withTemperature)r.temp=Double.NaN;
-        if(!Core.finite(r.displayVoltage())||!Core.finite(r.current)||withTemperature&&!Core.finite(r.temp)){
+        if(withVoltage&&!Core.finite(r.displayVoltage())||withCurrent&&!Core.finite(r.current)||withTemperature&&!Core.finite(r.temp)){
             double voltage=Double.NaN,current=Double.NaN,temp=Double.NaN;
             if(ctx!=null){
                 try {
                     Intent battery=ctx.registerReceiver(null,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
                     if(battery!=null){
-                        voltage=battery.getIntExtra(BatteryManager.EXTRA_VOLTAGE,-1);
+                        if(withVoltage)voltage=battery.getIntExtra(BatteryManager.EXTRA_VOLTAGE,-1);
                         int rawTemp=battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE,Integer.MIN_VALUE);
                         if(withTemperature&&rawTemp!=Integer.MIN_VALUE)temp=rawTemp/10.0;
                     }
                 }catch(Exception ignored){}
-                if(!Core.finite(r.current)){
+                if(withCurrent&&!Core.finite(r.current)){
                     long raw=batteryProperty(ctx,BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
                     if(raw!=Long.MIN_VALUE)current=raw;
                 }
             }
-            applyGaugeFallback(r,voltage,current,temp,withTemperature,
+            applyGaugeFallback(r,voltage,current,temp,withVoltage,withCurrent,withTemperature,
                 node->read(PS+"battery/"+node),BatteryService::alternateReading);
             List<String> missing=new ArrayList<>(3);
-            if(!Core.finite(r.displayVoltage()))missing.add("电压");
-            if(!Core.finite(r.current))missing.add("电流");
+            if(withVoltage&&!Core.finite(r.displayVoltage()))missing.add("电压");
+            if(withCurrent&&!Core.finite(r.current))missing.add("电流");
             if(withTemperature&&!Core.finite(r.temp))missing.add("温度");
             if(!missing.isEmpty())FallbackDiagnostics.record("电池读数缺失",String.join("、",missing)+"在可用接口中均未取得有效读数。");
         }
@@ -197,11 +203,15 @@ final class BatteryService {
     }
     static void applyGaugeFallback(Core.Reading r,double voltage,double current,double temp,boolean withTemperature,
             Function<String,String> fixed,Function<String,String> alternate){
-        if(!Core.finite(r.displayVoltage())&&!Core.finite(Core.systemVoltage(r.cellCount,voltage))){
+        applyGaugeFallback(r,voltage,current,temp,true,true,withTemperature,fixed,alternate);
+    }
+    private static void applyGaugeFallback(Core.Reading r,double voltage,double current,double temp,boolean withVoltage,boolean withCurrent,boolean withTemperature,
+            Function<String,String> fixed,Function<String,String> alternate){
+        if(withVoltage&&!Core.finite(r.displayVoltage())&&!Core.finite(Core.systemVoltage(r.cellCount,voltage))){
             voltage=num(fixed.apply("voltage_now"))/1000;
             if(!Core.finite(Core.systemVoltage(r.cellCount,voltage)))voltage=num(alternate.apply("voltage_now"))/1000;
         }
-        boolean useCurrentNode=!Core.finite(r.current)&&!Core.validSystemCurrent(current);
+        boolean useCurrentNode=withCurrent&&!Core.finite(r.current)&&!Core.validSystemCurrent(current);
         if(useCurrentNode){
             current=num(fixed.apply("current_now"));
             if(!Core.validSystemCurrent(current))current=num(alternate.apply("current_now"));
@@ -212,6 +222,22 @@ final class BatteryService {
         }
         Core.applySystem(r,voltage,current,withTemperature?temp:Double.NaN);
         if(useCurrentNode&&Core.finite(r.current))r.currentSource="current_now";
+    }
+    static Core.Reading readGameHardware(Context ctx,int cells,int metrics){
+        boolean voltage=(metrics&(GameMetrics.VOLTAGE|GameMetrics.WATTS))!=0;
+        boolean current=(metrics&(GameMetrics.CURRENT|GameMetrics.WATTS))!=0;
+        boolean temp=(metrics&GameMetrics.BATTERY_TEMP)!=0;
+        boolean capacity=(metrics&GameMetrics.CAPACITY)!=0,level=(metrics&GameMetrics.LEVEL)!=0;
+        Core.Reading r=readGauge(ctx,cells,voltage,current,temp);
+        r.gamePartial=true;
+        r.gameAccounting=(metrics&GameMetrics.ACCOUNTING)==GameMetrics.ACCOUNTING;
+        if(capacity)readRemainingCapacity(ctx,r);
+        if(level)readPercentage(ctx,r);
+        PowerInputs.Result power=online(ctx);r.online=power.online;r.onlineKnown=power.known;r.onlineSource=power.source;
+        if(capacity&&!Core.finite(r.rm)||level&&!Core.validPercentage(r.pct)
+            ||voltage&&!Core.finite(r.displayVoltage())||current&&!Core.finite(r.current)||temp&&!Core.finite(r.temp))
+            r.error="部分电池读数缺失";
+        return r;
     }
     static void readRemainingCapacity(Context ctx,Core.Reading r) {
         r.rm=num(read(BAT+"battery_rm"));r.rmSource="";

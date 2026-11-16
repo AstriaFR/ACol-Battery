@@ -14,6 +14,9 @@ public final class PowerDisplayStateTest {
         check(!display.performanceDue(1699)&&display.performanceDue(1700));
         check(!display.batteryDue(10999)&&display.batteryDue(11000));
         check(display.deadline(false)==Long.MAX_VALUE);
+        check(display.deadline(true,false,true)==11000);
+        display.refreshPerformance();
+        check(display.performanceDue(1001)&&!display.batteryDue(1001));
         display.refresh();
         check(display.performanceDue(12000)&&display.batteryDue(12000));
         check(PowerDisplayState.fps(0).equals("0"));

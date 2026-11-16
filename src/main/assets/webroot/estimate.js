@@ -38,6 +38,7 @@ export function remainingEstimate(reading,averagePower,highDesignCapacity){
     averagePower:finite(averagePower)&&averagePower>0?averagePower:null,wall:reading.wall};
 }
 export const unclassifiedCells=32;
+export const gameEnergyDisabled=256;
 export function remainingTime(minutes,wh){
   if(minutes===null||!Number.isSafeInteger(minutes)||minutes<0)return'—';
   if(minutes===0)return wh>0?'少于 1 分钟':'0 分钟';

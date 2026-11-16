@@ -1,4 +1,5 @@
-import{remainingEstimate,unclassifiedCells}from'./estimate.js?v=acol-2.2s';
+import{remainingEstimate,unclassifiedCells,gameEnergyDisabled}from'./estimate.js?v=acol-2.2s';
+import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 export function csvCell(value){
   if(value===null||value===undefined||typeof value==='number'&&!finite(value))return'';
@@ -44,8 +45,9 @@ export async function* recordCsv(api,id){
     const record=data.record,fast=record.fast_seconds>0;
     for(const p of data.points){
       const cellCount=(p[6]&unclassifiedCells)?0:record.cell_count;
-      const estimate=record.kind==='discharge'&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4],cellCount},null,data.highDesignCapacity):null;
-      yield[exportTime(finite(p[13])?p[13]:record.start_wall+p[0]),p[0],p[1],p[2],finite(p[3])?p[3]*(cellCount===2?2:1):null,finite(p[4])?p[4]/1000:null,p[5],finite(p[8])?p[8]/1000:null,finite(p[9])?p[9]/1000:null,p[10],estimate?Number(estimate.whText):null,p[12],p[14],p[15],p[7],p[6]];
+      const energyDisabled=fast&&(p[6]&gameEnergyDisabled);
+      const estimate=record.kind==='discharge'&&!energyDisabled&&!(fast&&p[12]===1)?remainingEstimate({rm:p[1],voltage:p[4],cellCount},null,data.highDesignCapacity):null;
+      yield[exportTime(finite(p[13])?p[13]:record.start_wall+p[0]),p[0],p[1],p[2],finite(p[3])?p[3]*(cellCount===2?2:1):null,finite(p[4])?p[4]/1000:null,p[5],finite(p[8])?p[8]/1000:null,finite(p[9])?p[9]/1000:null,p[10],estimate?Number(estimate.whText):null,p[12],p[14],p[15],p[7],energyDisabled?p[6]&~gameEnergyDisabled:p[6]];
     }
     if(!finite(data.nextAfter))break;
     const next=data.nextAfter+1;if(next<=cursor)throw Error('采样分页未前进，已停止导出。');cursor=next;
@@ -55,14 +57,16 @@ export async function* performanceCsv(api,id){
   if(!id)throw Error('请先打开游戏记录。');let cursor=0,end=null,metrics=null;
   do{
     const data=await api('performance',id,cursor);
-    if(end===null){end=data.end;metrics=[['帧率_FPS',1],['GPU频率_MHz',2],['GPU使用率_%',3]];
+    if(end===null){end=data.end;metrics=[['帧率_FPS',1,recordedFpsText]];
+      if(Number.isInteger(data.meta?.minimumFpsIndex))metrics.push(['最低帧率_FPS',data.meta.minimumFpsIndex,recordedFpsText]);
+      metrics.push(['GPU频率_MHz',2],['GPU使用率_%',3]);
       for(const[cIndex,c]of(data.meta?.clusters??[]).entries())metrics.push([`${c.label}频率_MHz`,8+cIndex*2],[`${c.label}使用率_%`,9+cIndex*2]);
       if(Number.isInteger(data.meta?.temperatureIndex))metrics.push(['CPU_GPU最高温度_℃',data.meta.temperatureIndex]);
       if(Number.isInteger(data.meta?.memoryIndex))metrics.push(['内存已用_GB',data.meta.memoryIndex]);
       yield['系统时间','计时_ms',...metrics.map(s=>s[0])];
     }
     const walls=new Map(data.wallTimes??[]);
-    for(const p of data.points??[])if(p[0]<=end)yield[exportTime(walls.get(p[0])),p[0],...metrics.map(([,index])=>p[index])];
+    for(const p of data.points??[])if(p[0]<=end)yield[exportTime(walls.get(p[0])),p[0],...metrics.map(([,index,format])=>format?format(p[index]):p[index])];
     if(!data.more||data.cursor>end)break;
     if(data.cursor<=cursor)throw Error('性能分页未前进，已停止导出。');cursor=data.cursor;
   }while(true);

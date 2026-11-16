@@ -18,6 +18,7 @@ public final class SamplingTest {
         check(!Core.canReuseGameCharge(game,last,1999));
         check(!Core.canReuseGameCharge(game,game,2200));
         check(!Core.canReuseGameCharge(game,tail(2050),2200));
+        game.gamePartial=true;check(!Core.canReuseGameCharge(game,last,2200));game.gamePartial=false;
         game.online=false;check(!Core.canReuseGameCharge(game,last,2200));
         game.online=true;game.onlineKnown=false;check(!Core.canReuseGameCharge(game,last,2200));
         game.onlineKnown=true;game.error="电流读取失败";check(!Core.canReuseGameCharge(game,last,2200));
@@ -300,6 +301,25 @@ public final class SamplingTest {
             check(packageName.matcher(layer).find());
         for(String layer:new String[]{"SurfaceView[game.demo.overlay/Overlay]#1","SurfaceView[other.game.demo/Activity]#2","VRI-game.demo_tools/.Game#3","VRI-gameXdemo/.Game#4"})
             check(!packageName.matcher(layer).find());
+        String activity="game.demo/.SplashActivity";
+        String video="a21 SurfaceView["+activity+"]";
+        String ui="VRI-"+activity+"#7",buffer=video+"(BLAST)#4";
+        String layers=String.join("\n",
+            "RequestedLayerState{Task=22#1}",
+            "RequestedLayerState{ActivityRecord{132 u0 "+activity+" t22}#2 parentId=1}",
+            "RequestedLayerState{"+video+"#3 parentId=2}",
+            "RequestedLayerState{Background for "+video+"#5 parentId=3}",
+            "RequestedLayerState{Bounds for - "+activity+"#6 parentId=2}",
+            "RequestedLayerState{"+buffer+" parentId=3}",
+            "RequestedLayerState{a21 Splash Screen game.demo#8 parentId=2}",
+            "RequestedLayerState{VRI-Splash Screen game.demo#9 parentId=8}",
+            "RequestedLayerState{a21 ActivityRecordInputSink "+activity+"#10 parentId=2}",
+            "RequestedLayerState{SnapshotStartingWindow for taskId=22 game.demo#11 parentId=1}",
+            "RequestedLayerState{Task=33#12}",
+            "RequestedLayerState{VRI-"+activity+"#13 parentId=12}",
+            "RequestedLayerState{"+ui+" parentId=2}");
+        java.util.List<String> candidates=PerformanceCollector.frameLayerCandidates(layers,22,"game.demo");
+        check(candidates.size()==3&&candidates.subList(0,2).containsAll(java.util.List.of(ui,buffer)));
         long now=20_000_000_000L,window=1_500_000_000L;
         long[] auxiliary={now-1_000_000},main=new long[72];
         for(int i=0;i<main.length;i++)main[i]=now-2_000_000L-(main.length-1-i)*8_333_333L;
@@ -315,6 +335,58 @@ public final class SamplingTest {
         check(PerformanceCollector.frameRate(main,now+window,window)==0);
         check(PerformanceCollector.bestFrameHistory(new long[][]{{},{}},now,window)==-1);
     }
+    static void minimumFps(){
+        long[] frames=new long[62];
+        frames[0]=10_000_000_000L;
+        frames[1]=frames[0]+10_000_000L;
+        frames[2]=frames[1]+500_000_000L;
+        for(int i=3;i<frames.length;i++)frames[i]=frames[i-1]+(i==20?50_000_000L:10_000_000L);
+        long now=frames[frames.length-1],window=1_500_000_000L;
+        check(PerformanceCollector.minimumFrameRate(frames,now,window,0)==20);
+        check(PerformanceCollector.minimumFrameRate(frames,now,window,frames[20])==100);
+        check(PerformanceCollector.minimumFrameRate(frames,now,now-frames[19],0)==100);
+        check(Double.isNaN(PerformanceCollector.minimumFrameRate(frames,now,window,now)));
+        check(Double.isNaN(PerformanceCollector.minimumFrameRate(frames,now+window,window,0)));
+        long[] filtered=PerformanceCollector.frameTimes("8333333\n0 0 0\n0 10000000000 0\n0 10000000000 0\n0 10010000000 0\n0 9223372036854775807 0",now);
+        check(PerformanceCollector.minimumFrameRate(filtered,now,window,0)==100);
+    }
+    static void fpsSourceDuringGame(){
+        try(PerformanceCollector collector=new PerformanceCollector((id,start,wall,row,meta)->{},(sample,fps)->{})){
+            collector.setTaskFpsCallback(false,false);
+            check(collector.setTaskFpsCallback(true,false));
+            check(collector.setTaskFpsCallback(true,true));
+            check(!collector.setTaskFpsCallback(false,true));
+            check(!collector.setTaskFpsCallback(true,true));
+            check(collector.setTaskFpsCallback(true,false));
+            check(collector.setTaskFpsCallback(true,true));
+            check(!collector.setTaskFpsCallback(false,true));
+            check(!collector.setTaskFpsCallback(false,false));
+        }
+    }
+    static void gameSelection(){
+        GameMetrics onlyUsage=new GameMetrics(GameMetrics.BATTERY_TEMP,MonitorAppearance.GPU_CHART);
+        GameMetrics restored=GameMetrics.load(onlyUsage.encode());
+        check(restored.battery(GameMetrics.BATTERY_TEMP)&&restored.performance(MonitorAppearance.GPU_CHART));
+        check(!restored.recordsFps());
+        check(new GameMetrics(0,GameMetrics.MINIMUM_FPS).recordsFps());
+        check(!new GameMetrics(GameMetrics.CAPACITY|GameMetrics.ENERGY,0).battery(GameMetrics.ENERGY));
+        check(Double.isNaN(GameMetrics.selected(restored.battery,GameMetrics.WATTS,9)));
+        check(MonitorAppearance.load("",true).taskFpsCallback);
+        try{new GameMetrics(128,0);throw new AssertionError("Unknown battery metric accepted");}
+        catch(IllegalArgumentException expected){}
+    }
+    static void powerReadBackoff(){
+        long awake=Core.Sampling.powerRetryDelay(true,0);
+        long asleep=Core.Sampling.powerRetryDelay(false,0);
+        check(awake==asleep);
+        for(int failure=1;failure<=30;failure++){
+            long delay=Core.Sampling.powerRetryDelay(false,failure);
+            check(delay>=asleep&&Core.Sampling.powerRetryDelay(true,failure)==awake);
+            if(failure==1)check(delay>asleep);
+            asleep=delay;
+        }
+        check(asleep==Core.Sampling.powerRetryDelay(false,31));
+    }
     static void thermalUnits(){
         check(PerformanceCollector.temperatureCelsius("-12000\n",true)==-12);
         check(PerformanceCollector.temperatureCelsius("900",true)==0.9);
@@ -328,7 +400,7 @@ public final class SamplingTest {
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();thermalUnits();
+        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();minimumFps();fpsSourceDuringGame();gameSelection();powerReadBackoff();thermalUnits();
         System.out.println("Sampling: 500 ms charging reuse, tail rules, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

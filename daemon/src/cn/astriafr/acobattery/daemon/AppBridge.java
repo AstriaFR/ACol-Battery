@@ -45,11 +45,12 @@ public final class AppBridge {
         else if(command.startsWith(control)){route="api";command=command.substring(control.length());}
         else throw new IllegalArgumentException("不支持的操作");
         String[] words=command.trim().split(" +");
-        if(words.length<1||words.length>(words[0].equals("set_settings")||words[0].equals("set_monitor_appearance")?18:17))
-            throw new IllegalArgumentException("参数无效");
+        if(words.length<1)throw new IllegalArgumentException("参数无效");
         String action=words[0];
+        int limit=action.equals("set_monitor_appearance")?19:action.equals("set_settings")?18:17;
+        if(words.length>limit)throw new IllegalArgumentException("参数无效");
         if("api".equals(route)){
-            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","charge_integral","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","reset_settings","set_settings","set_recording","set_discharge_notification","set_fast","set_power_display","monitor_appearance","set_monitor_appearance","reset_monitor_appearance","oplus_votes","cool_down_details","set_oplus_vote","reset_oplus_votes","set_charging_mode","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
+            if(!java.util.Arrays.asList("status","list","detail","detail_preview","detail_sample","export_points","charge_integral","performance","screen_usage","screen_off_spans","hour_apps","interval_apps","settle_usage","hour_energy","daily_usage","battery_history","battery_history_detail","battery_history_delete","battery_history_record","battery_history_trend","cache_records","delete","live","watch","stop_watch","settings","default_settings","reset_settings","set_settings","set_recording","set_discharge_notification","set_fast","game_metrics","set_game_metrics","set_power_display","monitor_appearance","set_monitor_appearance","reset_monitor_appearance","oplus_votes","cool_down_details","set_oplus_vote","reset_oplus_votes","set_charging_mode","error_logs","error_log","clear_error_logs").contains(action))throw new IllegalArgumentException("未知操作");
             if(action.equals("daily_usage")){
                 if(words.length!=4||!words[1].matches("[0-9]{1,20}")||!words[2].matches("[0-9]{1,20}")||!words[3].matches("[A-Za-z0-9_-]{1,4096}"))throw new IllegalArgumentException("使用情况参数无效");
             }else if(action.equals("set_oplus_vote")){

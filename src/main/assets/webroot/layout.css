@@ -36,8 +36,8 @@
 #detail .summary[data-mode=live] .summary-metric:is([data-metric=power],[data-metric=remainingWh])>strong{font-size:20px}
 #detail .summary [data-metric=power] .metric-value,#detail .summary #remainingWh{font-size:inherit}
 #detail .chartpanel:not(.expanded)>.plotwrap{--plot-height:clamp(320px,calc(min(100vw,480px)*.94),452px)}
-#detail .chartpanel:not(.expanded)>.legend{grid-template-columns:repeat(2,minmax(0,1fr))}
-#detail .chartpanel:not(.expanded)>.legend label{grid-column:auto}
+:is(#detail,#batteryTrendPanel) .chartpanel:not(.expanded)>.legend{grid-template-columns:repeat(2,minmax(0,1fr))}
+:is(#detail,#batteryTrendPanel) .chartpanel:not(.expanded)>.legend label{grid-column:auto}
 .legend-short,.performance-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .legend-scale{flex:none}
 .legend label{overflow:hidden}
@@ -56,6 +56,18 @@
 .setting-input>.setting-bound-label+input{min-width:0}
 .battery-info-card small{overflow-wrap:anywhere}
 .battery-history-row>span:first-child{white-space:normal;overflow-wrap:anywhere}
+#batteryTrendPanel{max-width:none;padding-inline:0}
+#batteryTrendPanel>.subpage-header{padding-inline:18px}
+.health-trend-chart:not(.expanded){padding-inline:0}
+.health-trend-chart:not(.expanded) .legend-scale{flex:0 1 auto;min-width:0;text-align:right;white-space:normal;overflow-wrap:anywhere}
+.health-trend-chart:not(.expanded)>#batteryTrendStatus{margin-inline:18px}
+.health-trend-chart.expanded>.legend{grid-row:2}
+.health-trend-chart.expanded>#batteryTrendStatus{grid-row:4;margin:0}
+.health-trend-chart.expanded>#batteryTrendStatus:empty{display:none}
+@media(max-width:380px){
+  #batteryTrendPanel>.subpage-header{padding-inline:16px}
+  .health-trend-chart:not(.expanded)>#batteryTrendStatus{margin-inline:16px}
+}
 .settings-maintenance>*{min-width:0}
 .keypad-heading{flex-wrap:wrap;gap:6px}
 .keypad-heading h3{flex-basis:100%}

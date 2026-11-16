@@ -14,7 +14,8 @@ public final class PowerDisplayState {
     }
     public boolean performanceDue(long now){return enabled&&now>=performanceNext;}
     public boolean batteryDue(long now){return enabled&&now>=batteryNext;}
-    public void refresh(){performanceNext=0;batteryNext=0;}
+    public void refresh(){refreshPerformance();batteryNext=0;}
+    public void refreshPerformance(){performanceNext=0;}
     public void performanceSampled(long now,long intervalMs){performanceNext=now+intervalMs;}
     public void batterySampled(long now,long intervalMs){batteryNext=now+intervalMs;}
 

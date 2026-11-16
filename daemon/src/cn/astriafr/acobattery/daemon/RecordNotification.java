@@ -4,8 +4,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import cn.astriafr.acobattery.common.DischargeNotice;
 import cn.astriafr.acobattery.common.OperationTimeout;
 import cn.astriafr.acobattery.common.ProcessResponse;
@@ -39,6 +41,7 @@ final class RecordNotification {
     private final File ownerFile;
     private final Handler events=new Handler(Looper.getMainLooper());
     private final Runnable restoreTask=this::restoreAfterTaskRemoval;
+    private final NotificationProviderClient provider=new NotificationProviderClient();
     private final ScheduledThreadPoolExecutor worker=new ScheduledThreadPoolExecutor(1,work->{
         Thread thread=new Thread(work,"aco-record-notice");thread.setDaemon(true);return thread;
     });
@@ -49,7 +52,7 @@ final class RecordNotification {
     private Cancellation cancellation;
     private long shownSession=-1,shownX=-1;
     private long processExitWall;
-    private boolean watcherStarted;
+    private boolean watcherStarted,publishQueued;
     private DischargeTaskWatcher watcher;
 
     private static final class Request {
@@ -112,7 +115,12 @@ final class RecordNotification {
         discardCancellation();
         requested=next;
         if(!watcherStarted){watcherStarted=true;worker.execute(this::startWatcher);}
-        worker.execute(()->publish(next,false));
+        if(!publishQueued){publishQueued=true;worker.execute(this::publishLatest);}
+    }
+    private void publishLatest(){
+        Request latest;
+        synchronized(this){publishQueued=false;latest=requested;}
+        if(latest!=null)publish(latest,false);
     }
     synchronized void clear(){
         events.removeCallbacks(restoreTask);
@@ -145,6 +153,7 @@ final class RecordNotification {
         }
         try{if(!worker.awaitTermination(1800,TimeUnit.MILLISECONDS))worker.shutdownNow();}
         catch(InterruptedException interrupted){worker.shutdownNow();Thread.currentThread().interrupt();}
+        finally{provider.close();}
     }
 
     private void startWatcher(){
@@ -249,8 +258,22 @@ final class RecordNotification {
         boolean withdrawing="false".equals(extras[2]);
         int user=Integer.parseInt(Owner.read(ownerFile));
         if(user<0)throw new IOException("Invalid notification user");
+        long sequence=SystemClock.elapsedRealtimeNanos();
+        Bundle snapshot=new Bundle();
+        snapshot.putLong(DischargeNotice.SEQUENCE,sequence);
+        for(int i=0;i<extras.length;i+=3){
+            String key=extras[i+1],value=extras[i+2];
+            switch(extras[i].charAt(3)){
+                case 'z':snapshot.putBoolean(key,Boolean.parseBoolean(value));break;
+                case 'l':snapshot.putLong(key,Long.parseLong(value));break;
+                default:snapshot.putString(key,value);break;
+            }
+        }
+        Boolean direct=provider.deliver(user,snapshot);
+        if(direct!=null)return direct;
         List<String> command=new ArrayList<>(Arrays.asList("/system/bin/content","call",
-            "--uri","content://"+DischargeNotice.AUTHORITY,"--user",Integer.toString(user),"--method",DischargeNotice.ACTION));
+            "--uri","content://"+DischargeNotice.AUTHORITY,"--user",Integer.toString(user),"--method",DischargeNotice.ACTION,
+            "--extra",DischargeNotice.SEQUENCE+":l:"+sequence));
         for(int i=0;i<extras.length;i+=3){
             char type=extras[i].charAt(3);
             command.add("--extra");command.add(extras[i+1]+":"+(type=='z'?'b':type)+":"+extras[i+2]);
@@ -265,7 +288,8 @@ final class RecordNotification {
             List<String> fallback=new ArrayList<>(Arrays.asList("/system/bin/cmd","activity","broadcast"));
             if(!withdrawing)fallback.add("--async");
             fallback.addAll(Arrays.asList("--user",Integer.toString(user),"--receiver-replace-pending",
-                "-a",DischargeNotice.ACTION,"-n",Owner.PACKAGE+"/"+DischargeNotice.RECEIVER));
+                "-a",DischargeNotice.ACTION,"-n",Owner.PACKAGE+"/"+DischargeNotice.RECEIVER,
+                "--el",DischargeNotice.SEQUENCE,Long.toString(sequence)));
             fallback.addAll(Arrays.asList(extras));
             try{
                 String result=run(fallback,800);

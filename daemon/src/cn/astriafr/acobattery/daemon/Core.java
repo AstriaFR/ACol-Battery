@@ -7,6 +7,7 @@ public final class Core {
     static final int UNCLASSIFIED_CELLS=32;
     static final int REBOOT_GAP=64;
     static final int DISCHARGE_REBASE=128;
+    static final int GAME_ENERGY_DISABLED=256;
     public static final class Reading {
         public long elapsed, wall;
         public double rm = Double.NaN, pct = Double.NaN, current = Double.NaN;
@@ -17,6 +18,7 @@ public final class Core {
         public String voltageSource="",currentSource="",rmSource="",pctSource="",onlineSource="";
         public boolean online, full, enabled;
         public boolean vendorLogRead;
+        boolean gamePartial, gameAccounting;
         public boolean onlineKnown=true;
         public String source = "", error = "";
         public double voltage() { return cellCount==0?Double.NaN:cellCount==1?vmin:(vmax + vmin) / 2; }
@@ -54,7 +56,7 @@ public final class Core {
         return before.onlineKnown&&after.onlineKnown&&!before.online&&!after.online;
     }
     static boolean canReuseGameCharge(Reading game,Reading lastCharge,long now){
-        return game!=null&&game.onlineKnown&&game.online&&game.valid()&&game.error.isEmpty()
+        return game!=null&&!game.gamePartial&&game.onlineKnown&&game.online&&game.valid()&&game.error.isEmpty()
             &&game.elapsed<=now&&now-game.elapsed<=500
             &&(lastCharge==null||game.elapsed>lastCharge.elapsed);
     }
@@ -143,6 +145,9 @@ public final class Core {
             interactive=on;screenSample=true;next=now;return true;
         }
         public boolean takeScreenSample() { boolean pending=screenSample;screenSample=false;return pending; }
+        static long powerRetryDelay(boolean interactive,int failures){
+            return interactive?5000:Math.min(120000,5000L<<Math.min(5,failures));
+        }
         // Follow the previous sample's plan, even if the screen has just turned on.
         public long maxGap() { return fastMs>0?Math.max(5000,expected*3):expected+expected/2; }
     }

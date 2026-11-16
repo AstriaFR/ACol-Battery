@@ -57,7 +57,7 @@ export function createAdvancedPage(api,keypad){
   const reset=$('resetAdvancedSettings');
   const modeGroup=$('advancedChargingMode'),modeUnavailable=$('advancedChargingModeUnavailable');
   const capacityList=$('advancedCapacityReadings'),chargingList=$('advancedChargingReadings');
-  const rows=new Map(),buttons=new Map();
+  const rows=new Map(),controls=new Map();
   const limitedModes=chargingModes.slice(1);
   let timer,revision=0,reading=false,refreshPending=false,applying=false,state,resetError='';
   let safetyNoticeSeen=false;
@@ -81,7 +81,7 @@ export function createAdvancedPage(api,keypad){
     button.type='button';
     button.textContent=mode.label;
     missingLabel.className='advanced-field-node';
-    missingLabel.textContent='不存在';
+    missingLabel.textContent='接口缺失';
     missingLabel.hidden=true;
     button.append(missingLabel);
     button.disabled=true;
@@ -94,6 +94,7 @@ export function createAdvancedPage(api,keypad){
     row.className='advanced-field';
     const label=document.createElement('span');
     const nodeName=document.createElement('small'),button=document.createElement('button');
+    const unavailable=document.createElement('span');
     label.className='advanced-field-label';
     label.textContent=field.label;
     nodeName.className='advanced-field-node';
@@ -105,9 +106,11 @@ export function createAdvancedPage(api,keypad){
     button.setAttribute('aria-label',field.label);
     button.setAttribute('aria-haspopup','dialog');
     button.onclick=()=>openEditor(field,true);
-    row.append(label,button);
+    unavailable.textContent='接口缺失';
+    unavailable.hidden=true;
+    row.append(label,button,unavailable);
     $(container).append(row);
-    buttons.set(field.key,button);
+    controls.set(field.key,{button,unavailable});
   }
 
   const visible=()=>!root.hidden&&!document.hidden;
@@ -129,19 +132,21 @@ export function createAdvancedPage(api,keypad){
       const effective=nodes[field.key]?.effective;
       row.hidden=!snapshot;
       if(row.hidden)continue;
-      const text=isMissing(field.key)?'不存在':Number.isFinite(effective)?
+      const text=isMissing(field.key)?'接口缺失':Number.isFinite(effective)?
         [displayValue(field,effective),field.unit].filter(Boolean).join(' '):'—';
       if(value.textContent!==text)value.textContent=text;
     }
     capacityList.hidden=!capacityReadings.some(field=>!rows.get(field).row.hidden);
     for(const field of fields){
-      const node=nodes[field.key],button=buttons.get(field.key);
-      const missing=isMissing(field.key)||node?.controlMissing||(node?.writeUnavailable&&!node.forced);
+      const node=nodes[field.key],{button,unavailable}=controls.get(field.key);
+      const missing=isMissing(field.key)||node?.controlMissing===true||(node?.writeUnavailable===true&&!node.forced);
       const canEdit=!missing&&typeof node?.forced==='boolean'&&(!field.deviceRange||Number.isFinite(node.max)||node.forced);
-      const text=missing?'不存在':canEdit?
+      const text=canEdit?
         (node.forced?[displayValue(field,node.forceValue),field.unit].filter(Boolean).join(' '):'厂商策略'):'—';
       if(button.textContent!==text)button.textContent=text;
+      button.hidden=missing;
       button.disabled=!canEdit||applying;
+      unavailable.hidden=!missing;
     }
     const editing=keypad.keypad.open&&fields.find(field=>field.key===keypad.editor?.key);
     if(editing)$('keypadRange').textContent=rangeLabel(editing);
@@ -152,7 +157,7 @@ export function createAdvancedPage(api,keypad){
     const selected=active.length===1?active[0]:known&&available&&active.length===0?chargingModes[0]:null;
     modeUnavailable.hidden=!missing;
     modeGroup.hidden=missing;
-    const modeText=missing?'不存在':selected?.label??'—';
+    const modeText=missing?'接口缺失':selected?.label??'—';
     if(modeValue.textContent!==modeText)modeValue.textContent=modeText;
     modeButtons.forEach(({button,missingLabel},index)=>{
       const mode=chargingModes[index];
@@ -276,7 +281,7 @@ export function createAdvancedPage(api,keypad){
     }
   };
   function openEditor(field,push){
-    if(root.hidden||applying||buttons.get(field.key).disabled)return;
+    if(root.hidden||applying||controls.get(field.key).button.disabled)return;
     const node=state.nodes[field.key];
     const current=node.forced?node.forceValue:node.effective;
     keypad.openEditor({

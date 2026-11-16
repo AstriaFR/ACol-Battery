@@ -255,7 +255,7 @@ final class RecordStore {
                     if(Core.finite(last[10])!=Core.finite(point[10]))split=true;
                     if(Core.finite(last[14])!=Core.finite(point[14]))split=true;
                     if(rawPreview&&(Double.compare(last[12],point[12])!=0
-                        ||(((int)last[6]^(int)point[6])&Core.UNCLASSIFIED_CELLS)!=0
+                        ||(((int)last[6]^(int)point[6])&(Core.UNCLASSIFIED_CELLS|Core.GAME_ENERGY_DISABLED))!=0
                         ||Math.abs((point[13]-last[13])-(point[0]-last[0]))>2000))split=true;
                     if(split){bucket.put((long)last[0],last);bucket.put((long)point[0],point);}
                 }
@@ -277,11 +277,15 @@ final class RecordStore {
         rows.put((long)first[0],first);rows.put((long)last[0],last);
         for(int i=0;i<lo.length;i++){if(lo[i]!=null)rows.put((long)lo[i][0],lo[i]);if(hi[i]!=null)rows.put((long)hi[i][0],hi[i]);}
         for(double[] p:rows.values()){JSONArray row=new JSONArray();for(double v:p)row.put(Core.finite(v)?v:JSONObject.NULL);out.put(row);}
-    }    void updateRanges(long session,long startElapsed,int state,boolean gameContext,Core.Reading previous,Core.Reading r,double recordedPower)throws Exception {
+    }
+    void updateRanges(long session,long startElapsed,int state,boolean gameContext,Core.Reading previous,Core.Reading r,double recordedPower,int metrics)throws Exception {
         long x=r.elapsed-startElapsed;if(rangeId!=session||x<=rangeEnd||rangeValues==null)return;
         JSONObject next=new JSONObject(rangeValues.toString());
         String[] keys={"rm","pct","current","voltage","power","temp","ram","ramTotal"};
-        double[] values={r.rm,r.pct,state==1||gameContext?r.chargingCurrent():Double.NaN,r.displayVoltage(),recordedPower,r.temp,state==0&&!gameContext?r.memoryUsedGB:Double.NaN,state==0&&!gameContext?r.memoryTotalGB:Double.NaN};
+        double[] values={GameMetrics.selected(metrics,GameMetrics.CAPACITY,r.rm),GameMetrics.selected(metrics,GameMetrics.LEVEL,r.pct),
+            state==1||gameContext?GameMetrics.selected(metrics,GameMetrics.CURRENT,r.chargingCurrent()):Double.NaN,
+            GameMetrics.selected(metrics,GameMetrics.VOLTAGE,r.displayVoltage()),recordedPower,GameMetrics.selected(metrics,GameMetrics.BATTERY_TEMP,r.temp),
+            state==0&&!gameContext?r.memoryUsedGB:Double.NaN,state==0&&!gameContext?r.memoryTotalGB:Double.NaN};
         if(state==0&&!gameContext) {
             if(previous!=null&&r.elapsed-previous.elapsed<20000)Arrays.fill(values,Double.NaN);
             else if(recordedPower>15||recordedPower<0)values[4]=Double.NaN;

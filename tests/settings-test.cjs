@@ -18,6 +18,11 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
  assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,gaugeIntervalOverride:1}));
  for(const value of [1,30,60,120])assert.equal(encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value})[9],value);
  for(const value of [0,121,1.5])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,screenOffMinutes:value}));
+ const limits={...DEFAULT_SETTINGS,voltageMin:0,voltageMax:5,tempMin:-20,tempMax:100};
+ assert.deepEqual(encodeSettings(limits).slice(4,8),[0,500,0,120]);
+ for(const setting of [{voltageMin:-0.01},{voltageMax:5.01},{voltageMin:5},{tempMin:-21},{tempMax:101},{tempMin:100}]){
+  assert.throws(()=>encodeSettings({...limits,...setting}));
+ }
  for(const [key,index] of [['fastSeconds',10],['performanceSeconds',13]]){
   for(const value of [0.5,0.6,1.1,2,19.9,20])assert.equal(encodeSettings({...DEFAULT_SETTINGS,[key]:value})[index],value);
   for(const value of [0,0.4,20.1,60,1.05,NaN,'2'])assert.throws(()=>encodeSettings({...DEFAULT_SETTINGS,[key]:value}));
@@ -123,6 +128,32 @@ async function gameToggle(){
  panel.updateFast();assert.equal(panel.fastButton.disabled,false,'game toggle remains available while ordinary recording is off');
  await panel.toggleFast();assert.equal(panel.fastValue,true);await panel.toggleFast();assert.equal(panel.fastValue,false);assert.deepEqual(calls,[['set_fast',1],['set_fast',0]]);assert.equal(panel.fastBusy,false);
 }
+async function gameMetrics(){
+ const{createGameMetricsPage,gameMetricSelection}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/game-metrics.js')).href);
+ let state={battery:2,performance:33,taskFpsCallback:true};
+ const calls=[],buttons=[0,1].map(value=>({value,setAttribute(name,v){this[name]=v;}}));
+ const input={dataset:{gameMetric:'performance'},value:32};
+ const nodes={gameMetricsPage:{hidden:true},gameMetricsStatus:{},gameMetricsControls:{
+   querySelectorAll:selector=>selector==='[data-game-metric]'?[input]:buttons
+ }};
+ globalThis.document={getElementById:id=>nodes[id]};
+ const panel=createGameMetricsPage(async(action,...args)=>{
+   calls.push([action,...args]);
+   if(action==='set_game_metrics')state={battery:args[0],performance:args[1],taskFpsCallback:args.length===3?!!args[2]:state.taskFpsCallback};
+   return state;
+ });
+ const settled=()=>new Promise(resolve=>setImmediate(resolve));
+ panel.open();await settled();
+ assert.ok(input.checked&&buttons[1].disabled);
+ input.checked=false;input.onchange();await settled();
+ assert.ok(!buttons[1].disabled&&buttons[1]['aria-pressed']==='true');
+ buttons[0].onclick();await settled();
+ assert.deepEqual(calls,[['game_metrics'],['set_game_metrics',2,1],['set_game_metrics',2,1,0]]);
+ const withEstimate=gameMetricSelection('battery',2,64,true);
+ assert.equal(withEstimate&73,73);
+ assert.equal(gameMetricSelection('battery',withEstimate,8,false)&64,0);
+ panel.close();assert.ok(!panel.active);
+}
 async function keypadKeyboard(){
  const {SettingsPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/settings-panel.js')).href);
  const digit={dataset:{key:'3'}},calls=[],nodes=new Map();
@@ -144,4 +175,4 @@ async function keypadKeyboard(){
  press('Enter',nodes.get('keypadCancel'));press('Enter',digit);press('7',digit);press('Enter',nodes.get('keypadApply'));
  assert.deepEqual(calls,['cancel','3','7','apply']);
 }
-runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle,keypadKeyboard]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset, saved selections and keypad passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle,gameMetrics,keypadKeyboard]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset, saved selections and keypad passed')).catch(error=>{console.error(error);process.exitCode=1;});

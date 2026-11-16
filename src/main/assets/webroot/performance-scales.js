@@ -1,4 +1,7 @@
 export const fpsLevels=[60,90,120,144,165,185,200,240];
+export function recordedFpsText(value){
+  return Number.isFinite(value)?value.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1,useGrouping:false}):null;
+}
 export function fpsLimit(peak){
   // 100% is the legend value; only reaching the visible 110% boundary advances a tier.
   for(const limit of fpsLevels)if(!(peak*100>=limit*110))return limit;

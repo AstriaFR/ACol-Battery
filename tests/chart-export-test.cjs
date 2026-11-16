@@ -2,7 +2,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),{pathToFile
 (async()=>{
  const url=name=>pathToFileURL(path.join(__dirname,'../src/main/assets/webroot',name)).href;
  const{csvCell,csvRow,saveCsv,recordCsv,performanceCsv}=await import(url('chart-export.js'));
- const{remainingEstimate}=await import(url('estimate.js'));
+ const{remainingEstimate,gameEnergyDisabled}=await import(url('estimate.js'));
  const{healthScale,loadHealthTrend}=await import(url('battery-history.js'));
  assert.equal(csvRow(['a,b','a"b',null,NaN,-2,'=formula']),'"a,b","a""b",,,-2,\'=formula\r\n');
  assert.equal(csvCell('line\nbreak'),'"line\nbreak"');
@@ -30,8 +30,17 @@ const assert=require('node:assert/strict'),path=require('node:path'),{pathToFile
  assert.equal(records.length,3);assert.equal(records[1][4],-200);assert.equal(records[1][5],4);
  assert.equal(records[1][10],Number(remainingEstimate({rm:raw[1],voltage:raw[4],cellCount:2},null,true).whText));
  assert.equal(records[2][4],-100);assert.equal(records[2][5],8.2);assert.equal(records[2][10],null);
- const perf=[];for await(const row of performanceCsv(async()=>({end:1,points:[[0,60,300,20,0,0,0,0,1200,50,42,4],[2,90]],wallTimes:[[0,1700000000000]],cursor:3,more:true,meta:{clusters:[{label:'CPU0-3'}],temperatureIndex:10,memoryIndex:11}}),9))perf.push(row);
- assert.equal(perf.length,2);assert.ok(perf[0].includes('CPU0-3频率_MHz'));assert.equal(perf[1].at(-1),4);
+ const masked=[...raw];masked[6]=gameEnergyDisabled;
+ const game=[];for await(const row of recordCsv(async()=>({record:{kind:'discharge',fast_seconds:2,cell_count:2,start_wall:1700000000000},end:2000,points:[masked],nextAfter:null}),7))game.push(row);
+ assert.equal(game[1][10],null);
+ assert.equal(game[1].at(-1),0);
+ const perf=[];for await(const row of performanceCsv(async()=>({end:2,points:[[0,60,300,20,0,0,0,0,1200,50,42,4],[1,59.96],[2,null],[3,90]],wallTimes:[[0,1700000000000]],cursor:4,more:true,meta:{clusters:[{label:'CPU0-3'}],temperatureIndex:10,memoryIndex:11}}),9))perf.push(row);
+ assert.equal(perf.length,4);assert.ok(perf[0].includes('CPU0-3频率_MHz'));assert.equal(perf[1].at(-1),4);
+ assert.deepEqual(perf.slice(1).map(row=>row[2]),['60.0','60.0',null]);
+ const extended=[];for await(const row of performanceCsv(async()=>({end:2,points:[[0,60],[1,59.8,...Array(8).fill(null),39.95],[2,60,...Array(8).fill(null),null]],cursor:2,more:false,meta:{minimumFpsIndex:10}}),9))extended.push(row);
+ const minimumColumn=extended[0].indexOf('最低帧率_FPS');assert.ok(minimumColumn>=0);
+ assert.ok(!perf[0].includes(extended[0][minimumColumn]));
+ assert.deepEqual(extended.slice(1).map(row=>csvCell(row[minimumColumn])),['','40.0','']);
  let output='',finished=0,cancelled=0;
  globalThis.window={AcoNative:{beginChartExport:()=> 'test',appendChartExport:(id,text)=>{assert.equal(id,'test');output+=text;return true},finishChartExport:()=>{finished++;return true},cancelChartExport:()=>cancelled++}};
  async function* rows(){yield['标题'];for(let i=0;i<410;i++)yield[i,null];}

@@ -11,7 +11,7 @@ export class PerformanceChart extends Chart{
   preparePoints(points){return points;}
   scaleFor(s){
     const full=s.key==='temperature'?100:s.unit==='%'?100:s.cpuFrequency?(this.cpuMax||Math.max(1,this.cpuObservedMax)):
-      s.key==='fps'?fpsLimit(this.maximum.get(s.key)??0):this.frequencyRanges.get(s.key)??s.limit??1;
+      s.unit==='FPS'?fpsLimit(Math.max(this.maximum.get('fps')??0,this.maximum.get('minimumFps')??0)):this.frequencyRanges.get(s.key)??s.limit??1;
     return{base:0,full,min:0,label:`${sampleText(full,s.key==='ram'?2:1)} ${s.unit}`};
   }
   ingest(points){
@@ -106,6 +106,7 @@ export class PerformancePanel{
     });
     if(Number.isInteger(meta.temperatureIndex))metrics.push({key:'temperature',index:meta.temperatureIndex,name:'最高温度',axis:'最高温度',unit:'℃',color:curveColor(3+(meta.clusters??[]).length*2),digits:1,limit:100});
     if(Number.isInteger(meta.memoryIndex)&&valid(meta.memoryTotalGB)&&meta.memoryTotalGB>0)metrics.push({key:'ram',index:meta.memoryIndex,name:'RAM 已用',axis:'RAM 已用',unit:'GB',color:curveColor(metrics.length),digits:2,limit:meta.memoryTotalGB});
+    if(Number.isInteger(meta.minimumFpsIndex))metrics.push({key:'minimumFps',index:meta.minimumFpsIndex,name:'最低帧率',axis:'最低帧率',unit:'FPS',color:curveColor(metrics.length),digits:1,limit:60});
     this.chart.metrics=metrics;this.chart.maximum.clear();this.chart.frequencyRanges.clear();this.chart.cpuObservedMax=0;this.chart.ingest(this.points);
     let saved;try{saved=JSON.parse(localStorage.getItem(selectionKey));}catch{}
     this.chart.enabled=new Set(Array.isArray(saved)?saved:metrics.filter(s=>s.key.endsWith('Freq')).map(s=>s.key));
@@ -125,7 +126,12 @@ export class PerformancePanel{
   remember(){try{localStorage.setItem(selectionKey,JSON.stringify([...this.chart.enabled]));}catch{}}
   legend(){
     const host=$('performanceLegend');host.replaceChildren();
-    for(const s of this.chart.metrics){
+    const metrics=[...this.chart.metrics],minimumIndex=metrics.findIndex(s=>s.key==='minimumFps');
+    if(minimumIndex>1){
+      const [minimumFps]=metrics.splice(minimumIndex,1);
+      metrics.splice(1,0,minimumFps);
+    }
+    for(const s of metrics){
       const label=document.createElement('label');label.style.setProperty('--series',s.color);label.dataset.series=s.key;
       const input=document.createElement('input');input.type='checkbox';input.checked=this.chart.enabled.has(s.key);
       const name=document.createElement('span');name.className='performance-name';name.textContent=s.name;

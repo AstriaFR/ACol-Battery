@@ -52,8 +52,8 @@ export function batteryHistoryFields(snapshot){
   return{values,green};
 }
 export class BatteryHistoryPanel{
-  constructor(api,navigate,back){
-    this.back=back;
+  constructor(api,navigate,back,fullScreen){
+    this.back=back;this.fullScreen=fullScreen;
     this.api=api;this.navigate=navigate;this.active=false;this.token=0;this.items=new Map();this.snapshots=new Map();this.loaded=false;this.before=0;this.latest=0;this.morePages=false;this.loading=false;this.refreshing=false;this.refreshTimer=null;this.scrollTop=0;
     this.list=document.getElementById('batteryHistoryPanel');this.detail=document.getElementById('batteryHistoryDetail');this.rows=document.getElementById('batteryHistoryRows');this.scroller=document.getElementById('batteryHistoryScroll');this.more=document.getElementById('batteryHistoryMore');this.status=document.getElementById('batteryHistoryStatus');
     this.deleteDialog=document.getElementById('batteryHistoryDelete');this.deleteApply=document.getElementById('batteryHistoryDeleteApply');this.deleteCancel=document.getElementById('batteryHistoryDeleteCancel');
@@ -67,6 +67,14 @@ export class BatteryHistoryPanel{
     this.trendChart.enabled=new Set(healthMetrics.map(s=>s.key));this.trendChart.kind='health';this.trendChart.fast=true;
     document.getElementById('batteryTrendReset').onclick=()=>this.trendChart.setWindow(0,this.trendChart.total);
     bindExport(document.getElementById('batteryTrendExport'),'电池健康趋势.csv',()=>this.trendCsv());
+    this.trendPanel=document.getElementById('batteryTrendChart');
+    this.trendExpand=document.getElementById('batteryTrendFullscreen');this.trendExit=document.getElementById('batteryTrendExit');
+    this.trendExpand.onclick=()=>this.setTrendFullscreen(true);
+    this.trendExit.onclick=()=>this.backFullscreen();
+    window.addEventListener('resize',()=>this.layoutTrendFullscreen());
+    window.visualViewport?.addEventListener('resize',()=>this.layoutTrendFullscreen());
+    window.visualViewport?.addEventListener('scroll',()=>this.layoutTrendFullscreen());
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')this.backFullscreen();});
     this.recordDialog=document.getElementById('batteryHistoryRecordConfirm');this.recordCancel=document.getElementById('batteryHistoryRecordCancel');
     this.recordCancel.onclick=()=>this.recordDialog.close();
     document.getElementById('batteryHistoryRecordApply').onclick=()=>{if(!this.recordDialog.open)return;this.recordDialog.close();this.record();};
@@ -84,7 +92,7 @@ export class BatteryHistoryPanel{
     this.more.onclick=()=>this.load();
     this.scroller.addEventListener('scroll',()=>{if(this.active&&this.state?.page==='battery-history'&&this.scroller.scrollTop>0&&this.scroller.scrollHeight-this.scroller.scrollTop-this.scroller.clientHeight<60)this.load();},{passive:true});
   }
-  close(){clearTimeout(this.refreshTimer);this.refreshTimer=null;this.stopPress();this.trendChart?.clearInspect();if(this.trend)this.trend.hidden=true;if(this.deleteDialog.open)this.deleteDialog.close();if(this.recordDialog.open)this.recordDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.refreshing=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
+  close(){clearTimeout(this.refreshTimer);this.refreshTimer=null;this.stopPress();this.backFullscreen();this.trendChart?.clearInspect();if(this.trend)this.trend.hidden=true;if(this.deleteDialog.open)this.deleteDialog.close();if(this.recordDialog.open)this.recordDialog.close();if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;this.token++;this.loading=false;this.refreshing=false;this.active=false;this.list.hidden=true;this.detail.hidden=true;}
   refreshTheme(){if(this.active&&!this.trend.hidden)this.trendChart.draw();}
   resetList(){
     this.token++;this.loading=false;this.refreshing=false;this.items.clear();this.rows.replaceChildren();
@@ -126,6 +134,7 @@ export class BatteryHistoryPanel{
     finally{this.deleting=false;this.deleteApply.disabled=this.deleteCancel.disabled=false;}
   }
   async open(state,fresh=false){
+    this.backFullscreen();
     if(this.state?.page==='battery-history')this.scrollTop=this.scroller.scrollTop;
     clearTimeout(this.refreshTimer);this.refreshTimer=null;
     this.token++;this.loading=false;this.refreshing=false;this.active=true;this.state={...state};
@@ -191,6 +200,42 @@ export class BatteryHistoryPanel{
       const text=document.createElement('span'),arrow=document.createElement('span');text.textContent=batteryHistoryDate(item.completed_wall,true)+' · 循环次数：'+number(item.cycles);arrow.textContent='›';arrow.setAttribute('aria-hidden','true');row.append(text,arrow);rows.push(row);
     }
     return rows;
+  }
+  backFullscreen(){
+    if(!this.trendAnchor)return false;
+    this.setTrendFullscreen(false);
+    return true;
+  }
+  layoutTrendFullscreen(){
+    if(!this.trendAnchor)return;
+    const view=window.visualViewport;
+    const width=view?.width??window.innerWidth,height=view?.height??window.innerHeight,rotate=height>width;
+    const panel=this.trendPanel;
+    panel.classList.toggle('rotate',rotate);
+    panel.style.setProperty('--full-width',`${rotate?height:width}px`);
+    panel.style.setProperty('--full-height',`${rotate?width:height}px`);
+    panel.style.setProperty('--full-left',`${(view?.offsetLeft??0)+width/2}px`);
+    panel.style.setProperty('--full-top',`${(view?.offsetTop??0)+height/2}px`);
+  }
+  setTrendFullscreen(enabled){
+    if(enabled===!!this.trendAnchor||enabled&&this.trend.hidden)return;
+    const panel=this.trendPanel;
+    if(enabled){
+      this.trendAnchor=document.createComment('battery health chart');
+      panel.replaceWith(this.trendAnchor);
+      document.body.append(panel);
+    }else{
+      this.trendAnchor.replaceWith(panel);
+      this.trendAnchor=null;
+      panel.classList.remove('rotate');
+      for(const key of['--full-width','--full-height','--full-left','--full-top'])panel.style.removeProperty(key);
+    }
+    panel.classList.toggle('expanded',enabled);
+    document.body.classList.toggle('chartExpanded',enabled);
+    this.trendExpand.hidden=enabled;this.trendExit.hidden=!enabled;
+    this.layoutTrendFullscreen();
+    try{this.fullScreen(enabled);}catch{}
+    this.trendChart.draw();
   }
   async openTrend(){
     const token=this.token,status=document.getElementById('batteryTrendStatus'),button=document.getElementById('batteryTrendExport');

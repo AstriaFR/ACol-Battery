@@ -34,7 +34,7 @@
     </section>
     <form id="settingsForm" novalidate>
       <section class="card setting-card fast-control">
-        <div class="setting-heading"><div class="setting-title"><span>游戏性能统计</span><button id="gameModeInfo" class="setting-info" type="button" aria-label="游戏性能统计介绍" aria-haspopup="dialog">i</button></div><button id="toggleFast" type="button" disabled>开启</button></div>
+        <div class="setting-heading"><div class="setting-title"><span>游戏性能统计</span><button id="gameModeInfo" class="setting-info" type="button" aria-label="游戏性能统计介绍" aria-haspopup="dialog">i</button></div><div class="game-record-actions"><button id="openGameMetrics" class="settings-button" type="button">自定义</button><button id="toggleFast" type="button" disabled>开启</button></div></div>
         <div class="setting-group"><div class="setting-heading"><label for="fastSeconds">功耗采样间隔</label><div class="setting-input"><input id="fastSeconds" name="fastSeconds" type="number" inputmode="none" readonly min="0.5" max="20" step="0.1" required disabled><span>秒</span></div></div></div>
         <div class="setting-group">
           <div class="setting-heading setting-switch">
@@ -46,7 +46,7 @@
         <div class="setting-group"><label class="setting-heading setting-switch" for="fastAutoOff"><span>息屏 10 分钟后退出</span><input id="fastAutoOff" name="fastAutoOff" type="checkbox" role="switch" disabled></label></div>
       </section>
       <section class="card setting-card"><h3>放电记录间隔</h3><div class="setting-pair"><label for="screenOnMinutes"><div class="setting-input setting-bound-input setting-interval-input"><span class="setting-bound-label">亮屏</span><input id="screenOnMinutes" name="screenOnMinutes" type="number" inputmode="none" readonly min="1" max="10" step="1" required disabled><span>分钟</span></div></label><label for="screenOffMinutes"><div class="setting-input setting-bound-input setting-interval-input"><span class="setting-bound-label">息屏</span><input id="screenOffMinutes" name="screenOffMinutes" type="number" inputmode="none" readonly min="1" max="120" step="1" required disabled><span>分钟</span></div></label></div><div class="setting-group setting-heading"><label for="chargeSeconds">充电记录间隔</label><div class="setting-input"><input id="chargeSeconds" name="chargeSeconds" type="number" inputmode="none" readonly min="1" max="10" step="1" required disabled><span>秒</span></div></div><div class="setting-interval-spacer" aria-hidden="true"></div><div class="setting-group retention-settings"><div class="setting-pair"><label for="deletePct">自动删除百分比<div class="setting-input"><input id="deletePct" name="deletePct" type="number" inputmode="none" readonly min="0" max="40" step="1" required disabled><span>%</span></div></label><label for="hidePct">自动隐藏百分比<div class="setting-input"><input id="hidePct" name="hidePct" type="number" inputmode="none" readonly min="0" max="80" step="1" required disabled><span>%</span></div></label></div><p>普通记录结束后按阈值删除或隐藏。<br>清理已有记录另行确认。</p></div></section>
-      <section class="card setting-card range-settings"><div class="setting-range-block"><div class="setting-group"><div class="setting-heading"><label for="energyWh">默认能量量程</label><div class="setting-input"><input id="energyWh" name="energyWh" type="number" inputmode="none" readonly min="0" max="100" step="0.01" placeholder="未设置" disabled><span>Wh</span></div></div></div><div class="setting-group"><div class="setting-heading"><label for="capacityAh">默认容量量程</label><div class="setting-input"><input id="capacityAh" name="capacityAh" type="number" inputmode="none" readonly min="0.01" max="20" step="0.01" required disabled><span>Ah</span></div></div><p class="range-fill-hint">根据电池实际能量和容量填写。</p></div><div class="setting-group"><label class="setting-heading setting-switch" for="capacityAuto"><span>量程自动扩展</span><input id="capacityAuto" name="capacityAuto" type="checkbox" role="switch" disabled></label><p>超出默认量程时按记录最大值扩展；关闭后固定上限。</p></div></div><div class="setting-range-block"><h3>默认电压量程</h3><div class="setting-pair"><label for="voltageMin"><div class="setting-input setting-bound-input"><span class="setting-bound-label">下限</span><input id="voltageMin" name="voltageMin" type="number" inputmode="none" readonly min="2.2" max="4.8" step="0.01" required disabled><span>V</span></div></label><label for="voltageMax"><div class="setting-input setting-bound-input"><span class="setting-bound-label">上限</span><input id="voltageMax" name="voltageMax" type="number" inputmode="none" readonly min="2.2" max="4.8" step="0.01" required disabled><span>V</span></div></label></div></div><div class="setting-range-block"><h3>默认温度量程</h3><div class="setting-pair"><label for="tempMin"><div class="setting-input setting-bound-input"><span class="setting-bound-label">下限</span><input id="tempMin" name="tempMin" type="number" inputmode="none" readonly min="-20" max="60" step="1" required disabled><span>℃</span></div></label><label for="tempMax"><div class="setting-input setting-bound-input"><span class="setting-bound-label">上限</span><input id="tempMax" name="tempMax" type="number" inputmode="none" readonly min="-20" max="60" step="1" required disabled><span>℃</span></div></label></div><p>超出默认量程后自动扩展。</p></div></section>
+      <section class="card setting-card range-settings"><div class="setting-range-block"><div class="setting-group"><div class="setting-heading"><label for="energyWh">默认能量量程</label><div class="setting-input"><input id="energyWh" name="energyWh" type="number" inputmode="none" readonly min="0" max="100" step="0.01" placeholder="未设置" disabled><span>Wh</span></div></div></div><div class="setting-group"><div class="setting-heading"><label for="capacityAh">默认容量量程</label><div class="setting-input"><input id="capacityAh" name="capacityAh" type="number" inputmode="none" readonly min="0.01" max="20" step="0.01" required disabled><span>Ah</span></div></div><p class="range-fill-hint">根据电池实际能量和容量填写。</p></div></div><div class="setting-range-block"><h3>默认电压量程</h3><div class="setting-pair"><label for="voltageMin"><div class="setting-input setting-bound-input"><span class="setting-bound-label">下限</span><input id="voltageMin" name="voltageMin" type="number" inputmode="none" readonly min="0" max="5" step="0.01" required disabled><span>V</span></div></label><label for="voltageMax"><div class="setting-input setting-bound-input"><span class="setting-bound-label">上限</span><input id="voltageMax" name="voltageMax" type="number" inputmode="none" readonly min="0" max="5" step="0.01" required disabled><span>V</span></div></label></div></div><div class="setting-range-block"><h3>默认温度量程</h3><div class="setting-pair"><label for="tempMin"><div class="setting-input setting-bound-input"><span class="setting-bound-label">下限</span><input id="tempMin" name="tempMin" type="number" inputmode="none" readonly min="-20" max="100" step="1" required disabled><span>℃</span></div></label><label for="tempMax"><div class="setting-input setting-bound-input"><span class="setting-bound-label">上限</span><input id="tempMax" name="tempMax" type="number" inputmode="none" readonly min="-20" max="100" step="1" required disabled><span>℃</span></div></label></div><p>超出默认量程后自动扩展。</p></div></section>
     </form>
 
     <div class="settings-maintenance"><button id="openErrorLogs" type="button">错误日志</button><button id="resetSettings" type="button">恢复默认设置</button><button id="backupAllData" type="button">备份</button><button id="restoreAllData" type="button">读取备份</button><button id="clearAllData" class="maintenance-danger" type="button">清除所有数据</button><a class="settings-link-button" href="https://github.com/AstriaFR/ACol-Battery">GitHub 主页<svg class="external-link-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h6v6M19 5l-9 9M19 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h4"/></svg></a></div>
@@ -73,6 +73,7 @@
         <label class="setting-heading setting-switch"><span>GPU 频率</span><input type="checkbox" role="switch" data-monitor-bit="16"></label>
         <label class="setting-heading setting-switch"><span>功耗</span><input type="checkbox" role="switch" data-monitor-bit="32"></label>
         <label class="setting-heading setting-switch"><span>温度</span><input type="checkbox" role="switch" data-monitor-bit="64"></label>
+        <div class="setting-heading"><span id="monitorFpsSourceLabel">帧率采样方式</span><div class="monitor-options" role="group" aria-labelledby="monitorFpsSourceLabel"><button type="button" data-monitor-option="17" value="0" aria-pressed="false">单图层</button><button type="button" data-monitor-option="17" value="1" aria-pressed="false">多图层</button></div></div>
       </section>
       <section class="card setting-card" aria-labelledby="monitorThresholdTitle">
         <h2 id="monitorThresholdTitle">颜色阈值</h2>
@@ -109,11 +110,41 @@
     <p class="monitor-sampling-note">帧率、CPU 和 GPU 跟随性能采样间隔，功耗和电池温度跟随功耗采样间隔。</p>
   </div>
 </section>
+<section id="gameMetricsPage" class="detail battery-info-panel monitor-appearance-page" aria-labelledby="gameMetricsTitle" hidden>
+  <header class="subpage-header"><div class="page-heading"><button id="gameMetricsBack" class="back" type="button">返回</button><h1 id="gameMetricsTitle">游戏记录自定义</h1></div></header>
+  <div class="page-scroll">
+    <fieldset id="gameMetricsControls" disabled>
+      <section class="card setting-card" aria-labelledby="gameBatteryMetricsTitle">
+        <h2 id="gameBatteryMetricsTitle">功耗曲线</h2>
+        <label class="setting-heading setting-switch"><span>剩余容量</span><input type="checkbox" role="switch" data-game-metric="battery" value="1"></label>
+        <label class="setting-heading setting-switch"><span>系统电量</span><input type="checkbox" role="switch" data-game-metric="battery" value="2"></label>
+        <label class="setting-heading setting-switch"><span>电流</span><input type="checkbox" role="switch" data-game-metric="battery" value="4"></label>
+        <label class="setting-heading setting-switch"><span>电压</span><input type="checkbox" role="switch" data-game-metric="battery" value="8"></label>
+        <label class="setting-heading setting-switch"><span>实时功率</span><input type="checkbox" role="switch" data-game-metric="battery" value="16"></label>
+        <label class="setting-heading setting-switch"><span>电池温度</span><input type="checkbox" role="switch" data-game-metric="battery" value="32"></label>
+        <label class="setting-heading setting-switch"><span>剩余能量（估算）</span><input type="checkbox" role="switch" data-game-metric="battery" value="64"></label>
+      </section>
+      <section class="card setting-card" aria-labelledby="gamePerformanceMetricsTitle">
+        <h2 id="gamePerformanceMetricsTitle">性能曲线</h2>
+        <label class="setting-heading setting-switch"><span>帧率</span><input type="checkbox" role="switch" data-game-metric="performance" value="1"></label>
+        <label class="setting-heading setting-switch"><span>最低帧率</span><input type="checkbox" role="switch" data-game-metric="performance" value="32"></label>
+        <div class="setting-heading"><span id="gameFpsSourceLabel">帧率采样方式</span><div class="monitor-options" role="group" aria-labelledby="gameFpsSourceLabel"><button type="button" data-game-fps-source value="0" aria-pressed="false">单图层</button><button type="button" data-game-fps-source value="1" aria-pressed="false">多图层</button></div></div>
+        <label class="setting-heading setting-switch"><span>CPU 各簇频率</span><input type="checkbox" role="switch" data-game-metric="performance" value="4"></label>
+        <label class="setting-heading setting-switch"><span>CPU 各簇使用率</span><input type="checkbox" role="switch" data-game-metric="performance" value="2"></label>
+        <label class="setting-heading setting-switch"><span>GPU 频率</span><input type="checkbox" role="switch" data-game-metric="performance" value="16"></label>
+        <label class="setting-heading setting-switch"><span>GPU 使用率</span><input type="checkbox" role="switch" data-game-metric="performance" value="8"></label>
+        <label class="setting-heading setting-switch"><span>CPU / GPU 最高温度</span><input type="checkbox" role="switch" data-game-metric="performance" value="64"></label>
+        <label class="setting-heading setting-switch"><span>RAM 已用</span><input type="checkbox" role="switch" data-game-metric="performance" value="128"></label>
+      </section>
+    </fieldset>
+    <p id="gameMetricsStatus" class="small" role="status" hidden></p>
+  </div>
+</section>
 <section id="advancedPage" class="detail battery-info-panel advanced-page" aria-labelledby="advancedTitle" hidden>
   <header class="subpage-header"><div class="page-heading"><button id="advancedBack" class="back" type="button">返回</button><h1 id="advancedTitle">进阶设置</h1></div><button id="resetAdvancedSettings" class="settings-button" type="button" disabled>恢复默认</button></header>
   <div class="page-scroll">
     <section class="card advanced-card" aria-labelledby="advancedLiveTitle">
-      <div class="advanced-live-heading"><h2 id="advancedLiveTitle">当前生效值</h2><button id="advancedInfo" class="setting-info" type="button" aria-label="查看参数说明">i</button></div>
+      <div class="advanced-live-heading"><h2 id="advancedLiveTitle">当前生效值</h2><button id="advancedInfo" class="settings-button" type="button">参数说明</button></div>
       <dl id="advancedCapacityReadings" class="advanced-readings" aria-label="解容" hidden></dl>
       <dl id="advancedChargingReadings" class="advanced-readings" aria-label="充电"></dl>
       <p id="advancedStatus" class="small" role="status" hidden></p>
@@ -131,7 +162,7 @@
       <h2 id="advancedChargingTitle">充电</h2>
       <div id="advancedCoolDown"></div>
       <p class="advanced-setting-note">设置为0可以基本排除温度和亮屏导致的降流，电流在合理范围内，可能会导致温度较高，但依然有温控。</p>
-      <div class="advanced-field"><span id="advancedChargingModeLabel">限制充电</span><div id="advancedChargingMode" class="monitor-options" role="group" aria-labelledby="advancedChargingModeLabel"></div><span id="advancedChargingModeUnavailable" hidden>不存在</span></div>
+      <div class="advanced-field"><span id="advancedChargingModeLabel">限制充电</span><div id="advancedChargingMode" class="monitor-options" role="group" aria-labelledby="advancedChargingModeLabel"></div><span id="advancedChargingModeUnavailable" hidden>接口缺失</span></div>
       <p class="advanced-setting-note">均依然会显示为充电状态。</p>
       <div id="advancedGaugeInterval"></div>
       <p class="advanced-setting-note">建议设置为1.5s，节奏合适。</p>
@@ -146,7 +177,7 @@
   <header class="subpage-header"><div class="page-heading"><button id="advancedInfoBack" class="back" type="button">返回</button><h1 id="advancedInfoTitle">参数说明</h1></div></header>
   <div class="page-scroll">
     <p class="advanced-info-intro"><strong>使用须知：</strong><span id="advancedSafetyText">进阶选项接口依赖OPLUS厂商节点，存在情况视机型而定。虽然这些接口都会受到更底层的限制，但若设置不当，仍可能会导致手机寿命非正常下降。修改前应了解其意义，并合理地修改。参数修改只生效一次，可直接恢复，硬重启后会失效，不影响系统分区。</span></p>
-    <p class="advanced-info-intro">「当前生效值」显示驱动接口的读回结果。电压和电流的读回值可能是阈值或协议目标，实测值还会随充电器、电池状态和温度变化。显示「不存在」的接口无法在这台设备上使用。</p>
+    <p class="advanced-info-intro">「当前生效值」显示驱动接口的读回结果。电压和电流的读回值可能是阈值或协议目标，实测值还会随充电器、电池状态和温度变化。显示「接口缺失」的接口无法在这台设备上使用。</p>
     <section class="advanced-definitions" aria-labelledby="advancedInfoCapacity">
       <h2 id="advancedInfoCapacity">解容</h2>
       <p><strong>电量计截止电压（GAUGE_TERM_VOLTAGE）</strong>：电量计估算剩余容量时使用的放电终点。调整后，低电量读数可能要经过后续充放电才会重新校准。</p>
@@ -297,7 +328,7 @@
 </section>
 <section id="batteryTrendPanel" class="detail battery-info-panel" hidden>
   <header class="subpage-header"><div class="page-heading"><button id="batteryTrendBack" class="back" type="button">返回</button><h1>电池健康趋势</h1></div><button class="page-home" type="button" aria-label="返回主页" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg></button></header>
-  <div class="page-scroll"><section class="chartpanel record-detail-section health-trend-chart"><div class="chartbar"><strong>健康趋势</strong><div><button id="batteryTrendExport" type="button" disabled>导出</button><button id="batteryTrendReset" type="button">复位</button></div></div>
+  <div class="page-scroll"><section id="batteryTrendChart" class="chartpanel record-detail-section health-trend-chart"><div class="chartbar"><strong>健康趋势</strong><div><button id="batteryTrendExport" type="button" disabled>导出</button><button id="batteryTrendReset" type="button">复位</button><button id="batteryTrendFullscreen" type="button">横屏全屏</button><button id="batteryTrendExit" type="button" hidden>退出</button></div></div>
     <div class="plotwrap"><canvas id="batteryTrendPlot" aria-label="循环次数、Qmax 和满充容量趋势" role="img"></canvas><div id="batteryTrendTooltip" class="tooltip" hidden></div></div><div id="batteryTrendLegend" class="legend"></div><p id="batteryTrendStatus" class="small" role="status"></p>
   </section></div>
 </section>

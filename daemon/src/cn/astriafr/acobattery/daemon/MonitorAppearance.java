@@ -8,10 +8,10 @@ final class MonitorAppearance {
     static final int CPU=CPU_CHART|CPU_FREQUENCY, GPU=GPU_CHART|GPU_FREQUENCY;
     static final int PERFORMANCE=FPS|CPU|GPU, BATTERY=POWER|TEMPERATURE;
     private static final int DEFAULT_OPACITY=55, DEFAULT_SIZE_PERCENT=100;
-    static final MonitorAppearance DEFAULT=new MonitorAppearance(127,DEFAULT_OPACITY,DEFAULT_OPACITY,DEFAULT_SIZE_PERCENT,true,false,false,
+    static final MonitorAppearance DEFAULT=new MonitorAppearance(127,DEFAULT_OPACITY,DEFAULT_OPACITY,DEFAULT_SIZE_PERCENT,true,false,false,false,
         new Thresholds(60,75,90),new Thresholds(8,12,15),new Thresholds(42,45,48));
     final int metrics, whiteOpacity, blackOpacity, sizePercent;
-    final boolean blackText, landscapeBottom, followSystem;
+    final boolean blackText, landscapeBottom, followSystem, taskFpsCallback;
     final Thresholds cpu, power, temperature;
 
     static final class Thresholds {
@@ -24,17 +24,26 @@ final class MonitorAppearance {
     }
 
     private MonitorAppearance(int metrics,int whiteOpacity,int blackOpacity,int sizePercent,boolean blackText,boolean landscapeBottom,boolean followSystem,
-            Thresholds cpu,Thresholds power,Thresholds temperature){
+            boolean taskFpsCallback,Thresholds cpu,Thresholds power,Thresholds temperature){
         this.metrics=metrics;this.whiteOpacity=whiteOpacity;this.blackOpacity=blackOpacity;
         this.sizePercent=sizePercent;
         this.blackText=blackText;this.landscapeBottom=landscapeBottom;
         this.followSystem=followSystem;
+        this.taskFpsCallback=taskFpsCallback;
         this.cpu=cpu;this.power=power;this.temperature=temperature;
     }
 
     boolean shows(int group){return (metrics&group)!=0;}
+    MonitorAppearance withTaskFpsCallback(boolean callback){
+        return callback==taskFpsCallback?this:new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,blackText,
+            landscapeBottom,followSystem,callback,cpu,power,temperature);
+    }
 
     JSONArray values(){
+        return appearanceValues().put(0).put(taskFpsCallback?1:0);
+    }
+
+    JSONArray appearanceValues(){
         return new JSONArray().put(metrics).put(cpu.yellow).put(cpu.orange).put(cpu.red)
             .put(whiteOpacity).put(blackText?1:0).put(landscapeBottom?1:0)
             .put(power.yellow).put(power.orange).put(power.red)
@@ -42,18 +51,24 @@ final class MonitorAppearance {
             .put(blackOpacity).put(sizePercent);
     }
 
-    static MonitorAppearance load(String saved){
+    static MonitorAppearance load(String saved,boolean taskFpsCallback){
         if(!saved.isEmpty()){
-            try{return parse(new JSONArray(saved));}
+            try{return parse(new JSONArray(saved),taskFpsCallback);}
             catch(IllegalArgumentException|JSONException ignored){}
         }
-        return DEFAULT;
+        return DEFAULT.withTaskFpsCallback(taskFpsCallback);
     }
 
     static MonitorAppearance parse(JSONArray values){
+        return parse(values,DEFAULT.taskFpsCallback);
+    }
+
+    static MonitorAppearance parse(JSONArray values,boolean savedTaskFpsCallback){
         int length=values.length();
-        if(length!=6&&length!=7&&(length<13||length>17))throw invalid();
-        // Ignore the retired screen-off flag at the end of earlier settings.
+        if(length!=6&&length!=7&&(length<13||length>18))throw invalid();
+        // Slot 16 is the retired screen-off flag. Keep it reserved for old settings.
+        String source=length==18?values.optString(17):savedTaskFpsCallback?"1":"0";
+        if(!source.equals("0")&&!source.equals("1"))throw invalid();
         int[] numbers=new int[Math.min(length,16)];
         for(int i=0;i<numbers.length;i++){
             String value=values.optString(i);
@@ -71,7 +86,7 @@ final class MonitorAppearance {
         Thresholds temperature=length>=13?new Thresholds(numbers[10],numbers[11],numbers[12]):DEFAULT.temperature;
         int whiteOpacity=length>=15?opacity:DEFAULT_OPACITY;
         return new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,numbers[5]==1,landscape==1,followSystem==1,
-            cpu,power,temperature);
+            source.equals("1"),cpu,power,temperature);
     }
 
     private static IllegalArgumentException invalid(){return new IllegalArgumentException("性能监视器设置无效。");}

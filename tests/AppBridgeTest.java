@@ -39,6 +39,10 @@ public final class AppBridgeTest {
         rejected(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 0.55 10001 0");
         rejected(client+"set_recording 0.5");
         check(AppBridge.parse(client+"set_recording 0")[1].equals("set_recording"));
+        check(AppBridge.parse(client+"game_metrics")[1].equals("game_metrics"));
+        check(java.util.Arrays.equals(AppBridge.parse(client+"set_game_metrics 73 1 1"),
+            new String[]{"api","set_game_metrics","73","1","1"}));
+        rejected(client+"set_game_metrics 73 1;id");
         check(AppBridge.parse(client+"set_oplus_vote GAUGE_TERM_VOLTAGE 3000")[2].equals("GAUGE_TERM_VOLTAGE"));
         check(AppBridge.parse(client+"set_oplus_vote GAUGE_SHUTDOWN_VOLTAGE stock")[3].equals("stock"));
         rejected(client+"set_oplus_vote TARGET_TERM_VOLTAGE 3000");

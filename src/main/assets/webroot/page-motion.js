@@ -1,7 +1,7 @@
 // Navigation-only compositor animations. No cloned pages, canvas copies or data reads.
 const motionEase='cubic-bezier(.2,.65,.3,1)';
 export function installPageMotion(){
-  const ids=['homePage','recordsPage','settingsPanel','monitorAppearancePage','advancedPage','advancedInfoPage','coolDownDetailsPage','detail','batteryInfoPanel','batteryHistoryPanel','batteryHistoryDetail','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail'];
+  const ids=['homePage','recordsPage','settingsPanel','monitorAppearancePage','gameMetricsPage','advancedPage','advancedInfoPage','coolDownDetailsPage','detail','batteryInfoPanel','batteryHistoryPanel','batteryHistoryDetail','usageDetail','usageAppDetail','usageWeekDetail','usageMonthDetail','usageAppWeekDetail'];
   const nodes=ids.map(id=>document.getElementById(id)).filter(Boolean),tabs=['home','records','settings'];
   const reduced=matchMedia('(prefers-reduced-motion: reduce)'),running=new Map();
   let last=nodes.find(node=>!node.closest('[hidden]')),state=history.state,back=false,tab=false,queued=false,interactive=false;

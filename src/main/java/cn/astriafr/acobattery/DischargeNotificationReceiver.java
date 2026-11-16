@@ -21,6 +21,8 @@ public final class DischargeNotificationReceiver extends BroadcastReceiver {
     private static final String CHANNEL="discharge_record";
     private static final int ID=0x41434f44;
     private static final String SEPARATOR="  ";
+    private static long lastDelivery;
+    private static boolean lastDelivered;
 
     static boolean canPost(Context context){
         NotificationManager manager=context.getSystemService(NotificationManager.class);
@@ -38,16 +40,27 @@ public final class DischargeNotificationReceiver extends BroadcastReceiver {
 
     static synchronized boolean deliver(Context context,Bundle snapshot){
         if(snapshot==null)return false;
+        long sequence=snapshot.getLong(DischargeNotice.SEQUENCE,0);
+        if(sequence>0&&sequence<=lastDelivery)return sequence==lastDelivery&&lastDelivered;
+        boolean delivered=deliverSnapshot(context,snapshot);
+        if(sequence>0){lastDelivery=sequence;lastDelivered=delivered;}
+        return delivered;
+    }
+
+    private static boolean deliverSnapshot(Context context,Bundle snapshot){
         NotificationManager manager=context.getSystemService(NotificationManager.class);
         if(manager==null)return false;
         try{
             if(!snapshot.getBoolean("visible",false)){manager.cancel(ID);return true;}
             PowerManager power=context.getSystemService(PowerManager.class);
-            if(power==null||!power.isInteractive()||!canPost(context))return false;
+            if(power==null||!power.isInteractive()||!manager.areNotificationsEnabled())return false;
+            NotificationChannel channel=manager.getNotificationChannel(CHANNEL);
+            if(channel!=null&&channel.getImportance()==NotificationManager.IMPORTANCE_NONE)return false;
             if(snapshot.getBoolean("onlyIfMissing")){
                 for(StatusBarNotification active:manager.getActiveNotifications())
                     if(active.getId()==ID&&active.getTag()==null)return false;
             }
+            if(channel==null)manager.createNotificationChannel(new NotificationChannel(CHANNEL,"放电记录",NotificationManager.IMPORTANCE_LOW));
             post(context,manager,snapshot);
             return true;
         }catch(RuntimeException failure){
@@ -57,8 +70,6 @@ public final class DischargeNotificationReceiver extends BroadcastReceiver {
     }
 
     private static void post(Context context,NotificationManager manager,Bundle snapshot){
-        if(manager.getNotificationChannel(CHANNEL)==null)
-            manager.createNotificationChannel(new NotificationChannel(CHANNEL,"放电记录",NotificationManager.IMPORTANCE_LOW));
         boolean charging=snapshot.getBoolean("charging");
         String capacity=metric(number(snapshot,"rm"),"%.0f",charging?"mAh":" mAh");
         String voltage=metric(number(snapshot,"voltage"),"%.2f",charging?"V":" V");

@@ -11,6 +11,7 @@ import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
 import{createAdvancedPage}from'./advanced-settings.js';
 import{createCoolDownDetailsPage}from'./cool-down-details.js';
 import{createMonitorAppearancePage}from'./monitor-appearance.js';
+import{createGameMetricsPage}from'./game-metrics.js';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
 import{ThemeController}from'./theme.js?v=acol-2.2s';
 import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.2s';
@@ -106,11 +107,12 @@ const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)
 const advancedPage=createAdvancedPage(api,settingsPanel);
 const coolDownDetailsPage=createCoolDownDetailsPage(api);
 const monitorAppearancePage=createMonitorAppearancePage(api,settingsPanel);
+const gameMetricsPage=createGameMetricsPage(api);
 const batteryPanel=new BatteryInfoPanel();
 const homeUsage=new HomeUsagePanel(api);
 const loadBatteryHistory=lazyPanel(async()=>{
   const{BatteryHistoryPanel}=await importBatteryHistory();
-  return batteryHistory=new BatteryHistoryPanel(api,(state,push)=>openBatteryHistory(state,push),()=>window.__acoBack());
+  return batteryHistory=new BatteryHistoryPanel(api,(state,push)=>openBatteryHistory(state,push),()=>window.__acoBack(),fullScreen);
 });
 const loadUsageDetails=lazyPanel(async()=>{
   const{UsageDetailsPanel}=await importUsageDetails();
@@ -177,7 +179,7 @@ function showTab(tab){
 async function activateTab(tab){
   usageNavigation++;closePendingPanel();usageDetails?.close();
   batteryHistory?.close();batteryPanel.close();
-  settingsPanel.closeEditor();monitorAppearancePage.close();advancedPage.close();$('advancedInfoPage').hidden=true;
+  settingsPanel.closeEditor();monitorAppearancePage.close();gameMetricsPage.close();advancedPage.close();$('advancedInfoPage').hidden=true;
   coolDownDetailsPage.close();
   liveChannel.setMode(tab==='home'?HOME_WATCH_MODE:tab==='settings'?SETTINGS_WATCH_MODE:SUMMARY_WATCH_MODE);
   await detailPage?.close();
@@ -205,7 +207,7 @@ window.__acoBack=()=>{
   if(usageDetails&&(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip)){usageDetails.hideTips();return'handled';}
   if(homeUsage.tip){homeUsage.hideTip();return'handled';}
   if(cancelTopDialog())return'handled';
-  if(detailPage?.backFullscreen())return'handled';
+  if(detailPage?.backFullscreen()||batteryHistory?.backFullscreen())return'handled';
   if(history.state?.page&&history.state.page!=='home'){history.back();return'handled';}
   // Recover a visible child page even if its browser history state was lost.
   if(activeTab!=='home'||batteryPanel.active||batteryHistory?.active||!$('detail').hidden||usageDetails?.state){showHome();return'handled';}
@@ -235,6 +237,18 @@ $('openMonitorAppearance').onclick=async()=>{
   showMonitorAppearance();
 };
 $('monitorAppearanceBack').onclick=()=>window.__acoBack();
+function showGameMetrics(){
+  if(gameMetricsPage.active)return;
+  clearTimeout(pollTimer);liveChannel.close();
+  $('appShell').hidden=true;gameMetricsPage.open();
+}
+$('openGameMetrics').onclick=async()=>{
+  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  if(history.state?.page!=='settings')return;
+  history.pushState({page:'game-metrics'},'',pageUrl('game-metrics'));
+  showGameMetrics();
+};
+$('gameMetricsBack').onclick=()=>window.__acoBack();
 function showAdvancedInfo(){
   advancedPage.close();
   clearTimeout(pollTimer);liveChannel.close();
@@ -294,12 +308,12 @@ async function openBatteryHistory(state,push=false){
 }
 
 function schedulePoll(delay=0){
-  clearTimeout(pollTimer);if(document.hidden||monitorAppearancePage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  clearTimeout(pollTimer);if(document.hidden||monitorAppearancePage.active||gameMetricsPage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy){queuedPoll=true;return;}pollTimer=setTimeout(pollLive,delay);
 }
 function refresh(){recordsView.refresh();}
 async function pollLive(){
-  if(document.hidden||monitorAppearancePage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  if(document.hidden||monitorAppearancePage.active||gameMetricsPage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy||detailPage?.busy||recordsView.busy){schedulePoll(200);return;}
   liveBusy=true;queuedPoll=false;
   const mode=liveChannel.mode,settingsOnly=mode===SETTINGS_WATCH_MODE;
@@ -406,9 +420,13 @@ async function applyHistory(state){
   const page=state?.page??'home';
   const leavingAdvancedInfo=!$('advancedInfoPage').hidden||coolDownDetailsPage.active;
   if(page!=='cool-down-details')coolDownDetailsPage.close();
-  if(page==='monitor-appearance'){showMonitorAppearance();monitorAppearancePage.handleHistory(state);return;}
   const leavingMonitor=monitorAppearancePage.active;
-  if(leavingMonitor){monitorAppearancePage.close();$('appShell').hidden=false;}
+  const leavingGameMetrics=gameMetricsPage.active;
+  if(page!=='monitor-appearance')monitorAppearancePage.close();
+  if(page!=='game-metrics')gameMetricsPage.close();
+  if(page==='monitor-appearance'){showMonitorAppearance();monitorAppearancePage.handleHistory(state);return;}
+  if(page==='game-metrics'){showGameMetrics();return;}
+  if(leavingMonitor||leavingGameMetrics)$('appShell').hidden=false;
   if(page==='cool-down-details'){showCoolDownDetails();return;}
   if(page==='advanced-info'){showAdvancedInfo();return;}
   $('advancedInfoPage').hidden=true;
@@ -419,7 +437,7 @@ async function applyHistory(state){
   if(page==='battery-history'||page==='battery-history-detail'||page==='battery-history-trend'){await openBatteryHistory(state);return;}
   if(page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(state);return;}
   if(page==='record'){settingsPanel.closeEditor();if(detailPage?.id!==state.id)openRecord(state.id,recordsView.find(state.id));return;}
-  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');else if(leavingAdvanced||leavingMonitor)schedulePoll(0);settingsPanel.handleHistory(state);return;}
+  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');else if(leavingAdvanced||leavingMonitor||leavingGameMetrics)schedulePoll(0);settingsPanel.handleHistory(state);return;}
   if(activeTab==='settings'&&!await settingsPanel.flush()){
     history.pushState({page:'settings'},'',pageUrl('settings'));$('appShell').hidden=false;showTab('settings');toast('设置未能保存，请重试。');return;
   }
