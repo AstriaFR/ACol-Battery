@@ -1,5 +1,6 @@
 import{openDatabase}from'./indexed-db.js?v=acol-2.2s';
 import{isoWeek}from'./usage-calendar.js?v=acol-2.2s';
+import{compareUsageApps}from'./usage-stack.js?v=acol-2.2s';
 const finite=value=>Number.isFinite(value)&&value>=0;
 export const midnight=wall=>{const date=new Date(wall);date.setHours(0,0,0,0);return date.getTime()};
 export const nextDate=(day,amount=1)=>{const date=new Date(day);date.setDate(date.getDate()+amount);return date.getTime()};
@@ -88,7 +89,19 @@ export class DailyUsageCache{
   }
   async getHours(day){return await this.layer('hours',day)||{zone:this.zone,dayStart:day,dayEnd:nextDate(day),through:day,hours:emptyHours()};}
   async getProgress(day){return await this.layer('progress',day)||{through:day,state:'0'};}
-  async getDailyApps(day){return await this.layer('day_apps',day)||{dayStart:day,apps:[]};}
+  async dayOverview(day){
+    await this.summary(day);
+    const key=keyOf(this.zone,day);
+    return this.transaction(['hours','day_apps','hour_apps'],'readonly',(s,set,fail,read)=>{
+      const data={entry:{zone:this.zone,dayStart:day,dayEnd:nextDate(day),through:day,hours:emptyHours()},apps:[],hourApps:[]};
+      let pending=3;
+      const ready=()=>{if(--pending===0)set(data);};
+      read(s.hours,key,value=>{if(value)data.entry=value;ready();});
+      read(s.day_apps,key,value=>{data.apps=value?.apps??[];ready();});
+      const request=s.hour_apps.getAll(IDBKeyRange.bound([this.zone,day,0],[this.zone,day,23]),24);
+      request.onsuccess=()=>{for(const row of request.result)data.hourApps[row.hour]=row;ready();};
+    });
+  }
   async getHourApps(day,hour){return await this.layer('hour_apps',day,hour)||{apps:[]};}
   async getAllHourApps(day){
     await this.summary(day);const key=keyOf(this.zone,day),id='hour_day'+JSON.stringify(key);
@@ -136,9 +149,14 @@ export class DailyUsageCache{
       const result={};let pending=2;
       for(const name of ['summaries','day_apps']){const request=s[name].getAll(IDBKeyRange.bound([this.zone,from],[this.zone,to],false,true),7);request.onsuccess=()=>{result[name]=request.result;if(--pending===0)set(result);};}
     });
-    const today=midnight(Date.now()),known=new Set(data.summaries.filter(row=>row.dayStart<=today&&row.coveredMs>0).map(row=>row.dayStart)),totals=new Map();
-    for(const day of data.day_apps){this.remember('day_apps',[this.zone,day.dayStart],day);if(!known.has(day.dayStart))continue;for(const row of day.apps){const old=totals.get(row.pkg);totals.set(row.pkg,{pkg:row.pkg,label:row.label||old?.label||row.pkg,ms:(old?.ms??0)+row.ms});}}
-    return{summaries:data.summaries,apps:[...totals.values()].sort((a,b)=>b.ms-a.ms||a.pkg.localeCompare(b.pkg))};
+    const today=midnight(Date.now()),known=new Set(data.summaries.filter(row=>row.dayStart<=today&&row.coveredMs>0).map(row=>row.dayStart));
+    const totals=new Map(),dayApps=new Map();
+    for(const day of data.day_apps){
+      if(!known.has(day.dayStart))continue;
+      dayApps.set(day.dayStart,day.apps);
+      for(const row of day.apps){const old=totals.get(row.pkg);totals.set(row.pkg,{pkg:row.pkg,label:row.label||old?.label||row.pkg,ms:(old?.ms??0)+row.ms});}
+    }
+    return{summaries:data.summaries,apps:[...totals.values()].sort(compareUsageApps),dayApps};
   }
   async ensureAppTotals(from,to){
     const id=`${this.zone}:${from}:${to}`;if(this.totalIndexing.has(id))return this.totalIndexing.get(id);

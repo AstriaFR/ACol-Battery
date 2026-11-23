@@ -46,12 +46,17 @@ public final class MainActivity extends Activity {
         }
     }
     boolean systemDark(){return (getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
+    boolean launchDark(){return getSharedPreferences("display",MODE_PRIVATE).getBoolean("manualDark",systemDark());}
+    static int surface(boolean dark){return dark?Color.BLACK:Color.rgb(246,248,251);}
     int dp(float value){return Math.round(getResources().getDisplayMetrics().density*value);}
     @Override public void onCreate(Bundle state){
-        super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.WHITE);getWindow().setNavigationBarColor(Color.WHITE);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        super.onCreate(state);boolean dark=launchDark();int background=surface(dark);
+        getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(background);getWindow().setNavigationBarColor(background);
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(background));
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|
+            (dark?0:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
         recordListCache=new RecordListCache(getCacheDir());
-        startup=new StartupController(this);browser=new WebViewHost(this);chartExport=new ChartExport(this);browser.tileSettingsPending=isTileSettingsIntent(getIntent());
+        startup=new StartupController(this);browser=new WebViewHost(this);chartExport=new ChartExport(this,state);browser.tileSettingsPending=isTileSettingsIntent(getIntent());
         dataTransfer=new DataTransferUi(this);if(dataTransfer.resume())return;
         if(getSharedPreferences("maintenance",MODE_PRIVATE).getBoolean("clearPending",false)){clearAllData();return;}
         worker.execute(startup::discardOldReports);
@@ -102,6 +107,10 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request,result,intent);if(dataTransfer!=null&&(request==DataTransferUi.PICK_RESTORE||request==DataTransferUi.SAVE_BACKUP))dataTransfer.result(request,result,intent);
         else if(request==StartupController.SAVE_DATABASE_REBUILD&&result==RESULT_OK&&intent!=null&&intent.getData()!=null)startup.rebuildDatabase(intent.getData());
         else if(request==ChartExport.SAVE&&chartExport!=null)chartExport.result(result,intent);
+    }
+    @Override protected void onSaveInstanceState(Bundle state){
+        super.onSaveInstanceState(state);
+        if(chartExport!=null)chartExport.saveState(state);
     }
     Button pageBackButton(Runnable action){
         boolean dark=browser.activeDarkTheme==null?systemDark():browser.activeDarkTheme;
@@ -164,7 +173,7 @@ public final class MainActivity extends Activity {
         });
     }
     void mount(View child){
-        contentFrame=new FrameLayout(this);contentFrame.setBackgroundColor(Color.rgb(246,248,251));
+        contentFrame=new FrameLayout(this);contentFrame.setBackgroundColor(surface(launchDark()));
         contentFrame.addView(child,new FrameLayout.LayoutParams(-1,-1));
         contentFrame.setPadding(0,0,0,0);
         contentFrame.setOnApplyWindowInsetsListener((view,insets)->{

@@ -1,9 +1,9 @@
-import{DEFAULT_SETTINGS,settingsKeys,encodeSettings}from'./config.js?v=acol-2.2s';
+import{DEFAULT_SETTINGS,settingsKeys,settingSlots,encodeSettings}from'./config.js?v=acol-2.2s';
 export class SettingsPanel{
   constructor(api,onSaved,requestNotificationPermission){
     this.api=api;this.onSaved=onSaved;this.requestNotificationPermission=requestNotificationPermission;
     this.panel=document.getElementById('settingsPanel');this.form=document.getElementById('settingsForm');this.status=document.getElementById('settingsStatus');
-    this.ready=false;this.dirty=false;this.running=null;this.timer=null;this.lastSaved='';this.editor=null;
+    this.ready=false;this.openSequence=0;this.pendingChecks=new Map();this.running=null;this.editor=null;
     this.fastButton=document.getElementById('toggleFast');this.fastBusy=false;this.fastValue=false;this.editorBusy=false;
     this.fastButton.onclick=()=>this.toggleFast();
     this.infoDialogs=new Map();
@@ -49,9 +49,11 @@ export class SettingsPanel{
         field.addEventListener('pointerdown',e=>e.preventDefault());
         (field.closest('.setting-input')||field).addEventListener('click',()=>this.edit(key));
         field.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.edit(key);}});
-      }
-      const change=()=>{if(!this.ready)return;this.dirty=true;this.setStatus('');clearTimeout(this.timer);this.timer=setTimeout(()=>this.flush(),600);};
-      field.addEventListener('input',change);field.addEventListener('change',()=>{change();clearTimeout(this.timer);this.flush();});
+      }else field.addEventListener('change',()=>{
+        if(!this.ready)return;
+        this.pendingChecks.set(key,field.checked);
+        this.flush();
+      });
     }
     for(const button of this.keypad.querySelectorAll('[data-key]'))button.onclick=()=>this.press(button.dataset.key);
     document.getElementById('keypadApply').onclick=()=>this.commitEditor();
@@ -114,7 +116,7 @@ export class SettingsPanel{
       this.fastButton.disabled=true;this.recording.disabled=true;this.powerDisplay.disabled=true;document.getElementById('themeToggle').disabled=true;
       const result=await this.api('reset_settings');
       this.updateDischargeNotification(result.settings.dischargeNotificationEnabled);
-      this.lastSaved=JSON.stringify(encodeSettings(result.settings));this.dirty=false;this.fill(result.settings);this.onSaved(result.settings);
+      this.fill(result.settings);this.onSaved(result.settings);
       if(this.fastValue){const fast=await this.api('set_fast',0);this.updateFast(fast.fastEnabled);this.onSaved(fast.settings);}
       if(this.powerDisplayValue){const power=await this.api('set_power_display',0);this.updatePowerDisplay(power.powerDisplayEnabled,power.powerDisplayError);this.onSaved(power.settings);}
       if(this.recordingValue===false){const recording=await this.api('set_recording',1);this.updateRecording(recording.recordingEnabled,recording.recordingProblem);this.onSaved(recording.settings);}
@@ -190,7 +192,11 @@ export class SettingsPanel{
     const unit=key.endsWith('Pct')?'%':key==='energyWh'?'Wh':key==='capacityAh'?'Ah':key.startsWith('voltage')?'V':key.endsWith('Minutes')?'分钟':['fastSeconds','performanceSeconds','chargeSeconds'].includes(key)?'秒':'℃';
     const minimum=decimal?Number(field.min).toFixed(digits):field.min,maximum=decimal?Number(field.max).toFixed(digits):field.max;
     const range=`${minimum}–${maximum} ${unit}${decimal?'':'\n整数'}`;
-    this.openEditor({key,field,draft:field.value,decimal,signed,digits},names[key],unit,range,push?{page:'settings',keypad:true,key}:null);
+    const restore=async()=>{
+      if(!await this.flush())throw Error('设置未能保存，请重试。');
+      await this.writeSetting('reset_setting',settingSlots.indexOf(key));
+    };
+    this.openEditor({key,field,draft:field.value,decimal,signed,digits,restore},names[key],unit,range,push?{page:'settings',keypad:true,key}:null);
   }
   openEditor(editor,title,unit,range,state){
     if(this.keypad.open||this.editorBusy)return;
@@ -230,7 +236,7 @@ export class SettingsPanel{
     }
   }
   press(key){
-    const e=this.editor;if(!e||e.commit&&this.editorBusy)return;
+    const e=this.editor;if(!e||this.editorBusy)return;
     this.editorError('');
     if(key==='clear'){e.draft='';e.fresh=false;}
     else if(key==='backspace'){e.draft=e.draft.slice(0,-1);e.fresh=false;}
@@ -244,7 +250,7 @@ export class SettingsPanel{
   }
   async commitEditor(){
     const e=this.editor;if(!e||this.editorBusy||e.applyDisabled)return;
-    if(e.key==='energyWh'&&e.draft===''){e.field.value='';e.field.dispatchEvent(new Event('change',{bubbles:true}));this.dismissEditor();return;}
+    if(e.key==='energyWh'&&e.draft===''){await this.applyEditorAction(e.restore);return;}
     if(!/^-?\d+(?:\.\d*)?$/.test(e.draft)){this.editorError('请输入完整数值。');return;}
     if(e.commit){
       await this.applyEditorAction(()=>e.commit(Number(e.draft)));
@@ -255,23 +261,18 @@ export class SettingsPanel{
     catch(error){this.editorError(error.message);return;}
     if(e.key==='deletePct'){this.openDeleteConfirmation(value.deletePct);return;}
     if(['screenOnMinutes','screenOffMinutes','fastSeconds','performanceSeconds','chargeSeconds'].includes(e.key)){
-      this.editorBusy=true;document.getElementById('keypadApply').disabled=true;
+      const apply=document.getElementById('keypadApply'),restore=document.getElementById('keypadRestore');
+      this.editorBusy=apply.disabled=restore.disabled=true;
       try{
         const name=document.getElementById('keypadTitle').textContent,unit=['fastSeconds','performanceSeconds','chargeSeconds'].includes(e.key)?'秒':'分钟';
         if(!await this.askChange(`修改${name}？`,`改为 ${value[e.key]} ${unit}，继续当前记录。`))return;
-        if(!await this.flush())throw Error('设置未能保存，请重试。');
-        value=this.values();value[e.key]=Number(e.draft);encodeSettings(value);
-        // Publish the confirmed value before joining the shared save loop, so a
-        // later checkbox change cannot send an older interval back to the daemon.
-        e.field.value=e.key==='fastSeconds'||e.key==='performanceSeconds'?value[e.key].toFixed(1):String(value[e.key]);this.dirty=true;
-        if(!await this.flush())throw Error('设置未能保存，请重试。');
+        await this.saveField(e.key,value[e.key]);
         if(this.editor===e)this.dismissEditor();
       }catch(error){this.editorError(error.message);}
-      finally{this.editorBusy=false;document.getElementById('keypadApply').disabled=false;}
+      finally{this.editorBusy=apply.disabled=restore.disabled=false;}
       return;
     }
-    e.field.value=e.decimal?value[e.key].toFixed(2):String(value[e.key]);
-    e.field.dispatchEvent(new Event('change',{bubbles:true}));this.dismissEditor();
+    await this.applyEditorAction(()=>this.saveField(e.key,value[e.key]));
   }
   openDeleteConfirmation(value){
     if(this.deleteConfirm.open)return;
@@ -291,20 +292,7 @@ export class SettingsPanel{
     if(this.confirmBusy||this.pendingDelete===null)return;
     const editor=this.editor,threshold=this.pendingDelete;this.confirmBusy=true;this.confirmYes.disabled=true;this.confirmNo.disabled=true;
     try{
-      if(!await this.flush())throw Error('设置未能保存，请重试。');
-      const value=this.values();value.deletePct=threshold;const args=encodeSettings(value);
-      // Share the same in-flight barrier as normal saves and page-exit flushes.
-      // The confirmation stays modal until this one-time prune has completed.
-      let failure;
-      const write=(async()=>{
-        try{
-          const data=await this.api('set_settings',...args,prune?1:0);
-          this.lastSaved=JSON.stringify(args);this.onSaved(data.settings,data);this.fill(data.settings);this.setStatus('');return true;
-        }catch(error){failure=error;return false;}
-      })();
-      this.running=write;let saved;
-      try{saved=await write;}finally{if(this.running===write)this.running=null;}
-      if(!saved)throw failure;
+      await this.saveField('deletePct',threshold,prune);
       if(this.editor===editor)this.dismissEditor();
     }catch(e){const box=document.getElementById('settingsDeleteError');box.textContent=e.message;box.hidden=false;}
     finally{this.confirmBusy=false;this.confirmYes.disabled=false;this.confirmNo.disabled=false;}
@@ -338,46 +326,67 @@ export class SettingsPanel{
   fill(value){
     for(const key of settingsKeys){
       const field=this.form.elements.namedItem(key),v=value[key];
-      if(field.type==='checkbox')field.checked=v;
+      if(field.type==='checkbox')field.checked=this.pendingChecks?.get(key)??v;
       else field.value=v===null||v===undefined?'':key==='fastSeconds'||key==='performanceSeconds'?v.toFixed(1):['energyWh','capacityAh','voltageMin','voltageMax'].includes(key)?v.toFixed(2):String(v);
       field.removeAttribute('aria-invalid');
     }
   }
+  initializeForm(settings){
+    const value={...DEFAULT_SETTINGS,...settings};
+    this.fill(value);this.ready=true;this.setStatus('');
+    for(const field of this.form.elements)field.disabled=false;
+    this.updateDischargeNotification(value.dischargeNotificationEnabled);this.updateFast();
+  }
+  recoverFromStatus(settings){
+    if(!this.ready&&settings)this.initializeForm(settings);
+  }
   async open(cached){
-    if(cached){
-      const value={...DEFAULT_SETTINGS,...cached};this.fill(value);this.updateDischargeNotification(value.dischargeNotificationEnabled);this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.dirty=false;this.setStatus('');
-      for(const field of this.form.elements)field.disabled=false;
-      this.updateFast();
-      return;
-    }
-    this.ready=false;this.dirty=false;clearTimeout(this.timer);this.form.disabled=true;
+    const sequence=++this.openSequence;
+    if(cached){this.initializeForm(cached);return;}
+    this.ready=false;
     for(const field of this.form.elements)field.disabled=true;
-    this.setStatus('');
+    this.setStatus('');this.updateFast();
     try{
-      const data=await this.api('settings'),value={...DEFAULT_SETTINGS,...data.settings};this.fill(value);this.updateRecording(data.recordingEnabled,data.recordingProblem);this.updateDischargeNotification(value.dischargeNotificationEnabled);this.updateFast(data.fastEnabled);this.updatePowerDisplay(data.powerDisplayEnabled,data.powerDisplayError);
-      this.lastSaved=JSON.stringify(encodeSettings(value));this.ready=true;this.setStatus('');
-    }catch(e){this.setStatus(e.message,true);}
-    finally{for(const field of this.form.elements)field.disabled=!this.ready;this.updateFast();}
+      const data=await this.api('settings');
+      if(sequence!==this.openSequence||this.ready)return;
+      this.initializeForm(data.settings);
+      this.updateRecording(data.recordingEnabled,data.recordingProblem);
+      this.updateFast(data.fastEnabled);this.updatePowerDisplay(data.powerDisplayEnabled,data.powerDisplayError);
+    }catch(error){if(sequence===this.openSequence&&!this.ready)this.setStatus(error.message,true);}
+  }
+  async saveField(key,value,prune=false){
+    if(!await this.flush())throw Error('设置未能保存，请重试。');
+    const slot=settingSlots.indexOf(key);
+    const encoded=encodeSettings({...this.values(),[key]:value})[slot];
+    await this.writeSetting('set_setting',slot,encoded,prune?1:0);
+  }
+  async writeSetting(action,...args){
+    const write=(async()=>{
+      const data=await this.api(action,...args);
+      this.fill(data.settings);
+      this.onSaved(data.settings,data);
+      this.setStatus('');
+    })();
+    this.running=write;
+    try{await write;}
+    finally{if(this.running===write)this.running=null;}
   }
   async flush(){
-    clearTimeout(this.timer);
     if(this.resetPromise)await this.resetPromise;
     if(!this.ready)return true;
-    if(this.running){const write=this.running,success=await write;if(this.running===write)this.running=null;if(!success)return false;if(this.running||this.dirty)return this.flush();return true;}
-    if(!this.dirty)return true;
-    let value,args,key;
-    try{value=this.values();args=encodeSettings(value);key=JSON.stringify(args);}
-    catch(e){this.setStatus(e.message,true);return false;}
-    if(key===this.lastSaved){this.dirty=false;this.setStatus('');return true;}
-    this.dirty=false;this.setStatus('');
-    this.running=(async()=>{
-      try{
-        const data=await this.api('set_settings',...args,0);this.lastSaved=key;this.onSaved(data.settings);
-        if(!this.dirty)this.fill(data.settings);
-        this.setStatus('');return true;
-      }catch(e){this.dirty=true;this.setStatus(e.message,true);return false;}
-    })();
-    const write=this.running,success=await write;if(this.running===write)this.running=null;
-    if(success&&(this.running||this.dirty))return this.flush();return success;
+    if(this.running){
+      try{await this.running;}catch{return false;}
+      return this.flush();
+    }
+    if(!this.pendingChecks?.size)return true;
+    const [key,checked]=this.pendingChecks.entries().next().value;
+    this.pendingChecks.delete(key);
+    try{await this.writeSetting('set_setting',settingSlots.indexOf(key),checked?1:0,0);}
+    catch(error){
+      if(!this.pendingChecks.has(key))this.pendingChecks.set(key,checked);
+      this.setStatus(error.message,true);
+      return false;
+    }
+    return this.flush();
   }
 }

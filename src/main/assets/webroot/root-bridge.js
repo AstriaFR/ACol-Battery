@@ -19,8 +19,9 @@ function send(command,stream=false){
     queueMicrotask(()=>{try{AcoNative.post(JSON.stringify({id,command,stream:true}));}catch{pending.delete(id);child.emit('error',Error('root 连接不可用，请重新打开 App。'));}});return child;
   }
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{pending.delete(id);reject(Error('操作超时，请重试。'));},10000);pending.set(id,{resolve,reject,timer});
-    try{AcoNative.post(JSON.stringify({id,command,stream:false}));}catch{clearTimeout(timer);pending.delete(id);reject(Error('root 连接不可用，请重新打开 App。'));}
+    const timeout=10000,expiresAt=Date.now()+timeout;
+    const timer=setTimeout(()=>{pending.delete(id);reject(Error('操作超时，请重试。'));},timeout);pending.set(id,{resolve,reject,timer});
+    try{AcoNative.post(JSON.stringify({id,command,stream:false,expiresAt}));}catch{clearTimeout(timer);pending.delete(id);reject(Error('root 连接不可用，请重新打开 App。'));}
   });
 }
 window.__acoDeliver=message=>{
@@ -39,6 +40,19 @@ window.__acoDeliver=message=>{
 };
 export function exec(command){return send(command);}
 export function validateApiArgs(action,args){
+  if(action==='set_monitor_order'){
+    if(args.length!==1||!/^[1-7]{7}$/.test(String(args[0])))throw Error('性能监视器显示顺序无效。');
+    return;
+  }
+  if(action==='set_setting'){
+    const [slot,value,prune]=args,decimal=slot===10||slot===13;
+    if(args.length!==3||!/^\d{1,2}$/.test(String(slot))||!(decimal?/^\d{1,2}(?:\.\d)?$/:/^\d{1,5}$/).test(String(value))||!/^[01]$/.test(String(prune)))throw Error('设置参数无效');
+    return;
+  }
+  if(action==='set_advanced_auto_restore'){
+    if(args.length!==1||!/^[01]$/.test(String(args[0])))throw Error('参数无效');
+    return;
+  }
   if(action==='set_charging_mode'){
     if(args.length!==1||!/^[0-3]$/.test(String(args[0])))throw Error('参数无效');
     return;

@@ -73,9 +73,9 @@ public final class DischargeNotificationReceiver extends BroadcastReceiver {
         boolean charging=snapshot.getBoolean("charging");
         String capacity=metric(number(snapshot,"rm"),"%.0f",charging?"mAh":" mAh");
         String voltage=metric(number(snapshot,"voltage"),"%.2f",charging?"V":" V");
-        String temperature=metric(number(snapshot,"temp"),"%.1f",charging?"℃":" °C");
+        String temperature=metric(number(snapshot,"temp"),"%.1f","℃");
         double power=number(snapshot,"watts");
-        String watts=metric(power,charging&&Math.abs(power)>=10?"%.1f":"%.2f","W");
+        String watts=Double.isFinite(power)?metric(power,charging&&Math.abs(power)>=10?"%.1f":"%.2f","W"):"--W";
         long elapsed=snapshot.getLong("elapsed",-1);
         String text,title;
         RemoteViews readings;
@@ -90,7 +90,8 @@ public final class DischargeNotificationReceiver extends BroadcastReceiver {
             double remainingWh=number(snapshot,"wh");
             String first="剩余 "+capacity;
             String second=metric(remainingWh,remainingWh<2?"%.2f":"%.1f"," Wh");
-            String third=duration(snapshot.getLong("minutes",-1));
+            long minutes=snapshot.getLong("minutes",-1);
+            String third=minutes<0?"-时-分":duration(minutes);
             watts="最近平均 "+watts;
             title=elapsed<0?null:percentageChange(number(snapshot,"percentChange"))+" "+duration(elapsed/60_000);
             text=String.join(SEPARATOR,first,second,third)+"\n"+String.join(SEPARATOR,watts,voltage,temperature);

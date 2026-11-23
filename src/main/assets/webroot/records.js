@@ -1,6 +1,5 @@
-import{valid,duration}from'./chart.js?v=acol-2.2s';
 import{compareRecords,recordRank}from'./live-channel.js?v=acol-2.2s';
-import{recordFast,fmt,recordChanges,pad2,stampList,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
+import{valid,duration,recordFast,fmt,recordChanges,pad2,stampList,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
 const nextFrame=callback=>typeof requestAnimationFrame==='function'?requestAnimationFrame(callback):callback();
 const summaryFields=['id','kind','start_wall','start_elapsed','end_elapsed','pct_start','pct_end','rm_start','rm_end','fast_seconds','cell_count','reason'];

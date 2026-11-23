@@ -1,9 +1,15 @@
-import{Chart,systemTimeLabel}from'./chart.js?v=acol-2.2s';
+import{Chart,systemTimeLabel,windowPoints}from'./chart.js?v=acol-2.2s';
 import{bindExport,exportTime}from'./chart-export.js?v=acol-2.2s';
 import{lockedCapacityText,rawFccBoundText}from'./battery-info.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const historyRefreshMs=5000;
-export const healthMetrics=[{key:'cycles',index:1,name:'循环次数',axis:'循环次数',unit:'次',color:'#5479c4',digits:0},{key:'qmax',index:2,name:'Qmax',axis:'Qmax',unit:'mAh',color:'#b47b35',digits:0},{key:'fcc',index:3,name:'满充容量',axis:'满充容量',unit:'mAh',color:'#26957d',digits:0}];
+const tailRmMetric={key:'tailRm',index:5,name:'尾充剩余电量',legendName:'尾充电量',axis:'尾充剩余电量',unit:'mAh',color:'#9260b5',digits:0};
+export const healthMetrics=[
+  {key:'cycles',index:1,name:'循环次数',axis:'循环次数',unit:'次',color:'#5479c4',digits:0},
+  {key:'qmax',index:2,name:'Qmax',axis:'Qmax',unit:'mAh',color:'#b47b35',digits:0},
+  {key:'fcc',index:3,name:'满充容量',axis:'满充容量',unit:'mAh',color:'#26957d',digits:0},
+  tailRmMetric
+];
 export function healthScale(values,step=100){
   const known=values.filter(finite);if(!known.length)return{base:0,full:1,min:0,label:'暂无数据'};
   let low=Infinity,high=-Infinity;for(const v of known){low=Math.min(low,v);high=Math.max(high,v);}
@@ -21,17 +27,26 @@ export async function loadHealthTrend(api,cancelled=()=>false){
 class HealthChart extends Chart{
   signals(){return healthMetrics;}
   axisMaximum(){return 100;}
-  preparePoints(points){return points;}
+  preparePoints(points){
+    this.tailRmPoints=points.filter(row=>finite(row[tailRmMetric.index]));
+    return points;
+  }
+  signalWindow(signal,visible){
+    return signal===tailRmMetric?windowPoints(this.tailRmPoints,...this.window):visible;
+  }
   scaleFor(s){return this.healthScales?.get(s.key)??healthScale([]);}
   timeAxis(width){
     const date=x=>{const d=new Date(this.startWall+x);return`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;};
     const count=Math.max(1,Math.min(4,Math.floor(width/90))),[a,b]=this.window;
     return{label:date,ticks:Array.from({length:count-1},(_,i)=>{const x=a+(b-a)*(i+1)/count;return{x,text:date(x)};})};
   }
-  inspect(...args){
-    super.inspect(...args);if(this.marker===null||this.tooltip.hidden)return;
-    const row=this.points.find(p=>p[0]===this.marker);if(!row)return;
-    this.tooltip.textContent=systemTimeLabel(this.startWall+row[0],true,true)+'\n'+this.signals().filter(s=>this.enabled.has(s.key)).map(s=>`${s.name}  ${number(row[s.index],s.unit)}`).join('\n');this.positionTooltip();
+  showInspection(row,y){
+    this.marker=row[0];this.inspectY=y;
+    this.tooltip.textContent=systemTimeLabel(this.startWall+row[0],true,true)+'\n'+this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
+      const value=s.key==='fcc'&&row[4]?rawFccBoundText(row[s.index]):number(row[s.index],s.unit);
+      return `${s.name}  ${value}`;
+    }).join('\n');
+    this.tooltip.hidden=false;this.refreshInspection();
   }
 }
 const number=(v,unit='',digits=0)=>finite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:digits})+(unit?' '+unit:''):'—';
@@ -48,7 +63,7 @@ export function batteryHistoryFields(snapshot){
   if(fccBound)green.add('rawFcc');
   const fcc=key=>green.has(key)?ratio(info[key],info.designCapacity):number(info[key],'mAh');
   const locked=lockedCapacityText(info.qmax,info.lockedCapacity,noCompensation?null:info.rawFccAbove);
-  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV')};
+  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV'),tailRm:number(info.tailRm,'mAh')};
   return{values,green};
 }
 export class BatteryHistoryPanel{
@@ -147,6 +162,7 @@ export class BatteryHistoryPanel{
       if(this.loaded)await this.refreshHead();else await this.load();return;
     }
     const token=this.token;this.detailDelete.disabled=true;document.getElementById('batterySnapshotStatus').textContent='正在读取快照…';
+    const rmRow=document.getElementById('batterySnapshotTailRm');rmRow.hidden=true;
     for(const node of this.detail.querySelectorAll('[data-history-field]')){node.textContent='—';node.classList.remove('battery-near-actual');}
     document.getElementById('batterySnapshotDate').textContent='—';document.getElementById('batterySnapshotCycles').textContent='—';
     document.getElementById('batterySnapshotScroll').scrollTop=0;
@@ -155,6 +171,7 @@ export class BatteryHistoryPanel{
       if(token!==this.token||!this.active)return;
       document.getElementById('batterySnapshotDate').textContent=batteryHistoryDate(item.completed_wall);document.getElementById('batterySnapshotCycles').textContent='循环次数：'+number(item.cycles);
       const fields=batteryHistoryFields(item.snapshot);
+      rmRow.hidden=!finite(item.snapshot?.tailRm);
       for(const node of this.detail.querySelectorAll('[data-history-field]')){const key=node.dataset.historyField;node.textContent=fields.values[key];node.classList.toggle('battery-near-actual',fields.green.has(key));}
       document.getElementById('batterySnapshotStatus').textContent='';
       this.detailDelete.disabled=false;
@@ -243,7 +260,10 @@ export class BatteryHistoryPanel{
     try{
       const items=await loadHealthTrend(this.api,()=>token!==this.token||!this.active);if(!items)return;
       this.trendItems=items;const start=items[0]?.wall??0;
-      const points=items.map(i=>[i.wall-start,i.cycles??null,i.qmax??null,i.fcc??null]);
+      const points=items.map(i=>{
+        const bounded=finite(i.fccAbove)&&i.fccAbove>0;
+        return [i.wall-start,i.cycles??null,i.qmax??null,bounded?i.fccAbove:i.fcc??null,bounded,i.tailRm??null];
+      });
       this.trendChart.healthScales=new Map(healthMetrics.map(s=>[s.key,healthScale(points.map(p=>p[s.index]),s.key==='cycles'?10:100)]));
       this.trendChart.set(points,Math.max(1,(items.at(-1)?.wall??start)-start),null,{kind:'health',fast:true,startWall:start,cellCount:0});
       const legend=document.getElementById('batteryTrendLegend');legend.replaceChildren();
@@ -252,14 +272,14 @@ export class BatteryHistoryPanel{
         const input=document.createElement('input');input.type='checkbox';input.checked=this.trendChart.enabled.has(metric.key);
         input.onchange=()=>{input.checked?this.trendChart.enabled.add(metric.key):this.trendChart.enabled.delete(metric.key);this.trendChart.clearInspect();this.trendChart.draw();};
         label.onclick=e=>{if(e.target===input)return;this.trendChart.axisKey=metric.key;this.trendChart.draw();};
-        const name=document.createElement('span'),range=document.createElement('span');name.textContent=metric.name;range.className='legend-scale';range.textContent=this.trendChart.scaleFor(metric).label+' '+metric.unit;
+        const name=document.createElement('span'),range=document.createElement('span');name.textContent=metric.legendName??metric.name;range.className='legend-scale';range.textContent=this.trendChart.scaleFor(metric).label+' '+metric.unit;
         label.append(input,name,range);legend.append(label);
       }
       status.textContent=items.length?'':'暂无电池历史数据';button.disabled=!items.length;
     }catch(error){if(token===this.token)status.textContent=error.message;}
   }
   async *trendCsv(){
-    const items=[...this.trendItems];yield['日期','循环次数','Qmax_mAh','满充容量_mAh'];
-    for(const item of items)yield[exportTime(item.wall),item.cycles,item.qmax,item.fcc];
+    const items=[...this.trendItems];yield['日期','循环次数','Qmax_mAh','满充容量_mAh','尾充剩余电量_mAh'];
+    for(const item of items)yield[exportTime(item.wall),item.cycles,item.qmax,finite(item.fccAbove)&&item.fccAbove>0?`＞${item.fccAbove}`:item.fcc,item.tailRm??null];
   }
 }

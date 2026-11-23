@@ -1,23 +1,19 @@
-import{valid,setChartSettings}from'./chart.js?v=acol-2.2s';
-import{fmt}from'./record-display.js?v=acol-2.2s';
+import{valid,fmt,renderRecordHeading,capacityChange,duration,el}from'./record-display.js?v=acol-2.2s';
 import{createRecords}from'./records.js?v=acol-2.2s';
 import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
 import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons,requestDischargeNotificationPermission}from'./root-bridge.js?v=acol-2.2s';
-import{LiveChannel,DETAIL_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
+import{LiveChannel,DETAIL_WATCH_MODE,BATTERY_INFO_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
+import{DEFAULT_SETTINGS,setChartSettings}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
-import{createAdvancedPage}from'./advanced-settings.js';
-import{createCoolDownDetailsPage}from'./cool-down-details.js';
-import{createMonitorAppearancePage}from'./monitor-appearance.js';
-import{createGameMetricsPage}from'./game-metrics.js';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
 import{ThemeController}from'./theme.js?v=acol-2.2s';
 import{EdgeScrollbar}from'./edge-scrollbar.js?v=acol-2.2s';
 import{HomeUsagePanel}from'./home-usage.js?v=acol-2.2s';
 import{usagePages,usageRoots,usageState}from'./usage-navigation.js?v=acol-2.2s';
 const $=id=>document.getElementById(id),command='/data/adb/aco_battery_app/runtime/bin/curve-client';
+function updateText(id,value){const node=$(id);if(node.textContent!==value)node.textContent=value;}
 const edgeScrollbar=new EdgeScrollbar();
 const baseUrl=()=>`${location.pathname}${location.search}`;
 const pageUrl=tab=>baseUrl()+(tab==='home'?'':'#'+tab);
@@ -80,34 +76,62 @@ function warmPanelCode(){
 function closePendingPanel(hide=true){
   if(!pendingPanel)return;
   const{root,status}=pendingPanel;pendingPanel=null;
-  delete root.dataset.panelLoading;status.remove();if(hide)root.hidden=true;
+  delete root.dataset.panelLoading;delete root.dataset.recordPending;root.removeAttribute('aria-busy');status.remove();if(hide)root.hidden=true;
 }
-function showPendingPanel(id){
-  closePendingPanel();const root=$(id),status=document.createElement('p');
+function showPendingPanel(id,record){
+  closePendingPanel();const root=$(id),status=document.createElement('div');
   status.className='small panel-loading-status';status.setAttribute('role','status');status.textContent='正在加载…';
-  root.dataset.panelLoading='true';root.append(status);root.hidden=false;pendingPanel={root,status};
+  if(id==='detail'){
+    root.dataset.recordPending='';renderRecordHeading(record);$('detailScroll').scrollTop=0;
+    if(record){
+      status.classList.add('record-entry-summary');status.replaceChildren();
+      const elapsed=record.end_elapsed-record.start_elapsed;
+      for(const [label,value] of [[record.active?'电量':'结束电量',valid(record.pct_end)?fmt(record.pct_end)+'%':'—'],
+        ['容量变化',capacityChange(record)+' mAh'],['记录时长',valid(elapsed)?duration(elapsed):'—']]){
+        const metric=el('div');metric.append(el('strong',value),el('small',label));status.append(metric);
+      }
+    }
+    $('summary').before(status);
+  }else{root.dataset.panelLoading='true';root.append(status);}
+  root.setAttribute('aria-busy','true');root.hidden=false;pendingPanel={root,status};
 }
 const loadDetail=lazyPanel(async()=>{
   const{createRecordDetail}=await importDetail();
   const panel=createRecordDetail({api,liveChannel,toast,fullScreen,readAppIcons,
-    beforeOpen(){closePendingPanel();usageDetails?.close();batteryHistory?.close();batteryPanel.close();},
-    onShow:syncTheme,onRefresh:()=>schedulePoll(0)});
+    beforeOpen(){usageDetails?.close();batteryHistory?.close();batteryPanel.close();},
+    onShow(){if(pendingPanel?.root===$('detail'))closePendingPanel(false);syncTheme();},onRefresh:()=>schedulePoll(0),onSettings:applySettings});
   panel.setStatus(lastStatus);panel.setSettings(uiSettings);panel.bind();return detailPage=panel;
 });
 async function openRecord(id,record){
   const navigation=++usageNavigation;
-  try{const panel=await loadDetail();if(navigation===usageNavigation)await panel.open(id,record);}
-  catch(error){if(navigation===usageNavigation)toast(error.message);}
+  if(history.state?.page!=='record'||history.state.id!==id)history.pushState({page:'record',id},'',pageUrl('record-'+id));
+  $('appShell').hidden=true;
+  showPendingPanel('detail',record);
+  try{
+    const panel=detailPage??await loadDetail();
+    if(navigation===usageNavigation)await panel.open(id,record);
+  }catch(error){
+    if(navigation!==usageNavigation)return;
+    if(pendingPanel){pendingPanel.status.classList.remove('record-entry-summary');pendingPanel.status.textContent=error.message;}
+    else toast(error.message);
+  }
 }
 const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSettings,getStatus:()=>lastStatus,getDetail:()=>detailPage?.data,
   getTab:()=>activeTab,openRecord,onKindChange:syncTheme,
   pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage?.resumeRemaining();},
   onDeleted:id=>detailPage?.removeCaches(id),onRefresh:()=>schedulePoll(0)});
 const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();},requestDischargeNotificationPermission);
-const advancedPage=createAdvancedPage(api,settingsPanel);
-const coolDownDetailsPage=createCoolDownDetailsPage(api);
-const monitorAppearancePage=createMonitorAppearancePage(api,settingsPanel);
-const gameMetricsPage=createGameMetricsPage(api);
+const settingsChildren={
+  'advanced':{id:'advancedPage',load:lazyPanel(async()=> (await import('./advanced-settings.js')).createAdvancedPage(api,settingsPanel))},
+  'monitor-appearance':{id:'monitorAppearancePage',load:lazyPanel(async()=> (await import('./monitor-appearance.js')).createMonitorAppearancePage(api,settingsPanel))},
+  'game-metrics':{id:'gameMetricsPage',load:lazyPanel(async()=> (await import('./game-metrics.js')).createGameMetricsPage(api))},
+  'cool-down-details':{id:'coolDownDetailsPage',load:lazyPanel(async()=> (await import('./cool-down-details.js')).createCoolDownDetailsPage(api))}
+};
+function closeSettingsChildren(keep){
+  for(const [page,entry] of Object.entries(settingsChildren))if(page!==keep)entry.panel?.close();
+  if(keep!=='advanced-info')$('advancedInfoPage').hidden=true;
+}
+function inSettingsChild(){return Object.hasOwn(settingsChildren,history.state?.page)||history.state?.page==='advanced-info';}
 const batteryPanel=new BatteryInfoPanel();
 const homeUsage=new HomeUsagePanel(api);
 const loadBatteryHistory=lazyPanel(async()=>{
@@ -177,36 +201,37 @@ function showTab(tab){
   document.title=tab==='home'?'ACol 电池':tab==='records'?'记录 · ACol 电池':'设置 · ACol 电池';
 }
 async function activateTab(tab){
-  usageNavigation++;closePendingPanel();usageDetails?.close();
+  const navigation=++usageNavigation;closePendingPanel();usageDetails?.close();
   batteryHistory?.close();batteryPanel.close();
-  settingsPanel.closeEditor();monitorAppearancePage.close();gameMetricsPage.close();advancedPage.close();$('advancedInfoPage').hidden=true;
-  coolDownDetailsPage.close();
+  settingsPanel.closeEditor();closeSettingsChildren();
   liveChannel.setMode(tab==='home'?HOME_WATCH_MODE:tab==='settings'?SETTINGS_WATCH_MODE:SUMMARY_WATCH_MODE);
-  await detailPage?.close();
+  await detailPage?.close();if(navigation!==usageNavigation)return;
   $('appShell').hidden=false;
   showTab(tab);
   if(tab==='home')homeUsage.prioritize(null);
   syncTheme();
   if(tab==='records')recordsView.open();
-  if(tab==='settings'){await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);schedulePoll(0);}
+  if(tab==='settings'){schedulePoll(0);await settingsPanel.open(lastStatus||liveChannel.latest?uiSettings:null);}
   else refresh();
 }
 async function requestTab(tab){
-  if(tab===activeTab&&!$('appShell').hidden){
+  const navigation=++usageNavigation;
+  if(tab===activeTab&&history.state?.page===tab&&!$('appShell').hidden){
     const scroller=tab==='records'?$('recordsPage').querySelector('.record-scroll'):tab==='settings'?$('settingsPanel').querySelector('.page-scroll'):null;
-    scroller?.scrollTo({top:0,behavior:'smooth'});
+    scroller?.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
     return;
   }
   if(activeTab==='settings'&&tab!=='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+  if(navigation!==usageNavigation)return;
   if(history.state?.page!==tab)history.pushState({page:tab},'',pageUrl(tab));
   await activateTab(tab);
 }
 for(const button of tabButtons)button.onclick=()=>requestTab(button.dataset.tab);
 window.__acoOpenSettings=()=>requestTab('settings');
 window.__acoBack=()=>{
+  if(cancelTopDialog())return'handled';
   if(usageDetails&&(usageDetails.dayChart.tip&&!usageDetails.dayChart.tipHost||usageDetails.appChart.tip)){usageDetails.hideTips();return'handled';}
   if(homeUsage.tip){homeUsage.hideTip();return'handled';}
-  if(cancelTopDialog())return'handled';
   if(detailPage?.backFullscreen()||batteryHistory?.backFullscreen())return'handled';
   if(history.state?.page&&history.state.page!=='home'){history.back();return'handled';}
   // Recover a visible child page even if its browser history state was lost.
@@ -220,69 +245,38 @@ function applySettings(value){
   $('showSmallLabel').textContent=`显示 ≤${next.hidePct}%`;
   detailPage?.setSettings(next);
 }
-function showAdvanced(){
-  if(advancedPage.active)return;
+async function showSettingsChild(page){
+  const entry=settingsChildren[page];
+  if(entry?.panel?.active){entry.panel.handleHistory?.(history.state);return;}
+  const navigation=++usageNavigation;
   clearTimeout(pollTimer);liveChannel.close();
-  $('appShell').hidden=true;advancedPage.open();
+  closePendingPanel();closeSettingsChildren(page);$('appShell').hidden=true;
+  if(page==='advanced-info'){$('advancedInfoPage').hidden=false;return;}
+  if(!entry.panel){
+    showPendingPanel(entry.id);
+    try{entry.panel=await entry.load();}catch(error){if(navigation===usageNavigation&&pendingPanel)pendingPanel.status.textContent=error.message;return;}
+    if(navigation!==usageNavigation||history.state?.page!==page)return;
+    closePendingPanel();
+  }
+  entry.panel.open();entry.panel.handleHistory?.(history.state);
 }
-function showMonitorAppearance(){
-  if(monitorAppearancePage.active)return;
-  clearTimeout(pollTimer);liveChannel.close();
-  $('appShell').hidden=true;monitorAppearancePage.open();
+for(const [button,parent,page] of [
+  ['openMonitorAppearance','settings','monitor-appearance'],['openGameMetrics','settings','game-metrics'],
+  ['openAdvanced','settings','advanced'],['advancedInfo','advanced','advanced-info'],
+  ['openCoolDownDetails','advanced-info','cool-down-details']
+]){
+  $(button).onclick=async event=>{
+    event.preventDefault();
+    if(parent==='settings'&&!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
+    if(history.state?.page!==parent)return;
+    history.pushState({page},'',pageUrl(page));showSettingsChild(page);
+  };
 }
-$('openMonitorAppearance').onclick=async()=>{
-  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
-  if(history.state?.page!=='settings')return;
-  history.pushState({page:'monitor-appearance'},'',pageUrl('monitor-appearance'));
-  showMonitorAppearance();
-};
-$('monitorAppearanceBack').onclick=()=>window.__acoBack();
-function showGameMetrics(){
-  if(gameMetricsPage.active)return;
-  clearTimeout(pollTimer);liveChannel.close();
-  $('appShell').hidden=true;gameMetricsPage.open();
-}
-$('openGameMetrics').onclick=async()=>{
-  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
-  if(history.state?.page!=='settings')return;
-  history.pushState({page:'game-metrics'},'',pageUrl('game-metrics'));
-  showGameMetrics();
-};
-$('gameMetricsBack').onclick=()=>window.__acoBack();
-function showAdvancedInfo(){
-  advancedPage.close();
-  clearTimeout(pollTimer);liveChannel.close();
-  $('appShell').hidden=true;$('advancedInfoPage').hidden=false;
-}
-function showCoolDownDetails(){
-  advancedPage.close();
-  clearTimeout(pollTimer);liveChannel.close();
-  $('appShell').hidden=true;$('advancedInfoPage').hidden=true;
-  coolDownDetailsPage.open();
-}
-$('openAdvanced').onclick=async()=>{
-  if(!await settingsPanel.flush()){toast('设置未能保存，请重试。');return;}
-  if(history.state?.page!=='settings')return;
-  history.pushState({page:'advanced'},'',pageUrl('advanced'));
-  showAdvanced();
-};
-$('advancedBack').onclick=()=>window.__acoBack();
-$('advancedInfo').onclick=()=>{
-  history.pushState({page:'advanced-info'},'',pageUrl('advanced-info'));
-  showAdvancedInfo();
-};
-$('advancedInfoBack').onclick=()=>window.__acoBack();
-$('openCoolDownDetails').onclick=event=>{
-  event.preventDefault();
-  if(history.state?.page!=='advanced-info')return;
-  history.pushState({page:'cool-down-details'},'',pageUrl('cool-down-details'));
-  showCoolDownDetails();
-};
-$('coolDownDetailsBack').onclick=()=>window.__acoBack();
+for(const button of ['monitorAppearanceBack','gameMetricsBack','advancedBack','advancedInfoBack','coolDownDetailsBack'])$(button).onclick=()=>window.__acoBack();
 async function openBatteryInfo(){
   closePendingPanel();batteryHistory?.close();const navigation=++usageNavigation;usageDetails?.close();settingsPanel.closeEditor();
   await detailPage?.close();if(navigation!==usageNavigation)return;
-  $('appShell').hidden=true;batteryPanel.open();liveChannel.setMode(1);
+  $('appShell').hidden=true;batteryPanel.open();liveChannel.setMode(BATTERY_INFO_WATCH_MODE);
   if(history.state?.page!=='battery-info')history.pushState({page:'battery-info'},'',`${location.pathname}${location.search}#battery-info`);
   refresh();
 }
@@ -308,12 +302,12 @@ async function openBatteryHistory(state,push=false){
 }
 
 function schedulePoll(delay=0){
-  clearTimeout(pollTimer);if(document.hidden||monitorAppearancePage.active||gameMetricsPage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  clearTimeout(pollTimer);if(document.hidden||inSettingsChild()||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy){queuedPoll=true;return;}pollTimer=setTimeout(pollLive,delay);
 }
 function refresh(){recordsView.refresh();}
 async function pollLive(){
-  if(document.hidden||monitorAppearancePage.active||gameMetricsPage.active||advancedPage.active||!$('advancedInfoPage').hidden||coolDownDetailsPage.active||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
+  if(document.hidden||inSettingsChild()||$('confirm').open||Object.hasOwn(batteryHistoryRoots,history.state?.page))return;
   if(liveBusy||detailPage?.busy||recordsView.busy){schedulePoll(200);return;}
   liveBusy=true;queuedPoll=false;
   const mode=liveChannel.mode,settingsOnly=mode===SETTINGS_WATCH_MODE;
@@ -340,31 +334,34 @@ async function pollLive(){
     const currentMode=liveChannel.mode;
     const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:
       currentMode===HOME_WATCH_MODE||currentMode===DETAIL_WATCH_MODE?LIVE_READING_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
-    schedulePoll(queuedPoll?0:Math.max(100,period-(performance.now()-started)));
+    // Battery info packets are already paced by the recorder's power interval.
+    const waitForNextReading=!failed&&currentMode===BATTERY_INFO_WATCH_MODE;
+    schedulePoll(queuedPoll||waitForNextReading?0:Math.max(100,period-(performance.now()-started)));
   }
 }
 function renderStatus(s,settingsOnly=false){
+  if(settingsOnly&&s.frameworkHealthy!==false&&s.recorderReady!==false)settingsPanel.recoverFromStatus(s.settings);
   applySettings(s.settings);settingsPanel.updateRecording(s.recordingEnabled,s.recordingProblem);settingsPanel.updateDischargeNotification(s.settings?.dischargeNotificationEnabled);settingsPanel.updateFast(s.fastEnabled);settingsPanel.updatePowerDisplay(s.powerDisplayEnabled,s.powerDisplayError);
   if(settingsOnly)return;
   syncTheme();
   if($('homePage').hidden||$('appShell').hidden)return;
   const r=s.reading??{};
   document.querySelector('.live').dataset.flow=s.state===0?'discharge':'charge';
-  $('livePct').textContent=valid(r.pct)?fmt(r.pct):'—';$('liveRm').textContent=fmt(r.rm);
+  updateText('livePct',fmt(r.pct));updateText('liveRm',fmt(r.rm));
   const cells=r.cellCount??s.cellCount;
   const current=valid(r.displayCurrent)?r.displayCurrent:valid(r.current)?r.current*(cells===2?2:1):null;
   const amps=valid(current)&&Math.abs(current)>=1000,currentUnit=amps?'A':'mA';
-  $('liveCurrent').textContent=valid(current)?(Math.abs(current)/(amps?1000:1)).toFixed(amps?2:0):'—';
-  $('liveCurrentUnit').textContent=currentUnit;
+  updateText('liveCurrent',valid(current)?(Math.abs(current)/(amps?1000:1)).toFixed(amps?2:0):'—');
+  updateText('liveCurrentUnit',currentUnit);
   $('liveCurrent').parentElement.dataset.flow=valid(current)&&current!==0?(current>0?'charge':'discharge'):'';
   const voltage=cells===2?(valid(r.cell1)&&valid(r.cell2)?(r.cell1+r.cell2)/2:r.voltage):valid(r.cell1)?r.cell1:r.voltage;
-  $('liveVoltage').textContent=valid(voltage)?(voltage/1000).toFixed(2):'—';
+  updateText('liveVoltage',valid(voltage)?(voltage/1000).toFixed(2):'—');
   $('liveVoltage').setAttribute('aria-label',`${cells===2?'电芯平均':'电池'}电压 ${valid(voltage)?(voltage/1000).toFixed(2):'未知'} V`);
-  $('liveTemp').textContent=valid(r.temp)?r.temp.toFixed(1):'—';
+  updateText('liveTemp',valid(r.temp)?r.temp.toFixed(1):'—');
   const flow=valid(r.power)&&r.power!==0?(r.power>0?'charge':'discharge'):s.state===0?'discharge':'charge';
   $('livePower').dataset.flow=flow;
   $('livePower').parentElement.dataset.flow=valid(r.power)&&r.power!==0?flow:'';
-  $('livePower').textContent=valid(r.power)?Math.abs(r.power).toFixed(2):'—';
+  updateText('livePower',valid(r.power)?Math.abs(r.power).toFixed(2):'—');
   $('livePower').setAttribute('aria-label',`${flow==='charge'?'充电':'放电'}功率 ${valid(r.power)?fmt(Math.abs(r.power),2):'—'} W`);
   const recording=s.recordingEnabled!==false||s.fastEnabled;
   const warnings=[];if(!recording)warnings.push(s.recordingProblem?`${s.recordingProblem}，记录已关闭，可在设置中重新开启。`:'记录已停止。');if(!(s.capabilities&1))warnings.push('休眠采样受限，不能保证深度休眠期间准时采样。');if(!(s.capabilities&2))warnings.push('电源检测可能延迟。');if(!(s.capabilities&4))warnings.push('唤醒锁不可用。');
@@ -418,26 +415,14 @@ async function showHome(){
 async function applyHistory(state){
   detailPage?.syncHistory();recordsView.syncHistory();
   const page=state?.page??'home';
-  const leavingAdvancedInfo=!$('advancedInfoPage').hidden||coolDownDetailsPage.active;
-  if(page!=='cool-down-details')coolDownDetailsPage.close();
-  const leavingMonitor=monitorAppearancePage.active;
-  const leavingGameMetrics=gameMetricsPage.active;
-  if(page!=='monitor-appearance')monitorAppearancePage.close();
-  if(page!=='game-metrics')gameMetricsPage.close();
-  if(page==='monitor-appearance'){showMonitorAppearance();monitorAppearancePage.handleHistory(state);return;}
-  if(page==='game-metrics'){showGameMetrics();return;}
-  if(leavingMonitor||leavingGameMetrics)$('appShell').hidden=false;
-  if(page==='cool-down-details'){showCoolDownDetails();return;}
-  if(page==='advanced-info'){showAdvancedInfo();return;}
-  $('advancedInfoPage').hidden=true;
-  if(page==='advanced'){showAdvanced();advancedPage.handleHistory(state);return;}
-  const leavingAdvanced=advancedPage.active||leavingAdvancedInfo;
-  if(leavingAdvanced){advancedPage.close();$('appShell').hidden=false;}
+  if(inSettingsChild()){await showSettingsChild(page);return;}
+  const leavingSettingsChild=$('appShell').hidden&&activeTab==='settings';
+  closeSettingsChildren();
   if(usagePages.has(page)){await openUsage(state);return;}
   if(page==='battery-history'||page==='battery-history-detail'||page==='battery-history-trend'){await openBatteryHistory(state);return;}
   if(page==='battery-info'){if(!batteryPanel.active)openBatteryInfo();batteryPanel.handleHistory(state);return;}
   if(page==='record'){settingsPanel.closeEditor();if(detailPage?.id!==state.id)openRecord(state.id,recordsView.find(state.id));return;}
-  if(page==='settings'){if(activeTab!=='settings')await activateTab('settings');else if(leavingAdvanced||leavingMonitor||leavingGameMetrics)schedulePoll(0);settingsPanel.handleHistory(state);return;}
+  if(page==='settings'){if(activeTab!=='settings'||leavingSettingsChild)await activateTab('settings');if(history.state?.page==='settings')settingsPanel.handleHistory(state);return;}
   if(activeTab==='settings'&&!await settingsPanel.flush()){
     history.pushState({page:'settings'},'',pageUrl('settings'));$('appShell').hidden=false;showTab('settings');toast('设置未能保存，请重试。');return;
   }
@@ -445,9 +430,9 @@ async function applyHistory(state){
 }
 $('back').onclick=()=>window.__acoBack();
 window.addEventListener('popstate',event=>applyHistory(event.state));
-document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){advancedPage.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();}else if(advancedPage.active)advancedPage.resume();else{refresh();detailPage?.resume();}});
-window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);advancedPage.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();});
-window.addEventListener('pageshow',e=>{if(e.persisted){if(advancedPage.active)advancedPage.resume();else{refresh();detailPage?.resume();}}});
+document.addEventListener('visibilitychange',()=>{clearTimeout(pollTimer);if(document.hidden){settingsChildren.advanced.panel?.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();}else if(settingsChildren.advanced.panel?.active)settingsChildren.advanced.panel.resume();else{refresh();detailPage?.resume();}});
+window.addEventListener('pagehide',()=>{clearTimeout(pollTimer);settingsChildren.advanced.panel?.pause();detailPage?.pause();settingsPanel.flush();liveChannel.close();});
+window.addEventListener('pageshow',e=>{if(e.persisted){if(settingsChildren.advanced.panel?.active)settingsChildren.advanced.panel.resume();else{refresh();detailPage?.resume();}}});
 recordsView.bind();
 themeUiReady=true;
 window.__acoPageReady=true;

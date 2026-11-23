@@ -7,12 +7,14 @@ final class MonitorAppearance {
     static final int FPS=1, CPU_CHART=2, CPU_FREQUENCY=4, GPU_CHART=8, GPU_FREQUENCY=16, POWER=32, TEMPERATURE=64;
     static final int CPU=CPU_CHART|CPU_FREQUENCY, GPU=GPU_CHART|GPU_FREQUENCY;
     static final int PERFORMANCE=FPS|CPU|GPU, BATTERY=POWER|TEMPERATURE;
+    static final String DEFAULT_ORDER="1234567", ORDER_KEY="monitor_metric_order";
     private static final int DEFAULT_OPACITY=55, DEFAULT_SIZE_PERCENT=100;
     static final MonitorAppearance DEFAULT=new MonitorAppearance(127,DEFAULT_OPACITY,DEFAULT_OPACITY,DEFAULT_SIZE_PERCENT,true,false,false,false,
-        new Thresholds(60,75,90),new Thresholds(8,12,15),new Thresholds(42,45,48));
+        new Thresholds(60,75,90),new Thresholds(8,12,15),new Thresholds(42,45,48),DEFAULT_ORDER);
     final int metrics, whiteOpacity, blackOpacity, sizePercent;
     final boolean blackText, landscapeBottom, followSystem, taskFpsCallback;
     final Thresholds cpu, power, temperature;
+    final String order;
 
     static final class Thresholds {
         final int yellow, orange, red;
@@ -24,19 +26,38 @@ final class MonitorAppearance {
     }
 
     private MonitorAppearance(int metrics,int whiteOpacity,int blackOpacity,int sizePercent,boolean blackText,boolean landscapeBottom,boolean followSystem,
-            boolean taskFpsCallback,Thresholds cpu,Thresholds power,Thresholds temperature){
+            boolean taskFpsCallback,Thresholds cpu,Thresholds power,Thresholds temperature,String order){
         this.metrics=metrics;this.whiteOpacity=whiteOpacity;this.blackOpacity=blackOpacity;
         this.sizePercent=sizePercent;
         this.blackText=blackText;this.landscapeBottom=landscapeBottom;
         this.followSystem=followSystem;
         this.taskFpsCallback=taskFpsCallback;
         this.cpu=cpu;this.power=power;this.temperature=temperature;
+        this.order=order;
     }
 
     boolean shows(int group){return (metrics&group)!=0;}
     MonitorAppearance withTaskFpsCallback(boolean callback){
         return callback==taskFpsCallback?this:new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,blackText,
-            landscapeBottom,followSystem,callback,cpu,power,temperature);
+            landscapeBottom,followSystem,callback,cpu,power,temperature,order);
+    }
+
+    int metricAt(int index){return 1<<(order.charAt(index)-'1');}
+    static int groupOf(int metric){
+        if((metric&CPU)!=0)return CPU;
+        if((metric&GPU)!=0)return GPU;
+        return metric==FPS?FPS:BATTERY;
+    }
+
+    MonitorAppearance withOrder(String next){
+        if(order.equals(next))return this;
+        if(!next.matches("[1-7]{7}")||next.chars().distinct().count()!=7
+                ||Math.abs(next.indexOf('2')-next.indexOf('3'))!=1
+                ||Math.abs(next.indexOf('4')-next.indexOf('5'))!=1
+                ||Math.abs(next.indexOf('6')-next.indexOf('7'))!=1)
+            throw new IllegalArgumentException("性能监视器显示顺序无效。");
+        return new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,blackText,
+            landscapeBottom,followSystem,taskFpsCallback,cpu,power,temperature,next);
     }
 
     JSONArray values(){
@@ -57,6 +78,12 @@ final class MonitorAppearance {
             catch(IllegalArgumentException|JSONException ignored){}
         }
         return DEFAULT.withTaskFpsCallback(taskFpsCallback);
+    }
+
+    static MonitorAppearance load(String saved,boolean taskFpsCallback,String order){
+        MonitorAppearance result=load(saved,taskFpsCallback);
+        try{return result.withOrder(order);}
+        catch(IllegalArgumentException ignored){return result;}
     }
 
     static MonitorAppearance parse(JSONArray values){
@@ -86,7 +113,7 @@ final class MonitorAppearance {
         Thresholds temperature=length>=13?new Thresholds(numbers[10],numbers[11],numbers[12]):DEFAULT.temperature;
         int whiteOpacity=length>=15?opacity:DEFAULT_OPACITY;
         return new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,numbers[5]==1,landscape==1,followSystem==1,
-            source.equals("1"),cpu,power,temperature);
+            source.equals("1"),cpu,power,temperature,DEFAULT_ORDER);
     }
 
     private static IllegalArgumentException invalid(){return new IllegalArgumentException("性能监视器设置无效。");}

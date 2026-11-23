@@ -1,6 +1,6 @@
 import{spawn,exec}from'./root-bridge.js?v=acol-2.2s';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
-export const DETAIL_WATCH_MODE=0, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
+export const DETAIL_WATCH_MODE=0, BATTERY_INFO_WATCH_MODE=1, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
 
 export const recordRank=record=>record.active?(Number(record.fast_seconds)>0?0:1):2;
 export function compareRecords(a,b){return recordRank(a)-recordRank(b)||b.id-a.id;}
@@ -10,7 +10,7 @@ export class LiveChannel{
   selectSmall(value){
     this.small=Number(!!value);
   }
-  setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===1)this.infoSnapshot=null;}
+  setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===BATTERY_INFO_WATCH_MODE)this.infoSnapshot=null;}
   seedRecord(id,after){
     if(!this.connection){this.resumeId=id;this.resumeAfter=after;}
   }
@@ -99,7 +99,8 @@ export class LiveChannel{
     if(this.latest&&this.sequence>after)return Promise.resolve(this.latest);
     return new Promise((resolve,reject)=>{
       const waiter={resolve,reject,timer:null};
-      waiter.timer=setTimeout(()=>{this.waiters=this.waiters.filter(w=>w!==waiter);this.close();reject(Error('实时连接超时'));},10000);
+      const timeout=this.mode===BATTERY_INFO_WATCH_MODE?30000:10000;
+      waiter.timer=setTimeout(()=>{this.waiters=this.waiters.filter(w=>w!==waiter);this.close();reject(Error('实时连接超时'));},timeout);
       this.waiters.push(waiter);
     });
   }

@@ -1,6 +1,7 @@
 import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2s';
 import{midnight,dailyView,neighboringDates,canDeleteUsageDay}from'./daily-usage-cache.js?v=acol-2.2s';
 import{appRowsFromTotals}from'./screen-time-cache.js?v=acol-2.2s';
+import{rankUsageApps,usageSegments}from'./usage-stack.js?v=acol-2.2s';
 export const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 export const dateText=wall=>{const d=new Date(wall);return`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`};
 export function roundedDuration(ms){
@@ -12,7 +13,8 @@ export class DailyUsageChart extends ScreenTimePanel{
   constructor(api,options){
     super(api,{prefix:options.prefix,hint:'每日亮屏时长 · 长按小时查看应用',inspect:options.inspect,tipHost:options.tipHost,minuteUnit:'分',onSwipe:options.onSwipe});
     this.formatDate=options.formatDate??dateText;this.formatDuration=options.formatDuration??roundedDuration;
-    if(options.prefix==='usageDay'){
+    this.colorApps=options.prefix==='usageDay';
+    if(this.colorApps){
       this.deleteButton=document.createElement('button');this.deleteButton.type='button';this.deleteButton.className='usage-day-delete';this.deleteButton.textContent='删除当天数据';this.deleteButton.hidden=true;
       const hint=this.node('screenTimeHint'),footer=document.createElement('div');footer.className='usage-day-footer';hint.before(footer);footer.append(hint,this.deleteButton);
       this.deleteButton.onclick=()=>this.onDeleteDay?.(this.day);
@@ -36,7 +38,11 @@ export class DailyUsageChart extends ScreenTimePanel{
     this.host.hidden=false;if(this.deleteButton)this.deleteButton.hidden=!canDeleteUsageDay(day);this.navigation();
     if(!this.entry){this.drawEmpty();this.node('screenTimeTotal').textContent='—';this.node('screenTimeHint').textContent='正在读取当天缓存…';}
     try{
-      const [entry,app,hourApps]=await Promise.all([this.cache.getHours(day),pkg?this.cache.getAppHours(day,pkg):null,pkg?null:this.cache.getAllHourApps(day)]);if(token!==this.dayToken)return;
+      const overview=this.colorApps?await this.cache.dayOverview(day):null;
+      const [entry,app,hourApps]=overview?[overview.entry,null,overview.hourApps]:
+        await Promise.all([this.cache.getHours(day),pkg?this.cache.getAppHours(day,pkg):null,pkg?null:this.cache.getAllHourApps(day)]);
+      if(token!==this.dayToken)return;
+      const ranks=overview?rankUsageApps(overview.apps):null;
       this.entry=entry;this.app=app;
       this.hourDetails=this.inspectionEnabled?Array.from({length:24},(_,hour)=>{
         const values=app?[{pkg,ms:app.ms[hour]??0,label:app.label||label||pkg}]:(hourApps[hour]?.apps??[]),labels=Object.fromEntries(values.map(row=>[row.pkg,row.label]));
@@ -45,11 +51,16 @@ export class DailyUsageChart extends ScreenTimePanel{
       }):null;
       if(entry.through===entry.dayStart){
         this.data=null;this.selected=null;this.cancelPress();this.hideTip();this.drawEmpty();
-        this.node('screenTimeTotal').textContent='—';this.node('screenTimeHint').textContent='尚无已缓存的使用数据';return;
+        this.node('screenTimeTotal').textContent='—';this.node('screenTimeHint').textContent='尚无已缓存的使用数据';return{apps:[],ranks};
       }
       const data=dailyView(entry);
       if(app){data.hours=app.ms;data.totalMs=app.ms.reduce((n,ms)=>n+ms,0);}
+      if(ranks){
+        data.appRanks=ranks;
+        data.stacks=data.hours.map((ms,hour)=>usageSegments(ms,hourApps[hour]?.apps??[],ranks));
+      }
       this.draw(data);if(data.coveredMs>0)this.node('screenTimeTotal').textContent=this.formatDuration(data.totalMs);
+      if(overview)return{apps:overview.apps,ranks};
     }catch{if(token===this.dayToken)this.node('screenTimeHint').textContent='当天缓存暂不可用';}
   }
   select(hour){

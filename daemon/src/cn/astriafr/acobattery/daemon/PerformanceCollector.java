@@ -492,6 +492,10 @@ final class PerformanceCollector implements AutoCloseable {
     }
     /** dumpAsync uses the root Binder directly; bounded poll prevents stalled services blocking sampling. */
     private String dump(String... args)throws Exception{
+        return dump(180,262144,args);
+    }
+
+    private String dump(int timeoutMs,int maxBytes,String... args)throws Exception{
         if(flinger==null||!flinger.isBinderAlive()){
             flinger=(IBinder)Class.forName("android.os.ServiceManager").getMethod("checkService",String.class).invoke(null,"SurfaceFlinger");
             if(flinger==null)throw new IOException("SurfaceFlinger unavailable");
@@ -500,13 +504,13 @@ final class PerformanceCollector implements AutoCloseable {
         try{
             flinger.dumpAsync(pipe[1].getFileDescriptor(),args);pipe[1].close();
             StructPollfd fd=new StructPollfd();fd.fd=pipe[0].getFileDescriptor();fd.events=(short)OsConstants.POLLIN;
-            ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[8192];long until=SystemClock.uptimeMillis()+180;
+            ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[8192];long until=SystemClock.uptimeMillis()+timeoutMs;
             while(!closed){
                 int remain=(int)(until-SystemClock.uptimeMillis());if(remain<=0)throw new IOException("SurfaceFlinger timeout");
                 if(Os.poll(new StructPollfd[]{fd},remain)==0)throw new IOException("SurfaceFlinger timeout");
                 if((fd.revents&(OsConstants.POLLIN|OsConstants.POLLHUP))==0)throw new IOException("SurfaceFlinger pipe unavailable");
                 int n=Os.read(fd.fd,buf,0,buf.length);if(n<=0)break;
-                if(out.size()+n>262144)throw new IOException("SurfaceFlinger response too large");out.write(buf,0,n);
+                if(out.size()+n>maxBytes)throw new IOException("SurfaceFlinger response too large");out.write(buf,0,n);
             }return out.toString("UTF-8");
         }finally{try{pipe[1].close();}finally{pipe[0].close();}}
     }
@@ -514,8 +518,11 @@ final class PerformanceCollector implements AutoCloseable {
         return Pattern.compile("(?<![A-Za-z0-9_.])"+Pattern.quote(pkg)+"(?![A-Za-z0-9_.])");
     }
     static List<String> frameLayerCandidates(String report,int taskId,String pkg){
+        return frameLayerCandidates(TaskLayerList.names(report,taskId),pkg);
+    }
+
+    private static List<String> frameLayerCandidates(List<String> names,String pkg){
         Pattern packageName=layerPackagePattern(pkg);
-        List<String> names=TaskLayerList.names(report,taskId);
         // Match system layer names at the start so activity names such as SplashActivity still count.
         names.removeIf(name->!packageName.matcher(name).find()||NON_FRAME_LAYER.matcher(name).find());
         names.sort(Comparator.comparingInt(PerformanceCollector::frameLayerPriority));
@@ -610,7 +617,11 @@ final class PerformanceCollector implements AutoCloseable {
             if(!changed&&elapsed-layerChecked<(cachedFps>0?LAYER_ACTIVE_REFRESH_MS:LAYER_IDLE_REFRESH_MS))
                 return new FpsSample(cachedFps,cachedFrames,cachedAt,windowNanos,layerFramesSince);
             layerChecked=elapsed;
-            List<String> names=frameLayerCandidates(dump("--list"),task.id,task.activity.getPackageName());
+            String report=dump("--list"),pkg=task.activity.getPackageName();
+            // Older dumps list names only. Use the full dump's parent links, never infer ownership from list order.
+            List<String> names=TaskLayerList.isLegacyFlatList(report)
+                ?frameLayerCandidates(TaskLayerList.legacyNames(dump(350,2*1024*1024),task.id),pkg)
+                :frameLayerCandidates(report,task.id,pkg);
             int count=Math.min(3,names.size()),cachedIndex=names.indexOf(layer);
             if(cachedIndex>=count){
                 names.add(count,names.remove(cachedIndex));

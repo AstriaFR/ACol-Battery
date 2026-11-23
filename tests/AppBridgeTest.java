@@ -38,7 +38,17 @@ public final class AppBridgeTest {
         rejected(client+"set_settings 5 30 560 1 300 450 50 60 2 120 0.75 1 2 0.5 10001 0");
         rejected(client+"set_settings 5 30 560 1 300 450 50 60 2 120 10 1 2 0.55 10001 0");
         rejected(client+"set_recording 0.5");
+        check(AppBridge.parse(client+"set_setting 13 0.7 0")[3].equals("0.7"));
+        check(AppBridge.parse(client+"reset_setting 14")[1].equals("reset_setting"));
+        check(AppBridge.parse(client+"grow_chart_ranges 620 2350")[1].equals("grow_chart_ranges"));
+        check(AppBridge.parse(client+"reset_monitor_threshold 7")[1].equals("reset_monitor_threshold"));
+        rejected(client+"set_setting 2 0.7 0");
+        rejected(client+"set_setting 13 0.75 0");
         check(AppBridge.parse(client+"set_recording 0")[1].equals("set_recording"));
+        for(String count:new String[]{"1","2"})
+            check(java.util.Arrays.equals(AppBridge.parse(client+"set_cell_count "+count),new String[]{"api","set_cell_count",count}));
+        for(String invalid:new String[]{""," 0"," 3"," 1.0"," 1 2"})
+            rejected(client+"set_cell_count"+invalid);
         check(AppBridge.parse(client+"game_metrics")[1].equals("game_metrics"));
         check(java.util.Arrays.equals(AppBridge.parse(client+"set_game_metrics 73 1 1"),
             new String[]{"api","set_game_metrics","73","1","1"}));

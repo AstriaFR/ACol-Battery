@@ -15,7 +15,7 @@ final class RecordStore {
     JSONObject rangeValues;
     RecordStore(File data)throws Exception{
         DatabaseRebuild.checkPending(data);
-        db=SafeDatabase.open(new File(data,"records.db"));
+        db=SafeDatabase.openRecords(new File(data,"records.db"));
         db.execSQL("PRAGMA foreign_keys=ON");
         db.execSQL("CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,start_wall INTEGER,start_elapsed INTEGER,boot TEXT,end_elapsed INTEGER,pct_start REAL,pct_end REAL,rm_start REAL,rm_end REAL,active INTEGER NOT NULL,reason TEXT,missed INTEGER DEFAULT 0,anomalies INTEGER DEFAULT 0)");
         db.execSQL("CREATE TABLE IF NOT EXISTS samples(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,x INTEGER NOT NULL,rm REAL,pct REAL,current REAL,voltage REAL,power REAL,quality INTEGER NOT NULL,interval_ms INTEGER,PRIMARY KEY(session,x)) WITHOUT ROWID");
@@ -29,7 +29,11 @@ final class RecordStore {
         db.execSQL("CREATE TABLE IF NOT EXISTS battery_history(id INTEGER PRIMARY KEY AUTOINCREMENT,source_session INTEGER UNIQUE NOT NULL,completed_wall INTEGER NOT NULL,cycles INTEGER,snapshot TEXT)");
         db.execSQL("CREATE TABLE IF NOT EXISTS battery_history_deleted(source_session INTEGER PRIMARY KEY) WITHOUT ROWID");
     }
-    void upgrade(){correctDischargePower();ensureSampleColumns();}
+    void upgrade()throws IOException{
+        SafeDatabase.requireSupportedVersion(db);
+        correctDischargePower();
+        ensureSampleColumns();
+    }
     static void markSamplingDefaultsMigrated(SQLiteDatabase db){
         db.execSQL("INSERT OR IGNORE INTO runtime(key,value) VALUES(?,'1')",new Object[]{SAMPLING_DEFAULTS_MIGRATION});
     }
@@ -75,7 +79,8 @@ final class RecordStore {
                 db.execSQL("ALTER TABLE apps ADD COLUMN mah_ms INTEGER NOT NULL DEFAULT 0");
                 db.execSQL("UPDATE apps SET mah_ms=ms");
             }
-            db.setVersion(SCHEMA_VERSION);db.setTransactionSuccessful();
+            if(db.getVersion()<SCHEMA_VERSION)db.setVersion(SCHEMA_VERSION);
+            db.setTransactionSuccessful();
         } finally {db.endTransaction();}
     }
     void backfillHistory(){
@@ -336,9 +341,11 @@ final class RecordStore {
                 while(c.moveToNext()){
                     if(values.length()==200){more=true;break;}last=c.getLong(0);
                     String text=c.isNull(3)?"":c.getString(3);JSONObject saved=text.isEmpty()||text.equals("null")?new JSONObject():new JSONObject(text);
-                    Double fcc=BatteryHistorySnapshot.trustedFcc(saved);
+                    Double fccAbove=BatteryHistorySnapshot.fccLowerBound(saved);
+                    Double fcc=fccAbove==null?BatteryHistorySnapshot.trustedFcc(saved):null;
                     values.put(new JSONObject().put("id",last).put("wall",c.isNull(1)?JSONObject.NULL:c.getLong(1)).put("cycles",c.isNull(2)?JSONObject.NULL:c.getLong(2))
-                        .put("qmax",saved.opt("qmax")).put("fcc",fcc==null?JSONObject.NULL:fcc));
+                        .put("qmax",saved.opt("qmax")).put("fcc",fcc==null?JSONObject.NULL:fcc)
+                        .put("fccAbove",fccAbove==null?JSONObject.NULL:fccAbove).put("tailRm",saved.opt("tailRm")));
                 }
             }
             return o.put("items",values).put("through",through).put("nextAfter",more?last:JSONObject.NULL);

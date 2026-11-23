@@ -15,7 +15,7 @@ public final class Core {
         public double cell1 = Double.NaN, cell2 = Double.NaN;
         public double memoryUsedGB=Double.NaN,memoryTotalGB=Double.NaN;
         public int cellCount=2;
-        public String voltageSource="",currentSource="",rmSource="",pctSource="",onlineSource="";
+        public String voltageSource="",currentSource="",tempSource="",rmSource="",pctSource="",onlineSource="";
         public boolean online, full, enabled;
         public boolean vendorLogRead;
         boolean gamePartial, gameAccounting;
@@ -25,10 +25,11 @@ public final class Core {
         public double displayVoltage() { return cellCount==0?vmin:voltage(); }
         // OPLUS gauge current is negative while charging.
         public double chargingCurrent() { return -current; }
-        public double compensatedCurrent() { return chargingCurrent() * (cellCount==2?2:1); }
+        public double compensatedCurrent() { return Core.compensatedCurrent(chargingCurrent(),cellCount); }
         public double power() { return cellCount==0?Double.NaN:compensatedCurrent() * voltage() / 1_000_000; }
         public boolean valid() { return finite(rm) && rm >= 0 && validPercentage(pct); }
     }
+    static double compensatedCurrent(double chargingCurrent,int cells){return chargingCurrent*(cells==2?2:1);}
     public static boolean finite(double v) { return !Double.isNaN(v) && !Double.isInfinite(v); }
     static boolean validPercentage(double value){return value>=0&&value<=100;}
     static double levelPercentage(int level,int scale){
@@ -68,6 +69,7 @@ public final class Core {
         if(fields.length<2)return 0;
         return "1".equals(fields[1].trim())?1:"2".equals(fields[1].trim())?2:0;
     }
+    static int effectiveCellCount(int detected){return detected==2?2:1;}
     static double parse(String raw){try{return Double.parseDouble(raw.trim());}catch(Exception e){return Double.NaN;}}
     static boolean cellVoltage(double value){return finite(value)&&value>=2200&&value<=4800;}
     static boolean batteryTemperature(double value){return value>=-40&&value<=100;}
@@ -87,7 +89,7 @@ public final class Core {
         }
         double current=parse(fields[8]),temp=parse(fields[7])/10;
         if(finite(current)&&Math.abs(current)<=30000){r.current=current;r.currentSource="bcc";}
-        if(batteryTemperature(temp))r.temp=temp;
+        if(batteryTemperature(temp)){r.temp=temp;r.tempSource="bcc";}
         return finite(r.voltage())&&finite(r.current);
     }
     static boolean validSystemCurrent(double microamps){return finite(microamps)&&Math.abs(microamps)<=30000000;}
@@ -101,7 +103,7 @@ public final class Core {
             }
         }
         if(!finite(r.current)&&validSystemCurrent(microamps)){r.current=-microamps/1000;r.currentSource="android";}
-        if(!finite(r.temp)&&batteryTemperature(temperature))r.temp=temperature;
+        if(!finite(r.temp)&&batteryTemperature(temperature)){r.temp=temperature;r.tempSource="android";}
     }
     // battery_rm discharge uses the cell-mean voltage basis; do not multiply by 2S again.
     public static double dischargeEnergyMwh(double cellMeanA,double cellMeanB,double mah) {
@@ -134,10 +136,11 @@ public final class Core {
 
     public static final class Sampling {
         public static final long MAX_INTERVAL_MS=120*60000L;
+        static final long TAIL_STANDBY_MS=15000;
         public boolean interactive=true,screenSample;
         public long next,expected=120000;
         public long screenOnMs=120000,screenOffMs=1800000,chargeMs=3000,fastMs;
-        public long interval(int state) { return state==1?chargeMs:state==2?15000:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
+        public long interval(int state) { return state==1?chargeMs:state==2?TAIL_STANDBY_MS:fastMs>0?fastMs:interactive?screenOnMs:screenOffMs; }
         public void sampled(int state,long now) { expected=interval(state);next=now+expected; }
         public void restoreExpected(long saved) { expected=Math.max(fastMs>0?500:1000,Math.min(MAX_INTERVAL_MS,saved)); }
         public boolean screen(boolean on,long now) {
@@ -174,19 +177,33 @@ public final class Core {
 
     public static final class FullGate {
         private static final long VENDOR_DURATION_MS=180000;
+        private static final double TAIL_CURRENT_MA=100;
         public long since = -1, last = -1;
         private long electricalSince=-1,electricalLast=-1;
+        private long resumeSince=-1,resumeLast=-1;
         public boolean vendorLogSeen;
-        public void interrupt() { since=last=electricalSince=electricalLast=-1; }
+        public void interrupt() { since=last=electricalSince=electricalLast=resumeSince=resumeLast=-1; }
         public void reset() { interrupt();vendorLogSeen=false; }
         public void observe(Reading r) { if(r.onlineKnown&&r.online&&r.vendorLogRead)vendorLogSeen=true; }
         public long electricalDuration() { return vendorLogSeen?600000:300000; }
         private static boolean smallCurrent(Reading r) {
-            return (r.cellCount==1||r.cellCount==2)&&finite(r.compensatedCurrent())&&Math.abs(r.compensatedCurrent())<100;
+            return (r.cellCount==1||r.cellCount==2)&&Math.abs(r.compensatedCurrent())<TAIL_CURRENT_MA;
         }
         public static boolean electricalCandidate(Reading r) {
-            return r.onlineKnown&&r.online&&finite(r.voltage())&&r.voltage()>4400
+            return r.onlineKnown&&r.online&&finite(r.voltage())&&r.voltage()>=4400
                 &&smallCurrent(r);
+        }
+        boolean resumedCharging(Reading r) {
+            double current=r.compensatedCurrent();
+            if(!r.onlineKnown||!r.online||r.full||(r.cellCount!=1&&r.cellCount!=2)||!finite(current)||current<TAIL_CURRENT_MA){
+                resumeSince=resumeLast=-1;
+                return false;
+            }
+            // Screen events can add samples between standby checks but cannot shorten confirmation.
+            long maxGap=Sampling.TAIL_STANDBY_MS*3/2;
+            if(resumeSince<0||r.elapsed<resumeLast||r.elapsed-resumeLast>maxGap)resumeSince=r.elapsed;
+            resumeLast=r.elapsed;
+            return r.elapsed-resumeSince>=Sampling.TAIL_STANDBY_MS;
         }
         public boolean update(Reading r) {
             return update(r,1000);

@@ -4,7 +4,7 @@ const{runCases}=require('./helpers.cjs');
 
 async function scales(){
 globalThis.document={documentElement:{dataset:{}}};
-const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMinimum,gameSampleText}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
+const {Chart,series,seriesFor,signalScale,setChartSettings,plotPoints,plotAxisMinimum,gameSampleText,chartRangeGrowth}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
 const {remainingMeanVoltage,gameEnergyDisabled}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/estimate.js')).href);
  const signedScale={base:0,full:20,min:-15};
  for(const kind of ['charge','discharge']){
@@ -39,6 +39,16 @@ const {remainingMeanVoltage,gameEnergyDisabled}=await import(pathToFileURL(path.
  assert.equal(signalScale(series.find(s=>s.key==='rm'),[5230],'discharge').full,5230);
  setChartSettings({energyWh:null});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
  setChartSettings({energyWh:0});assert.equal(signalScale(energy,[18.16],'discharge').full,18.16);
+ const growthChart={
+  signals:()=>seriesFor('discharge'),
+  scaleFor:signal=>signalScale(signal,signal.key==='rm'?[5237]:[21.375],'discharge')
+ };
+ assert.deepEqual(chartRangeGrowth(growthChart,{capacityAh:5,energyWh:19}),[524,2138]);
+ assert.deepEqual(chartRangeGrowth(growthChart,{capacityAh:5,energyWh:19,manualChartRanges:1}),[0,2138]);
+ assert.deepEqual(chartRangeGrowth(growthChart,{capacityAh:5,energyWh:19,manualChartRanges:2}),[524,0]);
+ assert.deepEqual(chartRangeGrowth(growthChart,{capacityAh:5.24,energyWh:21.38}),[0,0]);
+ growthChart.signals=()=>seriesFor('charge');
+ assert.deepEqual(chartRangeGrowth(growthChart,{capacityAh:5,energyWh:null}),[524,0]);
  setChartSettings({});
  const current=series.find(s=>s.key==='current'),power=series.find(s=>s.key==='power');
  const next=(s,values,previous,kind='charge',fast=false)=>signalScale(s,values,kind,fast,previous);
@@ -202,7 +212,7 @@ function context(){
 }
 const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
  const ctx=context(),chart={ctx,kind:'discharge',fast:false,left:0,right:0,width:400,top:0,bottom:200,
-  enabled:new Set(['power']),signals:()=>[{key:'power',index:1}],scaleFor:()=>({}),traceSignal:Chart.prototype.traceSignal,pointPixel:row=>row.slice(0,2)};
+  enabled:new Set(['power']),signals:()=>[{key:'power',index:1}],scaleFor:()=>({}),signalWindow:Chart.prototype.signalWindow,traceSignal:Chart.prototype.traceSignal,pointPixel:row=>row.slice(0,2)};
  const row=(x,y,quality=0)=>[x,y,null,null,null,null,quality],points=[row(0,0),row(200,200),row(400,0)];
  const hit=(x,y,data=points)=>Chart.prototype.hitCurve.call(chart,x,y,data);
  assert.equal(hit(100,125),true,'point on the rendered cubic curve');
@@ -367,24 +377,50 @@ async function deletedDailyUsage(){
  assert.equal(nodes.screenTimeTotal.textContent,'—');assert.equal(chart.data,null);assert.equal(chart.selected,null);assert.ok(cleared&&tipHidden);
 }
 
+async function rankedDailyUsage(){
+ const {DailyUsageChart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/daily-usage-chart.js')).href);
+ const day=new Date(2026,10,15).getTime(),nodes={screenTimeTotal:{},screenTimeHint:{}};
+ const apps=[{pkg:'__other__',ms:180000},{pkg:'a',ms:90000},{pkg:'b',ms:60000},{pkg:'c',ms:60000},{pkg:'d',ms:30000}];
+ const hourApps=[{apps:[{pkg:'b',ms:60000},{pkg:'d',ms:30000}]},{apps:apps.filter(row=>row.pkg!=='b'&&row.pkg!=='d')}];
+ const hours=Array.from({length:24},(_,hour)=>({onMs:[90000,330000][hour]??0,coveredMs:hour<2?3600000:0}));
+ const entry={dayStart:day,through:day+7200000,hours};
+ const chart=Object.assign(Object.create(DailyUsageChart.prototype),{
+   colorApps:true,day,pkg:null,dayToken:0,host:{},inspectionEnabled:false,
+   node:id=>nodes[id],formatDuration:String,navigation(){},drawEmpty(){},draw(data){this.data=data;},
+   getCache:()=>({dayOverview:async()=>({entry,apps,hourApps})})
+ });
+ const {ranks}=await chart.display(day);
+ assert.deepEqual([...ranks.keys()],['a','b','c'],'period totals determine ranks, with unattributed time excluded');
+ assert.deepEqual(chart.data.stacks[0],[{rank:ranks.get('b'),ms:60000},{rank:0,ms:30000}]);
+ assert.equal(chart.data.stacks[1].reduce((sum,segment)=>sum+segment.ms,0),hours[1].onMs,'stack height preserves the reported duration');
+ assert.deepEqual(chart.data.stacks[2],[],'unknown hours have no stack');
+}
+
 async function incompleteUsageAverage(){
  const root=path.join(__dirname,'../src/main/assets/webroot');
  const {UsageWeekPanel}=await import(pathToFileURL(path.join(root,'usage-week.js')).href);
  const {calendarMonth,firstUsageMonth,isoWeek,firstUsageWeek}=await import(pathToFileURL(path.join(root,'usage-calendar.js')).href);
  const day=new Date(2026,0,5).getTime(),next=new Date(2026,0,6).getTime(),after=new Date(2026,0,7).getTime();
  const summaries=[{dayStart:day,through:next,onMs:7200000,coveredMs:next-day},{dayStart:next,through:after,onMs:600000,coveredMs:600000}];
- const result={summaries,appTotals:[{dayStart:day,ms:3600000},{dayStart:next,ms:600000}]};
+ const apps=[{pkg:'app.a',ms:4200000},{pkg:'app.b',ms:1800000}];
+ const dayApps=new Map([[day,[{pkg:'app.a',ms:3600000},{pkg:'app.b',ms:1800000}]],[next,[{pkg:'app.a',ms:600000}]]]);
+ const result={summaries,apps,dayApps,appTotals:[{dayStart:day,ms:3600000},{dayStart:next,ms:600000}]};
  for(const [monthMode,appMode] of [[false,false],[true,false],[false,true]]){
    const nodes=new Map(),panel=Object.assign(Object.create(UsageWeekPanel.prototype),{
      monthMode,appMode,token:0,period:monthMode?calendarMonth:isoWeek,firstPeriod:monthMode?firstUsageMonth:firstUsageWeek,
      node:id=>{if(!nodes.has(id))nodes.set(id,{setAttribute(){}});return nodes.get(id);},draw(){},select(){},
      getCache:()=>({summaries:async()=>summaries,weeklyOverview:async()=>result,weeklyApp:async()=>result})
    });
-   await panel.display(day,'example.app');
+   const displayed=await panel.display(day,'example.app');
    assert.equal(panel.rows.find(row=>row.day===next).known,true,'partial data remains visible');
    assert.equal(panel.rows.find(row=>row.day===next).complete,false,'a past day is incomplete until its whole span is covered');
    assert.equal(nodes.get('usageWeekAverage').textContent,appMode?'1时':'2时');
    assert.equal(nodes.get('usageWeekTotal').textContent,appMode?'总计 1时10分':'总计 2时10分');
+   if(monthMode||appMode)assert.equal(panel.rows[0].stack,null);
+   else{
+     assert.deepEqual(panel.rows[0].stack,[{rank:displayed.ranks.get('app.a'),ms:3600000},{rank:displayed.ranks.get('app.b'),ms:1800000},{rank:0,ms:1800000}]);
+     assert.deepEqual(panel.rows[1].stack,[{rank:displayed.ranks.get('app.a'),ms:600000}]);
+   }
  }
 }
 
@@ -404,4 +440,4 @@ async function performanceEndWithoutSample(){
  assert.equal(panel.timer,undefined,'polling does not continue after the end');
 }
 
-runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,performanceMinimumFps,intervalApplications,deletedDailyUsage,incompleteUsageAverage,performanceEndWithoutSample]).then(()=>console.log('Charts: scales, sampling details, active and ended charts, and daily/period usage passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([scales,chartTimes,hitGeometry,percentageInterpolation,batteryTemperature,screenOffProjection,performanceMemory,performanceMinimumFps,intervalApplications,deletedDailyUsage,rankedDailyUsage,incompleteUsageAverage,performanceEndWithoutSample]).then(()=>console.log('Charts: scales, sampling details, active and ended charts, and daily/period usage passed')).catch(error=>{console.error(error);process.exitCode=1;});

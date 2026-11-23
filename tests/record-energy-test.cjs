@@ -49,6 +49,12 @@ function load(file){
       const [length,circumference]=host.querySelector('.drain-ring-'+name).attributes['stroke-dasharray'].split(' ').map(Number);
       assert.ok(Math.abs(length/circumference-energy[i]/total)<1e-8,'unknown energy should not fill either confirmed segment');
     }
+    const app={pkg:'game.app',ms:120000,avgPower:2.34,avgFps:58.2};
+    drain.render({record:{...drainRecord,id:7,fast_seconds:2},drainSummary:summary,apps:[app]});
+    const appMeta=()=>get('appRows').querySelector('.appMeta').textContent;
+    assert.match(appMeta(),/平均2\.34W 58\.2FPS$/);
+    drain.render({record:drainRecord,drainSummary:summary,apps:[app]});
+    assert.match(appMeta(),/平均2\.34W$/);
     drain.close();
   }finally{RecordUsagePanel.prototype.update=updateUsagePanel;delete context.document;delete context.window;}
   const day=new Date(2026,9,20).getTime(),end=day+3600000,entry={revision:0,spans:[[day,end,1]],appSpans:[],appLabels:{},attempts:{},appAttempts:{},appFinal:{},settledEnd:end};

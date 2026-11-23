@@ -1,11 +1,11 @@
-import{Chart,seriesFor,valid,duration}from'./chart.js?v=acol-2.2s';
+import{Chart,seriesFor,valid,duration,chartRangeGrowth}from'./chart.js?v=acol-2.2s';
 import{IntervalAppDetails}from'./interval-app-details.js?v=acol-2.2s';
 import{ScreenOffOverlay}from'./screen-off-overlay.js?v=acol-2.2s';
 import{PerformancePanel}from'./performance-panel.js?v=acol-2.2s-gamepad-temp';
 import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
 import{remainingEstimate,remainingTime,canEstimateRemaining}from'./estimate.js?v=acol-2.2s';
 import{loadSelection,saveSelection}from'./preferences.js?v=acol-2.2s';
-import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,recordEndWall,fmt,stamp,pad2,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
+import{capacityChange,capacityFlow,recordCells,recordFast,recordIsLive,renderRecordHeading,fmt,pad2,reasons,el,longPressFeedback}from'./record-display.js?v=acol-2.2s';
 import{createRecordDrain}from'./record-usage.js?v=acol-2.2s';
 import{bindExport,recordCsv}from'./chart-export.js?v=acol-2.2s';
 import{DETAIL_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
@@ -26,7 +26,7 @@ export async function readRecordDetail(api,id,from,to,budget,cancelled=()=>false
 }
 /** Owns the opened record, chart lifecycle, live cursor and presentation. */
 export function createRecordDetail(options){
-  const{api,liveChannel,toast,fullScreen,readAppIcons,beforeOpen,onShow,onRefresh}=options;
+  const{api,liveChannel,toast,fullScreen,readAppIcons,beforeOpen,onShow,onRefresh,onSettings}=options;
   let detail=null,activeId=null,request=0,detailBusy=0,zoomTimer,expanded=false,fullscreenAnchor=null;
   let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],streamPreview=false,reversePlot=false;
   let followRedrawPending=false;
@@ -34,7 +34,7 @@ export function createRecordDetail(options){
   const chargeCache=new ChargeIntegralCache();
   let chargeEntry=null;
   const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
-  const intervalAppDetails=new IntervalAppDetails(chart,api,()=>detail?.record);
+  const intervalAppDetails=new IntervalAppDetails(chart,api,()=>detail&&!detail.loading?detail.record:null);
   const screenOffOverlay=new ScreenOffOverlay(chart,api,()=>!document.hidden&&!$('detail').hidden,message=>toast(message));
   let performancePanel;
   const drain=createRecordDrain(api,{getData:()=>detail,readAppIcons,onSettled:result=>{
@@ -116,7 +116,7 @@ export function createRecordDetail(options){
   function applyChart(data,view,live=false){
     const record=data.record;
     chart.readRawInspection=data.preview?async(from,to,x)=>(await api('detail_sample',record.id,from,to,x)).sample:null;
-    chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),highDesignCapacity:data.highDesignCapacity,fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live});
+    chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),highDesignCapacity:data.highDesignCapacity,fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live,appendOnly:data.points===streamPoints});
     if(!data.loading){intervalAppDetails.preload(record,data.statsVersion);screenOffOverlay.update(record,data.statsVersion);}
     renderChartInfo();renderFollow();
   }
@@ -148,6 +148,7 @@ export function createRecordDetail(options){
   }
   async function close(){
     chargeEntry=null;
+    intervalAppDetails.pause();
     screenOffOverlay.close();
     drain.close();
     performancePanel?.close();
@@ -160,6 +161,7 @@ export function createRecordDetail(options){
   }
   async function openDetail(id,record){
     chargeEntry=null;
+    intervalAppDetails.pause();
     screenOffOverlay.close();
     beforeOpen();
     drain.close();
@@ -174,22 +176,19 @@ export function createRecordDetail(options){
         streamId=id;streamPoints=[...data.points];streamAfter=streamPoints.at(-1)?.[0]??0;streamPreview=!!data.preview;
         if(preserve&&chart.window[0]===0&&chart.window[1]===chart.total)chart.window=[0,Math.max(1,data.record.end_elapsed-data.record.start_elapsed)];
         showDetail(data,preserve);
+        const growth=chartRangeGrowth(chart,uiSettings);
+        if(growth.some(Boolean))api('grow_chart_ranges',...growth).then(result=>onSettings?.(result.settings)).catch(()=>{});
         if(data.record.active){liveChannel.seedRecord(id,streamAfter);startRemaining();}
       });
     }
-    catch(e){if(current(token,id)){if(detail?.loading)$('chartInfo').textContent='曲线读取失败';else if(!detail)activeId=null;toast(e.message);}}
-    finally{detailBusy--;schedulePoll(0);}
-  }
-  function renderRecordHeading(r){
-    const heading=$('detailScroll').querySelector('.record-detail-head');
-    heading.dataset.kind=recordFast(r)?'game':r.kind;heading.dataset.active=r.active?'1':'0';
-    $('detailType').textContent=recordFast(r)?'游戏记录':r.kind==='charge'?'充电记录':'放电记录';
-    $('detailState').textContent=r.active?'记录中':reasons[r.reason]??'记录结束';
-    $('detailTitle').textContent=valid(r.start_wall)?stamp(r.start_wall):'—';
-    const endWall=recordEndWall(r);$('detailEnd').textContent=r.active?'记录中':endWall===null?'—':stamp(endWall);
-    for(const[node,wall]of[[$('detailTitle'),r.start_wall],[$('detailEnd'),endWall]]){
-      if(valid(wall)&&Number.isFinite(new Date(wall).getTime()))node.dateTime=new Date(wall).toISOString();else node.removeAttribute('datetime');
+    catch(e){
+      if(current(token,id)){
+        if(!detail){activeId=null;throw e;}
+        if(detail.loading)$('chartInfo').textContent='曲线读取失败';
+        toast(e.message);
+      }
     }
+    finally{detailBusy--;schedulePoll(0);}
   }
   function showDetail(data,preserve=false,live=false){
     followRedrawPending=false;
@@ -446,8 +445,9 @@ export function createRecordDetail(options){
     theme(){if(activeId!==null&&detail)buildLegend(detail.record.kind);chart.draw();performancePanel?.refreshTheme();},
     syncHistory:syncRemainingExplanation,
     backFullscreen(){if(performancePanel?.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
-    pause(){stopRemaining();drain.pause();},
-    resume(){startRemaining();drain.resume();},pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
+    pause(){stopRemaining();drain.pause();intervalAppDetails.pause();},
+    resume(){startRemaining();drain.resume();if(detail&&!detail.loading)intervalAppDetails.preload(detail.record,detail.statsVersion);},
+    pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
     prune(){drain.prune();intervalAppDetails.prune();chargeCache.prune(api).catch(()=>{});},
     removeCaches(id){drain.remove(id);intervalAppDetails.remove(id);chargeCache.remove(id);if(activeId===id){drain.close();chargeEntry=null;}},
     failure(){if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}

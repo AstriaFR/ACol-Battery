@@ -41,6 +41,12 @@ public final class StartupDiagnosticsTest {
     static void feedback()throws Exception{
         check(StartupFeedback.notices(null,healthy()).isEmpty(),"Healthy startup must not prompt");
         check(StartupFeedback.notices(null,new JSONObject()).isEmpty(),"Missing optional checks must not invent failures");
+        JSONObject unknownCells=healthy().put("cellCount",0);
+        unknownCells.getJSONObject("reading").put("cellCount",1);
+        List<StartupFeedback.Notice> cellNotices=StartupFeedback.notices(null,unknownCells);
+        check(cellNotices.size()==1&&cellNotices.get(0).text.contains("设置")&&cellNotices.get(0).text.contains("手动"),
+            "Unknown cell count should direct the user to the manual setting");
+        check(StartupFeedback.notices(unknownCells,healthy()).isEmpty(),"A resolved count should supersede the probe warning");
         JSONObject noBootEntry=healthy().put("bootEntryError","Permission denied: service.d");
         check(StartupFeedback.notices(null,noBootEntry).size()==1,"Boot entry failures belong in the final limitations notice");
         check(StartupFeedback.downgradeReport(null,noBootEntry).contains("Permission denied: service.d"),"Keep the boot entry failure in the diagnostic report");

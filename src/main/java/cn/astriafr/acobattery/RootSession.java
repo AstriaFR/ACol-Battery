@@ -1,6 +1,7 @@
 package cn.astriafr.acobattery;
 
 import org.json.JSONObject;
+import cn.astriafr.acobattery.common.DatabaseRebuild;
 import cn.astriafr.acobattery.common.FriendlyError;
 import cn.astriafr.acobattery.common.OperationTimeout;
 import java.io.*;
@@ -44,14 +45,25 @@ final class RootSession implements Closeable {
     }
     private synchronized void write(String text)throws IOException{if(closed)throw new IOException("root 连接已关闭。");input.write(text);input.flush();}
     String command(String command,int timeoutSeconds)throws Exception{
+        return command(command,Math.max(1,Math.min(OperationTimeout.MAX_SECONDS,timeoutSeconds)),false);
+    }
+    String rebuildCommand(String command)throws Exception{
+        return command(command,DatabaseRebuild.IDLE_TIMEOUT_SECONDS,true);
+    }
+    private String command(String command,int timeoutSeconds,boolean watchProgress)throws Exception{
         String marker="__ACO_END_"+java.util.UUID.randomUUID().toString().replace("-","")+"_";
         write("( set -e; "+command+"; ); aco_rc=$?; printf '\\n"+marker+"%s\\n' \"$aco_rc\"\n");
-        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(Math.max(1,Math.min(OperationTimeout.MAX_SECONDS,timeoutSeconds)));StringBuilder result=new StringBuilder();
+        long timeout=TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        long until=System.nanoTime()+timeout;StringBuilder result=new StringBuilder();
         while(!closed){
             long remaining=until-System.nanoTime();if(remaining<=0)throw new IOException("等待 root 授权或初始化超时，请授权后重试。");
             String line=output.poll(remaining,TimeUnit.NANOSECONDS);
             if(line==null)throw new IOException("等待 root 授权或初始化超时，请重试。");
             if(EOF.equals(line))throw new IOException("root 授权被拒绝或连接已断开。");
+            if(watchProgress&&DatabaseRebuild.PROGRESS_LINE.equals(line)){
+                until=System.nanoTime()+timeout;
+                continue;
+            }
             if(line.startsWith(marker)){
                 if(!"0".equals(line.substring(marker.length())))throw new CommandFailure(result.toString().trim());
                 return result.toString().trim();

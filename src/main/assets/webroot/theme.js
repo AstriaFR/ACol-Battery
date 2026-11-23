@@ -28,7 +28,7 @@ export class ThemeController{
     this.transition?.skipTransition();
     const synchronizeBars=()=>{
       if(generation!==this.generation)return;
-      try{window.AcoNative?.setDarkTheme?.(dark);}catch{}
+      try{window.AcoNative?.setDarkTheme?.(dark,state.step!=='auto');}catch{}
     };
     const commit=()=>{
       if(generation!==this.generation)return;

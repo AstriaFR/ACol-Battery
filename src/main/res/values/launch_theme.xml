@@ -1,0 +1,12 @@
+<resources>
+  <color name="acol_launch_surface">#f6f8fb</color>
+  <bool name="acol_light_bars">true</bool>
+  <style name="AcolLaunch" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:windowSplashScreenBackground">@color/acol_launch_surface</item>
+    <item name="android:windowBackground">@color/acol_launch_surface</item>
+    <item name="android:statusBarColor">@color/acol_launch_surface</item>
+    <item name="android:navigationBarColor">@color/acol_launch_surface</item>
+    <item name="android:windowLightStatusBar">@bool/acol_light_bars</item>
+    <item name="android:windowLightNavigationBar">@bool/acol_light_bars</item>
+  </style>
+</resources>

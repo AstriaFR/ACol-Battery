@@ -3,6 +3,7 @@ import{UsageWeekPanel}from'./usage-week.js?v=acol-2.2s';
 import{isoWeek}from'./usage-calendar.js?v=acol-2.2s';
 import{readAppIcons}from'./root-bridge.js?v=acol-2.2s';
 import{usageRoots as roots}from'./usage-navigation.js?v=acol-2.2s';
+import{compareUsageApps}from'./usage-stack.js?v=acol-2.2s';
 const $=id=>document.getElementById(id);
 const scrolls={'usage-day':'usageDayScroll','usage-week':'usageWeekScroll','usage-month':'usageMonthScroll','usage-app':'usageAppScroll','usage-app-week':'usageAppWeekScroll'};
 const lists={day:{page:'usage-day',rows:'usageAppRows',status:'usageAppListStatus',scroll:'usageDayScroll'},week:{page:'usage-week',rows:'usageWeekAppRows',status:'usageWeekAppListStatus',scroll:'usageWeekScroll'}};
@@ -28,8 +29,11 @@ export class UsageDetailsPanel{
   }
   viewKey(state){const week=state.page.endsWith('week');return`${state.page}:${week?isoWeek(state.day).start:state.day}:${state.pkg||''}`;}
   hideTips(){this.dayChart.hideTip();this.appChart.hideTip();}
+  periodChart(page){return page==='usage-month'?this.monthChart:page==='usage-week'?this.weekChart:page==='usage-app-week'?this.appWeekChart:null;}
   rememberView(){
-    if(!this.state)return;const key=this.viewKey(this.state);this.viewScroll.delete(key);this.viewScroll.set(key,{page:this.state.page,day:this.state.day,top:$(scrolls[this.state.page]).scrollTop});
+    if(!this.state)return;
+    const {page,day}=this.state,key=this.viewKey(this.state);
+    this.viewScroll.delete(key);this.viewScroll.set(key,{page,day,top:$(scrolls[page]).scrollTop,selected:this.periodChart(page)?.selected});
     if(this.state.page==='usage-day'){
       if(this.dayChart.tip===this.dayChart.tipHost&&!this.dayChart.tipHost.hidden)this.hourSelections.set(this.state.day,this.dayChart.selected);else this.hourSelections.delete(this.state.day);
     }
@@ -56,7 +60,11 @@ export class UsageDetailsPanel{
     }else await this.renderDay();
     if(this.state!==current)return;
     if(state.page==='usage-day'&&this.hourSelections.has(state.day))this.dayChart.requestHourDetails(this.hourSelections.get(state.day));
-    if(changed)$(scrolls[state.page]).scrollTop=this.viewScroll.get(this.viewKey(state))?.top||0;
+    if(changed){
+      const saved=this.viewScroll.get(this.viewKey(state));
+      if(Number.isInteger(saved?.selected))this.periodChart(state.page)?.select(saved.selected);
+      $(scrolls[state.page]).scrollTop=saved?.top||0;
+    }
   }
   async refresh(day){
     if(!this.state)return;
@@ -73,9 +81,10 @@ export class UsageDetailsPanel{
   async renderDay(){
     const token=++this.token,key=this.viewKey(this.state),day=this.state.day;this.prepareList('day',key);
     try{
-      const [data]=await Promise.all([this.getCache().getDailyApps(day),this.dayChart.display(day)]);
+      const data=await this.dayChart.display(day);
       if(token!==this.token||this.state?.page!=='usage-day'||this.viewKey(this.state)!==key)return;
-      await this.renderRows(data.apps,'day',key,token);
+      if(!data)throw Error('当天应用汇总暂不可用');
+      await this.renderRows(data.apps,data.ranks,'day',key,token);
     }catch{if(token===this.token)$('usageAppListStatus').textContent='当天应用汇总暂不可用';}
   }
   async renderWeek(){
@@ -83,12 +92,12 @@ export class UsageDetailsPanel{
     try{
       const data=await this.weekChart.display(this.state.day);
       if(token!==this.token||this.state?.page!=='usage-week'||this.viewKey(this.state)!==key)return;
-      if(!data)throw Error('本周汇总暂不可用');await this.renderRows(data.apps??[],'week',key,token);
+      if(!data)throw Error('本周汇总暂不可用');await this.renderRows(data.apps??[],data.ranks,'week',key,token);
     }catch{if(token===this.token)$('usageWeekAppListStatus').textContent='本周应用汇总暂不可用';}
   }
-  async renderRows(input,kind,key,token){
+  async renderRows(input,ranks,kind,key,token){
     const info=lists[kind],list=$(info.rows),context=this.lists.get(kind),observer=this.observers.get(kind),top=$(info.scroll).scrollTop;
-    const rows=input.filter(row=>row.ms>=30000).sort((a,b)=>b.ms-a.ms||a.pkg.localeCompare(b.pkg));context.rows=new Map(rows.map(row=>[row.pkg,row]));observer.disconnect();
+    const rows=input.filter(row=>row.ms>=30000||ranks.has(row.pkg)).sort(compareUsageApps);context.rows=new Map(rows.map(row=>[row.pkg,row]));observer.disconnect();
     $(info.status).textContent=rows.length?'':kind==='week'?'暂无已缓存的本周应用使用时长':'暂无已缓存的应用使用时长';
     const nodes=[];let cursor=0;
     await new Promise(resolve=>{
@@ -103,7 +112,10 @@ export class UsageDetailsPanel{
             const text=document.createElement('span');text.className='usage-app-text';text.append(document.createElement('strong'),document.createElement('small'));
             const arrow=document.createElement('span');arrow.className='usage-app-arrow';arrow.textContent='›';arrow.setAttribute('aria-hidden','true');row.append(icon,text,arrow);context.nodes.set(item.pkg,row);
           }
-          row.querySelector('strong').textContent=item.label;row.querySelector('small').textContent=roundedDuration(item.ms);nodes.push(row);images.push(row.querySelector('.usage-app-icon'));if(context.fresh)fragment.append(row);
+          const name=row.querySelector('strong'),rank=ranks.get(item.pkg);
+          name.textContent=item.label;
+          if(rank)name.dataset.usageRank=rank;else delete name.dataset.usageRank;
+          row.querySelector('small').textContent=roundedDuration(item.ms);nodes.push(row);images.push(row.querySelector('.usage-app-icon'));if(context.fresh)fragment.append(row);
         }
         if(context.fresh)list.append(fragment);for(const icon of images)observer.observe(icon);cursor+=20;
         if(cursor<rows.length){requestAnimationFrame(append);return;}

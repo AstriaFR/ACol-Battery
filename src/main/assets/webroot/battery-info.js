@@ -1,8 +1,34 @@
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const number=(v,unit='',digits=0)=>finite(v)?`${v.toLocaleString('zh-CN',{maximumFractionDigits:digits})}${unit?' '+unit:''}`:'—';
+function currentText(value){
+  if(!finite(value))return '—';
+  return Math.abs(value)>=1000?`${(value/1000).toFixed(2)} A`:number(Math.trunc(value),'mA');
+}
+const watts=(millivolts,milliamps)=>finite(millivolts)&&millivolts>0&&finite(milliamps)?millivolts*milliamps/1_000_000:null;
+function wattsText(value){
+  if(!finite(value))return '—';
+  return `${Math.abs(value)<1?value.toFixed(2):value.toPrecision(3)}W`;
+}
 const capacityRatio=(value,design)=>number(value,'mAh')+(finite(value)&&value>=0&&finite(design)&&design>0?` (${(value/design*100).toFixed(1)}%)`:'');
 export function rawFccBoundText(limit){
   return finite(limit)&&limit>0?`＞${number(limit,'mAh')}`:null;
+}
+export function validCoefficientRows(coefficients){
+  return (Array.isArray(coefficients)?coefficients:[])
+    .filter(row=>row&&['cutoffMv','fccOffset','sohOffset'].every(key=>finite(row[key])))
+    .slice().sort((a,b)=>a.cutoffMv-b.cutoffMv);
+}
+export function selectCoefficientRow(rows,cutoffMv){
+  return finite(cutoffMv)&&cutoffMv>0?(rows.filter(row=>row.cutoffMv>0&&row.cutoffMv<=cutoffMv).at(-1)??null):null;
+}
+export function isBatteryUncompensated(info){
+  const cutoff=info?.cutoffMv;
+  if(!finite(cutoff)||cutoff<=0)return false;
+  if(typeof info?.noCompensation==='boolean')return info.noCompensation;
+  const rows=validCoefficientRows(info?.coefficients);
+  if(!rows.length)return false;
+  const selected=selectCoefficientRow(rows,cutoff);
+  return !selected||(selected.fccOffset===0&&selected.sohOffset===0);
 }
 export function lockedCapacityText(qmax,capacity,fccAbove){
   if(!finite(qmax)||qmax<=0)return '—';
@@ -18,7 +44,7 @@ export function lockedCapacityText(qmax,capacity,fccAbove){
 }
 export class BatteryInfoPanel{
   constructor(){
-    this.panel=document.getElementById('batteryInfoPanel');this.active=false;this.loaded=false;this.slowAt=null;
+    this.panel=document.getElementById('batteryInfoPanel');this.active=false;this.loaded=false;
     this.explanation=document.getElementById('batteryEstimateExplanation');
     this.explanationPage=0;this.swipe=null;this.pages=document.getElementById('batteryExplanationPages');
     document.getElementById('previousBatteryExplanation').onclick=()=>this.setExplanationPage(this.explanationPage-1);
@@ -53,8 +79,7 @@ export class BatteryInfoPanel{
   }
   renderCoefficients(info){
     const body=document.getElementById('batteryCoefficientRows');body.replaceChildren();
-    const rows=(Array.isArray(info?.coefficients)?info.coefficients:[]).filter(row=>row&&['cutoffMv','fccOffset','sohOffset'].every(key=>finite(row[key]))).slice().sort((a,b)=>a.cutoffMv-b.cutoffMv);
-    const selected=finite(info?.cutoffMv)&&info.cutoffMv>=3000?rows.filter(row=>row.cutoffMv<=info.cutoffMv).at(-1):null;
+    const rows=validCoefficientRows(info?.coefficients),selected=selectCoefficientRow(rows,info?.cutoffMv);
     for(const row of rows){const tr=document.createElement('tr');if(row===selected)tr.className='current-coefficient';for(const key of['cutoffMv','fccOffset','sohOffset']){const td=document.createElement('td');td.textContent=number(row[key]);tr.append(td);}body.append(tr);}
     document.getElementById('batteryCoefficientTable').hidden=!rows.length;
     const empty=document.getElementById('batteryCoefficientEmpty');empty.hidden=!!rows.length;empty.textContent=info?'未读到本机的补偿关系表。':'正在读取补偿关系表…';
@@ -63,7 +88,7 @@ export class BatteryInfoPanel{
   closeExplanation(){if(this.explanation.open)this.explanation.close();}
   handleHistory(state){if(state?.explanation)this.showExplanation(false);else this.closeExplanation();}
   field(key,value){this.panel.querySelector(`[data-info="${key}"]`).textContent=value;}
-  open(){this.active=true;this.loaded=false;this.slowAt=null;this.panel.hidden=false;this.renderCoefficients(null);for(const node of this.panel.querySelectorAll('[data-info]')){node.textContent='—';node.classList.remove('battery-near-actual');}this.error('');}
+  open(){this.active=true;this.loaded=false;this.panel.hidden=false;this.renderCoefficients(null);for(const node of this.panel.querySelectorAll('[data-info]')){node.textContent='—';node.classList.remove('battery-near-actual');}this.error('');}
   close(){this.closeExplanation();this.active=false;this.panel.hidden=true;}
   error(text){const box=document.getElementById('batteryInfoError');box.textContent=text;box.hidden=!text;}
   update(packet){
@@ -72,15 +97,27 @@ export class BatteryInfoPanel{
     this.panel.querySelector('[data-info-label=rm]').textContent=capacitySource?`当前剩余电量（${capacitySource}）`:'当前剩余电量';
     this.panel.querySelector('[data-info-label=voltage]').textContent=reading.voltageSource==='android'?'电池电压（系统电压）':'电池电压（bcc_parms）';
     const dual=reading.cellCount===2&&finite(reading.cell1)&&finite(reading.cell2);
-    this.field('voltage',dual?`${(reading.cell1/1000).toFixed(3)} / ${(reading.cell2/1000).toFixed(3)} V`:finite(reading.voltage)?`${(reading.voltage/1000).toFixed(3)} V`:'—');
-    const slowElapsed=reading.slowElapsed??reading.elapsed;
-    if(this.slowAt===null||finite(slowElapsed)&&slowElapsed-this.slowAt>=10000){
-      this.field('temp',finite(reading.temp)?`${reading.temp.toFixed(1)} ℃`:'—');this.field('rm',number(reading.rm,'mAh'));this.slowAt=slowElapsed??null;
-    }
+    if(dual){
+      const totalVoltage=(reading.cell1+reading.cell2)/1000;
+      this.field('voltage',`${(reading.cell1/1000).toFixed(3)} / ${(reading.cell2/1000).toFixed(3)} V\u2003${totalVoltage.toFixed(3)} V`);
+    }else this.field('voltage',finite(reading.voltage)?`${(reading.voltage/1000).toFixed(3)} V`:'—');
+    const current=reading.current;
+    const currentSource=reading.currentSource==='current_now'?'current_now':reading.currentSource==='android'?'CURRENT_NOW':'bcc_parms';
+    this.panel.querySelector('[data-info-label=batteryCurrent]').textContent=`电池电流（${currentSource}）`;
+    this.field('batteryCurrent',currentText(current));
+    const batteryPower=finite(reading.power)?reading.power:watts(reading.voltage,current);
+    this.field('chargingPower',wattsText(batteryPower));
+    this.field('chargingProtocol',reading.chargingProtocol||'—');
+    this.field('usbInputVoltage',finite(reading.usbInputVoltage)?`${(reading.usbInputVoltage/1000).toFixed(3)} V`:'—');
+    this.field('targetInputCurrent',currentText(reading.targetInputCurrent));
+    const tempSource=reading.tempSource==='android'?'系统温度':reading.tempSource==='temp'?'temp':'bcc_parms';
+    this.panel.querySelector('[data-info-label=temperature]').textContent=`电池温度（${tempSource}）`;
+    this.field('temperature',finite(reading.temp)?`${reading.temp.toFixed(1)} ℃`:'—');
+    this.field('rm',number(reading.rm,'mAh'));
     if(info&&!this.loaded){
       for(const key of['cycles','fcc','rawFcc','soh','rawSoh','qmax','cutoffMv','designCapacity'])this.field(key,number(info[key],['fcc','rawFcc','qmax','designCapacity'].includes(key)?'mAh':['soh','rawSoh'].includes(key)?'%':key==='cutoffMv'?'mV':'',key==='rawSoh'?2:0));
       this.field('qmax',capacityRatio(info.qmax,info.designCapacity));
-      const cutoffKnown=finite(info.cutoffMv)&&info.cutoffMv>0,noCompensation=cutoffKnown&&info.cutoffMv<3000;
+      const cutoffKnown=finite(info.cutoffMv)&&info.cutoffMv>0,noCompensation=isBatteryUncompensated(info);
       if(noCompensation)for(const key of['rawFcc','rawSoh'])this.field(key,'——');
       const fccBound=cutoffKnown&&!noCompensation?rawFccBoundText(info.rawFccAbove):null;
       if(fccBound)this.field('rawFcc',fccBound);

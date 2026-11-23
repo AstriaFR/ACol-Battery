@@ -25,22 +25,33 @@ final class RecordNotification {
     static final String SETTING="dischargeNotificationEnabled", RUNTIME_KEY="discharge_notification";
     private static final long MIN_INTERVAL_MS=30_000, RECENT_MS=30*60_000;
     private static final long CANCEL_RETRY_MS=2_000;
+    private static final long RESTORE_DELAY_MS=350;
     private static final int CANCEL_ATTEMPTS=3;
-    static final int INVALID_QUALITY=1|2|4|8|Core.REBOOT_GAP|Core.DISCHARGE_REBASE;
-    private static final String ELIGIBLE=
+    private static final int INVALID_READING=4;
+    private static final int INVALID_INTERVAL=1|2|INVALID_READING|8|Core.REBOOT_GAP|Core.DISCHARGE_REBASE;
+    private static final String SCREEN_SAMPLE=
         " FROM samples s"
-        +" JOIN usage_raw ending ON ending.session=s.session AND ending.x=s.x"
+        +" JOIN usage_raw ending ON ending.session=s.session AND ending.x=s.x";
+    private static final String SCREEN_DISCHARGE=
+        " WHERE s.session=?1 AND s.x<=?2 AND s.rm>=0 AND s.online=0 AND ending.screen_on=1 AND ending.online=0";
+    private static final String ELIGIBLE=SCREEN_SAMPLE
         +" JOIN usage_raw starting ON starting.session=s.session AND starting.x=s.x-s.interval_ms"
-        +" WHERE s.session=? AND s.x<=? AND s.interval_ms>="+MIN_INTERVAL_MS
-        +" AND s.power>=0 AND s.rm>=0 AND s.online=0 AND (s.quality&"+INVALID_QUALITY+")=0"
-        +" AND ending.screen_on=1 AND starting.screen_on=1 AND ending.online=0 AND starting.online=0"
+        +SCREEN_DISCHARGE+" AND s.interval_ms>="+MIN_INTERVAL_MS
+        +" AND s.power>=0 AND (s.quality&"+INVALID_INTERVAL+")=0"
+        +" AND starting.screen_on=1 AND starting.online=0"
         +" AND (ending.quality&"+DeferredStats.SCREEN_INTERVAL_UNCERTAIN+")=0"
         +" AND ABS(ending.wall-starting.wall-s.interval_ms)<=2000";
+    private static final String LAST_SAMPLE=" ORDER BY s.x DESC LIMIT 1";
+    private static final String DISCHARGE_SAMPLE=
+        "SELECT s.x,s.rm,s.voltage,s.temp,s.wall,s.pct-(SELECT pct_start FROM sessions WHERE id=s.session)"
+        +" FROM samples s WHERE s.session=?1 AND s.x=COALESCE("
+        +"(SELECT s.x"+ELIGIBLE+LAST_SAMPLE+"),"
+        +"(SELECT s.x"+SCREEN_SAMPLE+SCREEN_DISCHARGE+" AND (s.quality&"+INVALID_READING+")=0"+LAST_SAMPLE+"))";
     private final SQLiteDatabase db;
     private final Context context;
     private final File ownerFile;
     private final Handler events=new Handler(Looper.getMainLooper());
-    private final Runnable restoreTask=this::restoreAfterTaskRemoval;
+    private final Runnable restoreTask=this::restoreIfMissing;
     private final NotificationProviderClient provider=new NotificationProviderClient();
     private final ScheduledThreadPoolExecutor worker=new ScheduledThreadPoolExecutor(1,work->{
         Thread thread=new Thread(work,"aco-record-notice");thread.setDaemon(true);return thread;
@@ -51,9 +62,8 @@ final class RecordNotification {
     private volatile boolean noticeMayExist=true;
     private Cancellation cancellation;
     private long shownSession=-1,shownX=-1;
-    private long processExitWall;
-    private boolean watcherStarted,publishQueued;
-    private DischargeTaskWatcher watcher;
+    private boolean restorePending,watcherStarted,publishQueued;
+    private NotificationAppWatcher watcher;
 
     private static final class Request {
         final long session,x;
@@ -94,11 +104,13 @@ final class RecordNotification {
         this.context=context;this.db=db;ownerFile=new File(data,"owner.user");
         worker.setRemoveOnCancelPolicy(true);
     }
+    static int invalidChargeQuality(long x){return x==0?INVALID_READING:INVALID_INTERVAL;}
+
     synchronized void screen(boolean interactive){
         if(this.interactive==interactive)return;
         this.interactive=interactive;
         events.removeCallbacks(restoreTask);
-        if(interactive&&processExitWall!=0)events.postDelayed(restoreTask,350);
+        if(interactive&&restorePending)events.postDelayed(restoreTask,RESTORE_DELAY_MS);
         if(interactive&&cancellation!=null&&cancellation.attempts>=CANCEL_ATTEMPTS){
             discardCancellation();
             scheduleCancellation(requested);
@@ -124,7 +136,7 @@ final class RecordNotification {
     }
     synchronized void clear(){
         events.removeCallbacks(restoreTask);
-        processExitWall=0;
+        restorePending=false;
         if(requested!=null)discardCancellation();
         requested=null;
         scheduleCancellation(null);
@@ -157,31 +169,31 @@ final class RecordNotification {
     }
 
     private void startWatcher(){
-        try{watcher=new DischargeTaskWatcher(context,Integer.parseInt(Owner.read(ownerFile)),this::processExited);}
-        catch(Exception|LinkageError unavailable){}
-    }
-
-    private synchronized void processExited(long wall){
-        if(requested==null||worker.isShutdown())return;
-        processExitWall=wall;
-        if(interactive){
-            events.removeCallbacks(restoreTask);
-            events.postDelayed(restoreTask,350);
+        try{watcher=new NotificationAppWatcher(context,Integer.parseInt(Owner.read(ownerFile)),this::appBackgrounded);}
+        catch(Exception|LinkageError unavailable){
+            android.util.Log.w("AColBattery","Record notification lifecycle observer unavailable",unavailable);
         }
     }
 
-    private synchronized void restoreAfterTaskRemoval(){
-        if(!interactive||processExitWall==0||requested==null||worker.isShutdown())return;
+    private synchronized void appBackgrounded(){
+        if(requested==null||worker.isShutdown())return;
+        restorePending=true;
+        if(interactive){
+            events.removeCallbacks(restoreTask);
+            events.postDelayed(restoreTask,RESTORE_DELAY_MS);
+        }
+    }
+
+    private synchronized void restoreIfMissing(){
+        if(!interactive||!restorePending||requested==null||worker.isShutdown())return;
         worker.execute(()->{
-            long wall;
+            Request latest;
             synchronized(this){
-                if(!interactive||processExitWall==0||requested==null)return;
-                wall=processExitWall;processExitWall=0;
+                if(!interactive||!restorePending||requested==null)return;
+                restorePending=false;
+                latest=requested;
             }
-            if(watcher!=null&&watcher.wasTaskRemoved(wall)){
-                Request latest=requested;
-                if(latest!=null)publish(latest,true);
-            }
+            if(watcher!=null&&watcher.canRestore())publish(latest,true);
         });
     }
 
@@ -191,17 +203,14 @@ final class RecordNotification {
             if(request.charging){publishCharge(request,restore);return;}
             long x,wall;
             double rm,voltage,temp,percentChange;
-            String fields="SELECT s.x,s.rm,s.voltage,s.temp,s.wall,"
-                +"s.pct-(SELECT pct_start FROM sessions WHERE id=s.session)";
-            try(Cursor row=db.rawQuery(fields+ELIGIBLE+" ORDER BY s.x DESC LIMIT 1",
+            try(Cursor row=db.rawQuery(DISCHARGE_SAMPLE,
                     new String[]{Long.toString(request.session),Long.toString(request.x)})){
                 if(!row.moveToFirst()){
                     if(!restore&&interactive)scheduleCancellation(request);
                     return;
                 }
-                x=row.getLong(0);rm=row.getDouble(1);voltage=row.getDouble(2);
-                temp=row.isNull(3)?Double.NaN:row.getDouble(3);wall=row.getLong(4);
-                percentChange=row.isNull(5)?Double.NaN:row.getDouble(5);
+                x=row.getLong(0);rm=row.getDouble(1);voltage=reading(row,2);
+                temp=reading(row,3);wall=row.getLong(4);percentChange=reading(row,5);
             }
             if(!restore&&shownSession==request.session&&shownX==x)return;
             double watts=recentPower(request.session,x);
@@ -222,14 +231,16 @@ final class RecordNotification {
     private void publishCharge(Request request,boolean restore)throws Exception{
         long wall;
         double rm,current,watts,voltage,temp;
-        try(Cursor row=db.rawQuery("SELECT wall,rm,current,power,voltage,temp FROM samples"
-                +" WHERE session=? AND x=? AND online=1 AND (quality&"+INVALID_QUALITY+")=0",
-                new String[]{Long.toString(request.session),Long.toString(request.x)})){
+        try(Cursor row=db.rawQuery("SELECT s.wall,s.rm,s.current,s.power,s.voltage,s.temp,t.cell_count,s.quality FROM samples s"
+                +" JOIN sessions t ON t.id=s.session WHERE s.session=? AND s.x=? AND s.online=1 AND (s.quality&?)=0",
+                new String[]{Long.toString(request.session),Long.toString(request.x),Integer.toString(invalidChargeQuality(request.x))})){
             if(!row.moveToFirst()){
                 if(!restore&&interactive)scheduleCancellation(request);
                 return;
             }
-            wall=row.getLong(0);rm=reading(row,1);current=reading(row,2);
+            wall=row.getLong(0);rm=reading(row,1);
+            int cells=(row.getInt(7)&Core.UNCLASSIFIED_CELLS)!=0?0:row.getInt(6);
+            current=Core.compensatedCurrent(reading(row,2),cells);
             watts=reading(row,3);voltage=reading(row,4);temp=reading(row,5);
         }
         if(!beginPublish(request))return;
@@ -244,7 +255,7 @@ final class RecordNotification {
     private double recentPower(long session,long end){
         long from=Math.max(0,end-RECENT_MS);
         double wattMillis=0;long millis=0;
-        try(Cursor rows=db.rawQuery("SELECT s.x,s.interval_ms,s.power"+ELIGIBLE+" AND s.x>?",
+        try(Cursor rows=db.rawQuery("SELECT s.x,s.interval_ms,s.power"+ELIGIBLE+" AND s.x>?3",
                 new String[]{Long.toString(session),Long.toString(end),Long.toString(from)})){
             while(rows.moveToNext()){
                 long duration=Math.min(rows.getLong(1),rows.getLong(0)-from);

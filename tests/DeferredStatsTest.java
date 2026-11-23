@@ -50,6 +50,8 @@ public final class DeferredStatsTest {
         m.session=id;m.state=0;m.finish("plugged");
         m.deferred.reader=(a,b)->Collections.singletonList(new Core.Event(wall+230000,1,"tail","Tail",4));
         long end=wall+240000;
+        check(!m.deferred.readyTail(id,end+DeferredStats.TAIL_GRACE_MS-1),"tail check scheduled too early");
+        check(m.deferred.readyTail(id,end+DeferredStats.TAIL_GRACE_MS),"tail check missing at grace boundary");
         m.deferred.capture(true,id,end+DeferredStats.TAIL_GRACE_MS-1);m.deferred.calculate(id);
         check(count(m,"SELECT finalized FROM usage_deferred")==0&&m.deferred.pending(id),"already calculated record awaits a second read");
         long beforeTail=m.deferred.appRevision(id);
@@ -76,6 +78,42 @@ public final class DeferredStatsTest {
         near(amount(m,id,"mah"),11,"backup finishes game stats with charge gains excluded");
         check(count(m,"SELECT finalized FROM usage_deferred")==1&&count(m,"SELECT COUNT(*) FROM usage_events")==0,"backup marks complete and removes game events");
         backup.settleForBackup();near(amount(m,id,"mah"),11,"repeated backup does not recalculate finalized records");close(m);
+    }
+    static void gameFps(Context ctx,File dir,boolean backupFirst)throws Exception{
+        wall=System.currentTimeMillis()-600000;
+        Main m=open(ctx,dir);
+        try{
+            m.fastEnabled=true;
+            m.withGame(()->m.begin(reading(0,5000,false)));
+            long id=m.gameTrack.session;
+            m.deferred.raw(id,base,reading(120000,4990,false),0,180000,true);
+            m.deferred.saveEvents(Collections.singletonList(new DeferredStats.Pending(id,wall,wall+120000)),Arrays.asList(
+                new Core.Event(wall,15,null),new Core.Event(wall,18,null),new Core.Event(wall,1,"game.fps","Main",1)));
+            putFps(m,id,30000,60,1000);
+            putFps(m,id,32000,90,2000);
+            m.deferred.calculate(id);
+            check(count(m,"SELECT COUNT(*) FROM game_app_fps")==0,"non-view settlement must skip FPS");
+            if(!backupFirst){
+                m.deferred.commit(m.deferred.plan(id,true));
+                near(m.deferred.apps(id).getJSONObject(0).getDouble("avgFps"),80,"foreground uses retained attribution");
+                m.deferred.commit(m.deferred.plan(id,true));
+                check(count(m,"SELECT sample_x FROM game_app_fps")==32000,"an unchanged view must retain the checkpoint");
+            }
+            m.deferred.raw(id,base,reading(180000,5000,true),0,90000,false);
+            m.deferred.raw(id,base,reading(240000,4990,false),0,90000,true);
+            putFps(m,id,130000,1,1000);
+            putFps(m,id,200000,120,1000);
+            m.db.execSQL("UPDATE sessions SET active=0 WHERE id=?",new Object[]{id});
+            m.deferred.saveEvents(Collections.singletonList(new DeferredStats.Pending(id,wall+120000,wall+240000,true)),Collections.emptyList());
+            if(backupFirst)m.deferred.settleForBackup();
+            else m.deferred.commit(m.deferred.plan(id,true));
+            check(count(m,"SELECT COUNT(*) FROM usage_raw")==0&&m.deferred.plan(id,true)==null,"finalization removes the raw inputs");
+            near(m.deferred.apps(id).getJSONObject(0).getDouble("avgFps"),90,"final average persists and excludes charging intervals");
+        }finally{close(m);}
+    }
+    static void putFps(Main m,long id,long x,int fps,long duration){
+        String row="["+x+","+fps+",null,null,null,null,0,"+duration+"]";
+        m.db.execSQL("INSERT INTO performance_samples(session,x,data) VALUES(?,?,?)",new Object[]{id,x,row});
     }
     static void baseline(Context ctx,File dir)throws Exception{
         Main m=open(ctx,dir);m.state=0;m.begin(reading(0,5000,false));long id=m.session;
@@ -176,7 +214,9 @@ public final class DeferredStatsTest {
     public static void main(String[] args)throws Exception{
         File root=new File(args[0]);check(root.getPath().startsWith("/data/local/tmp/acol-deferred-test-")&&!root.exists(),"new isolated directory required");
         Looper.prepareMainLooper();Class<?> at=Class.forName("android.app.ActivityThread");Object thread=at.getMethod("systemMain").invoke(null);Context ctx=(Context)at.getMethod("getSystemContext").invoke(thread);
-        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));wall=System.currentTimeMillis();baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));clockAdjustments(ctx,new File(root,"clock-adjustments"));
+        base=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();ordinary(ctx,new File(root,"ordinary"));game(ctx,new File(root,"game"));
+        gameFps(ctx,new File(root,"game-fps"),false);gameFps(ctx,new File(root,"game-fps-backup"),true);
+        wall=System.currentTimeMillis();baseline(ctx,new File(root,"baseline"));legacyAndFailure(ctx,new File(root,"legacy-failure"));clockAdjustments(ctx,new File(root,"clock-adjustments"));
         System.out.println("PASS: raw-only background, screen-aware event cadence, foreground incremental/idempotent/persistent accounting, late-event repair, game charge boundaries, active legacy baseline");System.exit(0);
     }
 }

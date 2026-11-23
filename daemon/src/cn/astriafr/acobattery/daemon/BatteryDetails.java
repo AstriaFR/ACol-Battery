@@ -24,26 +24,36 @@ public final class BatteryDetails {
     }
     static int[] coefficient(List<int[]> coefficients,Integer cutoff){
         int[] selected=null;
-        if(cutoff!=null)for(int[] row:coefficients)if(row[0]<=cutoff&&(selected==null||row[0]>selected[0]))selected=row;
+        if(coefficients!=null&&cutoff!=null&&cutoff>0)
+            for(int[] row:coefficients)if(row!=null&&row.length>=3&&row[0]>0&&row[0]<=cutoff&&(selected==null||row[0]>selected[0]))selected=row;
         return selected;
+    }
+    static boolean hasCompensation(int[] row){
+        return row!=null&&(row[1]!=0||row[2]!=0);
+    }
+    public static boolean noCompensation(Integer cutoff,List<int[]> coefficients){
+        return cutoff!=null&&cutoff>0&&coefficients!=null&&!coefficients.isEmpty()&&!hasCompensation(coefficient(coefficients,cutoff));
     }
     public static Double rawSoh(Integer soh,Integer cutoff,List<int[]> coefficients){
         if(soh==null||soh<=0||cutoff==null||cutoff<=0)return null;
-        if(cutoff<3000)return null; // Keep the existing UI policy: do not reverse compensation below 3 V.
-        if(soh==100)return null;
-        int[] row=coefficient(coefficients,cutoff);float factor=row==null?1f:1f+row[2]/100f;
+        int[] row=coefficient(coefficients,cutoff);
+        if(!hasCompensation(row))return null;
+        if(soh>=100&&row[2]>0)return null;
+        float factor=1f+row[2]/100f;
+        if(factor<=0f)return null;
         float value=soh/factor;return Float.isFinite(value)&&value>=.0001f?(double)value:null;
     }
     public static Integer rawFcc(Integer fcc,Double rawSoh,Integer cutoff,List<int[]> coefficients,Integer design){
         if(fcc==null||fcc<=0||cutoff==null||cutoff<=0)return null;
-        if(cutoff<3000)return null;
-        if(fcc.equals(design)||rawSoh==null||rawSoh<=0)return null;
         int[] row=coefficient(coefficients,cutoff);
-        long value=row==null?fcc:(long)fcc-(long)row[1]*rawSoh.intValue()/100;
+        if(!hasCompensation(row))return null;
+        if(row[1]==0)return fcc;
+        if(fcc.equals(design)||rawSoh==null||rawSoh<=0)return null;
+        long value=(long)fcc-(long)row[1]*rawSoh.intValue()/100;
         return value>0&&value<=Integer.MAX_VALUE?(int)value:null;
     }
     public static Integer rawFccAbove(Integer fcc,Integer soh,Integer cutoff,List<int[]> coefficients,Integer design){
-        if(fcc==null||design==null||design<=0||fcc<design||cutoff==null||cutoff<3000)return null;
+        if(fcc==null||design==null||design<=0||fcc<design||cutoff==null||cutoff<=0)return null;
         int[] row=coefficient(coefficients,cutoff);
         if(row==null||row[1]<=0)return null;
         // The driver truncates the compensated SOH and caps it at 100.

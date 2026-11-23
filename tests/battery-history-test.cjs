@@ -1,6 +1,6 @@
 const path=require('node:path'),assert=require('node:assert/strict');const{pathToFileURL}=require('node:url');
 (async()=>{
- const{batteryHistoryFields,batteryHistoryDate,BatteryHistoryPanel}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/battery-history.js')).href);
+ const{batteryHistoryFields,batteryHistoryDate,BatteryHistoryPanel,healthMetrics}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/battery-history.js')).href);
  const saved={qmax:6200,designCapacity:6500,fcc:6100,rawFcc:5800,lockedCapacity:400,soh:99,rawSoh:94.5,cutoffMv:3150,nearActual:['qmax','rawFcc','rawSoh'],noCompensation:false};
  const a=batteryHistoryFields(saved);assert.equal(a.values.qmax,'6,200 mAh (95.4%)');assert.equal(a.values.lockedCapacity,'400 mAh (-6.5%)');assert.ok(a.green.has('rawFcc')&&!a.green.has('fcc')&&!a.green.has('rawSoh'));assert.equal(a.values.cutoffMv,'3,150 mV');
  const b=batteryHistoryFields({...saved,noCompensation:true,nearActual:['fcc','qmax']});assert.equal(b.values.rawFcc,'——');assert.equal(b.values.rawSoh,'——');assert.ok(b.green.has('fcc')&&!b.green.has('rawFcc'));
@@ -12,6 +12,7 @@ const path=require('node:path'),assert=require('node:assert/strict');const{pathT
  assert.ok(bounded.green.has('rawFcc'),'the saved capacity bound is highlighted even without an exact estimate');
  assert.equal(batteryHistoryFields({...saved,lockedCapacity:null,rawFccAbove:saved.qmax}).values.lockedCapacity,'0 mAh (0.0%)');
  assert.equal(batteryHistoryFields(null).values.fcc,'—');assert.equal(batteryHistoryFields(null).green.size,0);
+ assert.equal(batteryHistoryFields({tailRm:6040}).values.tailRm,'6,040 mAh');
  assert.ok(batteryHistoryDate(new Date(2026,10,1,12,34).getTime()).startsWith('2026/11/01 12:34'));
  assert.equal(batteryHistoryDate(new Date(2026,10,1,12,34).getTime(),true),'2026/11/01');
  let closed=false,reloaded=false;
@@ -31,6 +32,27 @@ const path=require('node:path'),assert=require('node:assert/strict');const{pathT
  panel.api=async()=>{throw Error('读取失败')};await panel.record();assert.equal(panel.status.textContent,'记录失败：读取失败');assert.equal(panel.saving,false);assert.equal(panel.recordButton.disabled,false);
  panel.api=async()=>{panel.active=false;panel.token++};reloaded=false;await panel.record();assert.equal(reloaded,false);assert.equal(panel.listDirty,true,'saving after navigation invalidates the cached list');
  const dom=require('./helpers.cjs').recordDom();globalThis.document=dom.document;
+ globalThis.window={addEventListener(){}};
+ globalThis.ResizeObserver=class{observe(){}};
+ const plot=dom.get('batteryTrendPlot');plot.after=()=>{};plot.getContext=()=>({});
+ const trend=new BatteryHistoryPanel(async action=>{
+   assert.equal(action,'battery_history_trend');return{through:3,items:[
+     {id:1,wall:1000,cycles:10,qmax:6200,fcc:5800,tailRm:6040},
+     {id:2,wall:2000,cycles:11,qmax:6200,fcc:null,fccAbove:5900},
+     {id:3,wall:3000,cycles:12,qmax:6200,fcc:null,tailRm:6075}
+   ]};
+ });
+ trend.active=true;
+ await trend.openTrend();
+ const rowsWithBounds=trend.trendChart.points;
+ assert.deepEqual(rowsWithBounds.map(row=>row.slice(3)),[[5800,false,6040],[5900,true,null],[null,false,6075]]);
+ const rmMetric=healthMetrics.find(metric=>metric.key==='tailRm');
+ trend.trendChart.window=[600,1400];
+ assert.deepEqual(trend.trendChart.signalWindow(rmMetric,[rowsWithBounds[1]]),[rowsWithBounds[0],rowsWithBounds[2]],'RM endpoints still connect while zoomed into the missing interval');
+ assert.deepEqual(trend.trendChart.signalWindow(healthMetrics.find(metric=>metric.key==='fcc'),[rowsWithBounds[1]]),[rowsWithBounds[1]]);
+ const exportRows=[];for await(const row of trend.trendCsv())exportRows.push(row);
+ assert.deepEqual(exportRows.slice(1).map(row=>row[3]),[5800,'＞5900',null]);
+ assert.deepEqual(exportRows.slice(1).map(row=>row[4]),[6040,null,6075]);
  const rows=dom.get('batteryHistoryRows');rows.prepend=(...nodes)=>{const first=rows.firstChild;for(const node of nodes)rows.insertBefore(node,first)};
  const entries=[1,2,3,4];let completeOlder;
  const browsing=Object.assign(Object.create(BatteryHistoryPanel.prototype),{

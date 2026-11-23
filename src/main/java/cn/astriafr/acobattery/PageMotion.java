@@ -2,30 +2,35 @@ package cn.astriafr.acobattery;
 
 import android.animation.ValueAnimator;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.PathInterpolator;
 
 /** Native overlays follow the same short navigation rhythm as WebView pages. */
 final class PageMotion {
-    private static final String CLOSING="aco-page-closing";
-    private static final PathInterpolator EASE=new PathInterpolator(.2f,.65f,.3f,1);
+    private static final PathInterpolator EASE=new PathInterpolator(.2f,.75f,.25f,1);
     private PageMotion(){}
-    private static void reset(View view){view.setAlpha(1);view.setTranslationX(0);}
-    static boolean closing(View view){return CLOSING.equals(view.getTag());}
+    private static void slideIn(View view,int offsetDp,int duration){
+        view.animate().cancel();
+        if(!ValueAnimator.areAnimatorsEnabled()){view.setTranslationX(0);return;}
+        view.setTranslationX(offsetDp*view.getResources().getDisplayMetrics().density);
+        view.animate().translationX(0).setDuration(duration).setInterpolator(EASE).start();
+    }
     static void enter(View view){
-        view.animate().withEndAction(null).cancel();view.setTag(null);reset(view);view.setVisibility(View.VISIBLE);
-        if(!ValueAnimator.areAnimatorsEnabled())return;
-        float density=view.getResources().getDisplayMetrics().density;
-        view.setAlpha(.9f);view.setTranslationX(10*density);
-        view.animate().alpha(1).translationX(0).setDuration(140).setInterpolator(EASE).start();
+        view.setVisibility(View.VISIBLE);
+        slideIn(view,8,135);
     }
     static void hide(View view){
-        if(view==null||CLOSING.equals(view.getTag()))return;
-        view.animate().withEndAction(null).cancel();
-        if(view.getVisibility()!=View.VISIBLE||!view.isAttachedToWindow()||!ValueAnimator.areAnimatorsEnabled()){
-            view.setVisibility(View.GONE);reset(view);return;
+        if(view==null||view.getVisibility()!=View.VISIBLE)return;
+        view.animate().cancel();
+        view.setVisibility(View.GONE);view.setTranslationX(0);
+        if(!view.isAttachedToWindow()||!(view.getParent() instanceof ViewGroup))return;
+        ViewGroup host=(ViewGroup)view.getParent();
+        int removed=host.indexOfChild(view);
+        for(int i=host.getChildCount()-1;i>=0;i--){
+            View child=host.getChildAt(i);
+            if(child.getVisibility()!=View.VISIBLE)continue;
+            if(i<removed)slideIn(child,-6,110);
+            break;
         }
-        view.setTag(CLOSING);
-        view.animate().alpha(0).translationX(6*view.getResources().getDisplayMetrics().density).setDuration(95)
-            .setInterpolator(EASE).withEndAction(()->{view.setVisibility(View.GONE);view.setTag(null);reset(view);}).start();
     }
 }

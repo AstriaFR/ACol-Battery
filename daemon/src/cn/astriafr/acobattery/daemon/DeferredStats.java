@@ -67,6 +67,7 @@ final class DeferredStats {
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_events(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,time INTEGER NOT NULL,type INTEGER NOT NULL,pkg TEXT NOT NULL,activity TEXT NOT NULL,instance INTEGER NOT NULL,UNIQUE(session,time,type,pkg,activity,instance))");
         db.execSQL("CREATE INDEX IF NOT EXISTS usage_events_time ON usage_events(session,time)");
         db.execSQL("CREATE TABLE IF NOT EXISTS usage_baseline(session INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,pkg TEXT NOT NULL,ms INTEGER NOT NULL,mah REAL NOT NULL,energy_mwh REAL NOT NULL,energy_ms INTEGER NOT NULL,mah_ms INTEGER NOT NULL,PRIMARY KEY(session,pkg)) WITHOUT ROWID");
+        db.execSQL("CREATE TABLE IF NOT EXISTS game_app_fps(session INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,sample_x INTEGER NOT NULL,app_revision INTEGER NOT NULL,totals TEXT NOT NULL)");
         migrateClockAttribution();
     }
     private void migrateClockAttribution(){
@@ -106,7 +107,7 @@ final class DeferredStats {
         }
     }
     boolean readyTail(long id,long wallNow){
-        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0 AND s.active=0 AND (d.tail_checked=1 OR (SELECT MAX(wall) FROM usage_raw WHERE session=d.session)<=?)",new String[]{""+id,""+(wallNow-TAIL_GRACE_MS)})){
+        try(Cursor c=db.rawQuery("SELECT 1 FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0 AND s.active=0 AND (d.tail_checked=1 OR (SELECT MAX(wall) FROM usage_raw WHERE session=d.session)<=CAST(? AS INTEGER))",new String[]{""+id,""+(wallNow-TAIL_GRACE_MS)})){
             return c.moveToFirst();
         }
     }
@@ -266,7 +267,7 @@ final class DeferredStats {
         }
         long incomplete=-1;
         for(long id:records){
-            calculate(id);
+            commit(plan(id,true));
             if(pendingSamples(id)&&incomplete<0)incomplete=id;
         }
         if(incomplete>0)throw new IOException("记录 "+incomplete+" 的应用耗电尚未结算，未开始数据库整理。请稍后重试备份。");
@@ -282,6 +283,7 @@ final class DeferredStats {
     static final class Settlement{
         final long id,revision,cursor,start;final boolean dirty;
         long processed=-1,wall;double credit;String timeline;boolean changed;
+        long fpsSampleX;String fpsTotals;
         final Map<String,UsageTotal> apps=new LinkedHashMap<>();
         final ScreenUsage.Builder coverage=new ScreenUsage.Builder();
         final Map<Long,Double> gameEnergy=new LinkedHashMap<>();
@@ -290,7 +292,8 @@ final class DeferredStats {
         }
     }
     /** Prepare a bounded snapshot without holding the sampling mutex or a write transaction. */
-    Settlement plan(long id)throws Exception{
+    Settlement plan(long id)throws Exception{return plan(id,false);}
+    Settlement plan(long id,boolean includeFps)throws Exception{
         long startX,cursor,eventWall,revision,wallStart,endX;double credit,baselineCredit;String saved;boolean dirty,game,clockAdjusted;
         try(Cursor c=db.rawQuery("SELECT d.start_x,d.computed_x,d.event_wall,d.credit,d.timeline,d.dirty,s.fast_seconds,s.start_wall,d.baseline_credit,d.event_revision,(SELECT MAX(x) FROM usage_raw WHERE session=d.session),s.clock_adjusted FROM usage_deferred d JOIN sessions s ON s.id=d.session WHERE d.session=? AND d.finalized=0",new String[]{""+id})){
             if(!c.moveToFirst()||c.isNull(2))return null;
@@ -298,7 +301,10 @@ final class DeferredStats {
             clockAdjusted=c.getInt(11)!=0;
         }
         Settlement result=new Settlement(id,revision,cursor,wallStart+startX,dirty);
-        if(!dirty&&cursor>=endX)return result;
+        if(!dirty&&cursor>=endX){
+            if(includeFps&&game&&endX>=0)planGameFps(result,wallStart,startX,cursor);
+            return result;
+        }
         List<Core.Event> events=events(id);Core.Timeline timeline=new Core.Timeline();Core.Depletion depletion=new Core.Depletion();
         boolean ready=cursor>=0&&!saved.isEmpty()&&!dirty;
         if(ready){decode(timeline,saved);depletion.restore(credit);}else{cursor=-1;depletion.restore(baselineCredit);}
@@ -358,8 +364,39 @@ final class DeferredStats {
                     previous=current;result.processed=current.x;result.wall=current.wall;result.changed=true;
                 }
         }
-        if(result.processed>=0){result.credit=depletion.checkpoint();result.timeline=encode(timeline);}
+        if(result.processed>=0){
+            result.credit=depletion.checkpoint();result.timeline=encode(timeline);
+            if(includeFps&&game)planGameFps(result,wallStart,startX,result.processed);
+        }
         return result;
+    }
+    private GameAppFps savedGameFps(long id){
+        try(Cursor c=db.rawQuery("SELECT f.sample_x,f.totals FROM game_app_fps f JOIN sessions s ON s.id=f.session WHERE f.session=? AND f.app_revision=s.app_revision",new String[]{""+id})){
+            if(c.moveToFirst())return GameAppFps.restore(c.getLong(0),c.getString(1));
+        }catch(JSONException invalid){FallbackDiagnostics.record("应用平均帧率缓存",invalid);}
+        return new GameAppFps();
+    }
+    private void planGameFps(Settlement result,long wallStart,long startX,long through)throws JSONException {
+        GameAppFps fps=result.dirty?new GameAppFps():savedGameFps(result.id);
+        long from=Math.max(startX,fps.sampleX);
+        if(through<=from)return;
+        ScreenUsage.Builder coverage=new ScreenUsage.Builder();
+        long prefixEnd=Math.min(through,result.cursor);
+        // Use already committed attribution for the prefix and this plan's spans
+        // for its new intervals. Joining adjacent spans also covers sample windows
+        // that cross a settlement checkpoint while the same app stays in front.
+        if(!result.dirty&&prefixEnd>from)
+            for(ScreenUsage.AppSpan span:screenApps(result.id,wallStart+from,wallStart+prefixEnd))
+                coverage.acceptApp(span.start,span.end,span.pkg);
+        for(ScreenUsage.AppSpan span:result.coverage.apps)
+            coverage.acceptApp(Math.max(span.start,wallStart+from),span.end,span.pkg);
+        try(Cursor c=db.rawQuery("SELECT x,data FROM performance_samples WHERE session=? AND x>? AND x<=? ORDER BY x",
+                new String[]{""+result.id,""+from,""+through})){
+            while(c.moveToNext())fps.sample(c.getLong(0),c.getString(1),wallStart,coverage.apps);
+        }
+        if(fps.sampleX>from){
+            result.fpsSampleX=fps.sampleX;result.fpsTotals=fps.encode();result.changed|=fps.measured;
+        }
     }
     void calculate(long id)throws Exception{commit(plan(id));}
     /** Commit only if the record and the event/checkpoint revision still match. */
@@ -373,6 +410,7 @@ final class DeferredStats {
             }
             if(result.dirty){
                 db.execSQL("DELETE FROM apps WHERE session=?",new Object[]{id});db.execSQL("INSERT INTO apps SELECT * FROM usage_baseline WHERE session=?",new Object[]{id});
+                db.execSQL("DELETE FROM game_app_fps WHERE session=?",new Object[]{id});
                 db.execSQL("DELETE FROM screen_spans WHERE session=? AND start_wall>=?",new Object[]{id,result.start});db.execSQL("DELETE FROM screen_app_spans WHERE session=? AND start_wall>=?",new Object[]{id,result.start});
                 db.execSQL("UPDATE sessions SET app_revision=app_revision+1 WHERE id=?",new Object[]{id});
             }
@@ -381,6 +419,11 @@ final class DeferredStats {
                 db.execSQL("INSERT INTO apps(session,pkg,ms,mah,energy_mwh,energy_ms,mah_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session,pkg) DO UPDATE SET ms=ms+excluded.ms,mah=mah+excluded.mah,energy_mwh=energy_mwh+excluded.energy_mwh,energy_ms=energy_ms+excluded.energy_ms,mah_ms=mah_ms+excluded.mah_ms",new Object[]{id,entry.getKey(),total.ms,total.mah,total.energy,total.energyMs,total.mahMs});
             }
             saveScreenSpans(id,result.coverage.spans);saveScreenApps(id,result.coverage.apps);
+            if(result.fpsTotals!=null)db.execSQL(
+                "INSERT INTO game_app_fps(session,sample_x,app_revision,totals) VALUES(?,?,(SELECT app_revision FROM sessions WHERE id=?),?)"
+                +" ON CONFLICT(session) DO UPDATE SET sample_x=excluded.sample_x,app_revision=excluded.app_revision,totals=excluded.totals"
+                +" WHERE excluded.app_revision<>game_app_fps.app_revision OR excluded.sample_x>game_app_fps.sample_x",
+                new Object[]{id,result.fpsSampleX,id,result.fpsTotals});
             for(Map.Entry<Long,Double> sample:result.gameEnergy.entrySet())db.execSQL("UPDATE game_rm_intervals SET energy_mwh=? WHERE session=? AND x=?",new Object[]{sample.getValue(),id,sample.getKey()});
             if(result.processed>=0)db.execSQL("UPDATE usage_deferred SET computed_x=?,computed_wall=?,credit=?,timeline=?,dirty=0 WHERE session=?",new Object[]{result.processed,result.wall,result.credit,result.timeline,id});
             if(ended)finalizeCalculated(id);
@@ -712,6 +755,7 @@ final class DeferredStats {
 
     JSONArray apps(long id)throws Exception {
         JSONArray result=new JSONArray();double otherMah=0,otherEnergy=0;long otherMs=0,otherEnergyMs=0,otherMahMs=0;
+        GameAppFps fps=savedGameFps(id);
         try(Cursor c=db.rawQuery("SELECT pkg,ms,mah,energy_mwh,energy_ms,mah_ms FROM apps WHERE session=? ORDER BY mah DESC",new String[]{""+id})) {
             while(c.moveToNext()) {
                 String pkg=c.getString(0);long ms=c.getLong(1);double mah=c.getDouble(2);
@@ -719,7 +763,9 @@ final class DeferredStats {
                 if(pkg.equals(Core.OTHER)||pkg.equals(Core.UNATTRIBUTED)||(!pkg.equals(Core.OFF)&&ms<=60000)){otherMs+=ms;otherMah+=mah;otherEnergy+=energy;otherEnergyMs+=energyMs;otherMahMs+=mahMs;continue;}
                 String label=pkg.equals(Core.OFF)?"息屏待机":pkg;
                 if(!pkg.equals(Core.OFF))try{label=ctx.getPackageManager().getApplicationLabel(ctx.getPackageManager().getApplicationInfo(pkg,0)).toString();}catch(Exception ignored){}
-                result.put(appJson(pkg,label,ms,mah,energy,energyMs,mahMs));
+                JSONObject app=appJson(pkg,label,ms,mah,energy,energyMs,mahMs);
+                Double averageFps=fps.average(pkg);if(averageFps!=null)app.put("avgFps",averageFps);
+                result.put(app);
             }
         }
         if(otherMs>0)result.put(appJson(Core.OTHER,"其他",otherMs,otherMah,otherEnergy,otherEnergyMs,otherMahMs));

@@ -14,6 +14,7 @@ import android.graphics.fonts.FontFamily;
 import android.graphics.fonts.FontStyle;
 import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
@@ -23,6 +24,7 @@ import cn.astriafr.acobattery.common.RuntimePayload;
 import cn.astriafr.acobattery.common.StartupFeedback;
 import cn.astriafr.acobattery.common.ErrorLogStore;
 import cn.astriafr.acobattery.common.ErrorReport;
+import cn.astriafr.acobattery.common.OperationTimeout;
 import org.json.*;
 import java.io.*;
 import java.security.MessageDigest;
@@ -30,7 +32,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayDeque;
 
 /** Initialization, root deployment, recovery and startup reports. */
 final class StartupController {
@@ -46,7 +48,15 @@ final class StartupController {
     volatile boolean initialized,rootReady;
     volatile String connectionStatus="正在连接后台…";
     final Object channelLock=new Object();
-    final ConcurrentLinkedQueue<JSONObject> waitingRequests=new ConcurrentLinkedQueue<>();
+    private static final class QueuedRequest {
+        final JSONObject request;
+        final long pageGeneration,deadline;
+        QueuedRequest(JSONObject request,long pageGeneration,long deadline){
+            this.request=request;this.pageGeneration=pageGeneration;this.deadline=deadline;
+        }
+        boolean stale(long generation,long now){return pageGeneration!=generation||deadline>0&&now>=deadline;}
+    }
+    private final ArrayDeque<QueuedRequest> waitingRequests=new ArrayDeque<>();
     boolean channelLost;
     FrameLayout errorPage;String currentPhase="初始化";
     TextView stage,detail,errorText,errorTitle;
@@ -88,23 +98,45 @@ final class StartupController {
         },text->{if(root==session&&!app.destroyed)phase.accept(text);},commit);
         connected(session);return status;
     }
-    void post(String text){
+    void post(String text,long pageGeneration){
         if(!initialized||app.destroyed||text==null||text.length()>8192)return;
-        try{JSONObject request=new JSONObject(text);if(!request.optString("id").matches("[a-f0-9-]{12,48}"))return;
+        JSONObject request=null;
+        try{
+            request=new JSONObject(text);
+            if(!request.optString("id").matches("[a-f0-9-]{12,48}"))return;
+            request.remove(OperationTimeout.START_BEFORE);
+            long deadline=0;
+            if(!request.optBoolean("stream")){
+                long now=System.currentTimeMillis(),expiresAt=request.optLong("expiresAt",now+OperationTimeout.MAX_MS);
+                if(expiresAt<=now)throw new java.net.SocketTimeoutException("操作超时，请重试。");
+                deadline=SystemClock.elapsedRealtime()+Math.min(OperationTimeout.MAX_MS,expiresAt-now);
+                request.put(OperationTimeout.START_BEFORE,deadline);
+            }
+            request.remove("expiresAt");
             synchronized(channelLock){
+                if(app.destroyed||app.browser.pageGeneration!=pageGeneration)return;
+                long now=SystemClock.elapsedRealtime();
+                OperationTimeout.requireStartBefore(deadline,now);
                 if(!rootReady){
                     if(channelLost)throw new IOException("root 连接已断开。");
+                    waitingRequests.removeIf(queued->queued.stale(pageGeneration,now));
                     if(waitingRequests.size()>=32)throw new IOException("正在连接后台，请稍候。");
-                    waitingRequests.add(request);return;
+                    waitingRequests.add(new QueuedRequest(request,pageGeneration,deadline));return;
                 }
                 root.request(request);
             }
-        }catch(Exception error){try{JSONObject request=new JSONObject(text);app.browser.deliver(new JSONObject().put("id",request.optString("id")).put("event","error").put("message","root 连接已断开，请重新打开 App。"));}catch(Exception ignored){}}
+        }catch(Exception error){
+            if(request==null||pageGeneration!=app.browser.pageGeneration)return;
+            String message=error instanceof java.net.SocketTimeoutException?error.getMessage():"root 连接已断开，请重新打开 App。";
+            try{app.browser.deliver(new JSONObject().put("id",request.optString("id")).put("event","error").put("message",message));}
+            catch(JSONException ignored){}
+        }
     }
     void showInitialization(){
         if(app.destroyed)return;
+        boolean dark=app.launchDark();
         initialized=false;errorPage=null;errorText=null;errorScroll=null;errorTitle=null;errorCopy=null;errorRebuild=null;canRebuild=false;showingFallbackReport=false;openedReport="";
-        LinearLayout layout=new LinearLayout(app);initializationContent=layout;layout.setOrientation(LinearLayout.VERTICAL);layout.setGravity(Gravity.CENTER_VERTICAL);layout.setPadding(app.dp(28),app.dp(32),app.dp(28),app.dp(32));layout.setBackgroundColor(Color.rgb(246,248,251));
+        LinearLayout layout=new LinearLayout(app);initializationContent=layout;layout.setOrientation(LinearLayout.VERTICAL);layout.setGravity(Gravity.CENTER_VERTICAL);layout.setPadding(app.dp(28),app.dp(32),app.dp(28),app.dp(32));layout.setBackgroundColor(MainActivity.surface(dark));
         LinearLayout title=new LinearLayout(app);title.setGravity(Gravity.CENTER_VERTICAL);
         ImageView icon=new ImageView(app);try(InputStream in=app.getAssets().open("webroot/assets/acol-icon.png")){icon.setImageBitmap(BitmapFactory.decodeStream(in));}catch(IOException ignored){}
         title.addView(icon,new LinearLayout.LayoutParams(app.dp(58),app.dp(58)));
@@ -117,10 +149,10 @@ final class StartupController {
                 .addCustomFallback(new FontFamily.Builder(chinese).build())
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
-        name.setTextColor(Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.6.3 · AstriaFR");}version.setTextColor(Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
-        stage=new TextView(app);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(Color.rgb(7,130,103));stage.setPadding(0,app.dp(32),0,app.dp(12));layout.addView(stage);
-        detail=new TextView(app);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(app.dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(Color.rgb(96,113,133));detail.setLineSpacing(app.dp(5),1);layout.addView(detail);
+        name.setTextColor(dark?Color.rgb(230,237,232):Color.rgb(24,38,56));names.addView(name);
+        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.7 · AstriaFR");}version.setTextColor(dark?Color.rgb(165,183,172):Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        stage=new TextView(app);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(dark?Color.rgb(117,223,164):Color.rgb(7,130,103));stage.setPadding(0,app.dp(32),0,app.dp(12));layout.addView(stage);
+        detail=new TextView(app);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(app.dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(dark?Color.rgb(165,183,172):Color.rgb(96,113,133));detail.setLineSpacing(app.dp(5),1);layout.addView(detail);
         progress=new ProgressBar(app,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,app.dp(4));line.topMargin=app.dp(24);layout.addView(progress,line);
         retry=new Button(app);retry.setText("重试初始化");retry.setVisibility(View.GONE);retry.setOnClickListener(v->initialize());LinearLayout.LayoutParams button=new LinearLayout.LayoutParams(-1,app.dp(48));button.topMargin=app.dp(22);layout.addView(retry,button);
         errorActions=new LinearLayout(app);errorActions.setOrientation(LinearLayout.VERTICAL);errorActions.setVisibility(View.GONE);
@@ -129,7 +161,7 @@ final class StartupController {
         rebuild=new Button(app);rebuild.setText("重建数据库");rebuild.setTextColor(Color.rgb(190,65,65));rebuild.setVisibility(View.GONE);rebuild.setOnClickListener(v->askRebuild());
         errorActions.addView(rebuild,new LinearLayout.LayoutParams(-1,app.dp(44)));
         LinearLayout.LayoutParams actionLine=new LinearLayout.LayoutParams(-1,-2);actionLine.topMargin=app.dp(12);layout.addView(errorActions,actionLine);
-        ScrollView scroll=new ScrollView(app);scroll.setFillViewport(true);scroll.setBackgroundColor(Color.rgb(246,248,251));
+        ScrollView scroll=new ScrollView(app);scroll.setFillViewport(true);scroll.setBackgroundColor(MainActivity.surface(dark));
         scroll.addView(layout,new ScrollView.LayoutParams(-1,-2));app.mount(scroll);
     }
     void phase(String name,String text){currentPhase=name;if(app.destroyed)return;app.runOnUiThread(()->{if(!app.destroyed&&stage!=null&&detail!=null){stage.setText(name);detail.setText(text);}});}
@@ -140,7 +172,10 @@ final class StartupController {
     void connected(RootSession session)throws Exception{
         synchronized(channelLock){
             if(app.destroyed||root!=session||channelLost)throw new IOException("前台连接已关闭。");rootReady=true;
-            JSONObject request;while((request=waitingRequests.poll())!=null)root.request(request);
+            QueuedRequest queued;
+            while((queued=waitingRequests.poll())!=null){
+                if(!queued.stale(app.browser.pageGeneration,SystemClock.elapsedRealtime()))root.request(queued.request);
+            }
         }
         connectionPhase("");
     }
@@ -157,23 +192,24 @@ final class StartupController {
     void openReport(String report,boolean fallback){
         if(app.destroyed||report.isEmpty()||app.contentFrame==null)return;showingFallbackReport=fallback;
         if(errorPage==null){
-            LinearLayout page=new LinearLayout(app);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(app.dp(20),app.dp(16),app.dp(20),app.dp(16));page.setBackgroundColor(Color.rgb(246,248,251));
+            boolean dark=app.launchDark();
+            LinearLayout page=new LinearLayout(app);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(app.dp(20),app.dp(16),app.dp(20),app.dp(16));page.setBackgroundColor(MainActivity.surface(dark));
             LinearLayout header=new LinearLayout(app);header.setGravity(Gravity.CENTER_VERTICAL);
             Button back=app.pageBackButton(this::closeErrorPage);LinearLayout.LayoutParams backLine=new LinearLayout.LayoutParams(app.dp(62),app.dp(40));backLine.rightMargin=app.dp(10);header.addView(back,backLine);
-            errorTitle=new TextView(app);errorTitle.setTextSize(19);errorTitle.setTypeface(null,Typeface.BOLD);errorTitle.setTextColor(Color.rgb(24,38,56));
+            errorTitle=new TextView(app);errorTitle.setTextSize(19);errorTitle.setTypeface(null,Typeface.BOLD);errorTitle.setTextColor(dark?Color.rgb(230,237,232):Color.rgb(24,38,56));
             header.addView(errorTitle,new LinearLayout.LayoutParams(0,-2,1));
             errorCopy=new Button(app);errorCopy.setText("复制原文");errorCopy.setTextSize(12);errorCopy.setMinWidth(0);errorCopy.setMinimumWidth(0);errorCopy.setOnClickListener(v->copyFailure());
             LinearLayout.LayoutParams copyTop=new LinearLayout.LayoutParams(-2,app.dp(40));copyTop.rightMargin=app.dp(6);header.addView(errorCopy,copyTop);
             reportHome=app.homeIconButton(app::goHomeFromNative);header.addView(reportHome,new LinearLayout.LayoutParams(app.dp(36),app.dp(40)));
             page.addView(header,new LinearLayout.LayoutParams(-1,-2));
             errorScroll=new ScrollView(app);errorScroll.setFillViewport(false);
-            errorText=new TextView(app);errorText.setTextSize(12);errorText.setTypeface(Typeface.MONOSPACE);errorText.setTextColor(Color.rgb(55,70,90));errorText.setLineSpacing(0,1.08f);errorText.setPadding(app.dp(12),app.dp(12),app.dp(12),app.dp(12));errorText.setTextIsSelectable(true);
-            GradientDrawable box=new GradientDrawable();box.setColor(Color.rgb(238,242,247));box.setCornerRadius(app.dp(10));box.setStroke(app.dp(1),Color.rgb(214,222,232));errorText.setBackground(box);
+            errorText=new TextView(app);errorText.setTextSize(12);errorText.setTypeface(Typeface.MONOSPACE);errorText.setTextColor(dark?Color.rgb(206,221,211):Color.rgb(55,70,90));errorText.setLineSpacing(0,1.08f);errorText.setPadding(app.dp(12),app.dp(12),app.dp(12),app.dp(12));errorText.setTextIsSelectable(true);
+            GradientDrawable box=new GradientDrawable();box.setColor(dark?Color.rgb(15,23,18):Color.rgb(238,242,247));box.setCornerRadius(app.dp(10));box.setStroke(app.dp(1),dark?Color.rgb(35,54,42):Color.rgb(214,222,232));errorText.setBackground(box);
             errorScroll.addView(errorText,new ScrollView.LayoutParams(-1,-2));
             LinearLayout.LayoutParams scrollLine=new LinearLayout.LayoutParams(-1,0,1);scrollLine.topMargin=app.dp(12);page.addView(errorScroll,scrollLine);
             errorRebuild=new Button(app);errorRebuild.setText("重建数据库");errorRebuild.setTextColor(Color.rgb(190,65,65));errorRebuild.setOnClickListener(v->askRebuild());
             LinearLayout.LayoutParams rebuildLine=new LinearLayout.LayoutParams(-2,app.dp(48));rebuildLine.gravity=Gravity.END;rebuildLine.topMargin=app.dp(8);page.addView(errorRebuild,rebuildLine);
-            errorPage=new FrameLayout(app);errorPage.setBackgroundColor(Color.rgb(246,248,251));errorPage.addView(page,new FrameLayout.LayoutParams(-1,-1));
+            errorPage=new FrameLayout(app);errorPage.setBackgroundColor(MainActivity.surface(dark));errorPage.addView(page,new FrameLayout.LayoutParams(-1,-1));
         }
         openedReport=report;
         errorTitle.setText(fallback?"初始化降级报告":"初始化问题");errorText.setText(ErrorReport.concise(report));
@@ -182,7 +218,7 @@ final class StartupController {
         errorRebuild.setVisibility(!fallback&&canRebuild&&!rebuilding?View.VISIBLE:View.GONE);
         boolean newErrorParent=errorPage.getParent()!=app.contentFrame;
         if(newErrorParent){if(errorPage.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)errorPage.getParent()).removeView(errorPage);app.contentFrame.addView(errorPage,new FrameLayout.LayoutParams(-1,-1));}
-        boolean entering=newErrorParent||PageMotion.closing(errorPage)||errorPage.getVisibility()!=View.VISIBLE||!errorPage.isAttachedToWindow();
+        boolean entering=newErrorParent||errorPage.getVisibility()!=View.VISIBLE||!errorPage.isAttachedToWindow();
         errorPage.bringToFront();if(entering)PageMotion.enter(errorPage);
     }
     void closeErrorPage(){PageMotion.hide(errorPage);showingFallbackReport=false;}
@@ -270,7 +306,7 @@ final class StartupController {
             try{
                 disconnect();openRoot();
                 if(!root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限。");
-                JSONObject result=new JSONObject(root.command(admin("prepare-database-export "+token),10));
+                JSONObject result=new JSONObject(root.rebuildCommand(admin("prepare-database-export "+token)));
                 if(!result.optBoolean("ok"))throw new IOException("无法准备数据库备份。");
                 long size=result.getLong("size");String expected=result.getString("sha256");
                 if(size<=0||!expected.matches("[0-9a-f]{64}"))throw new IOException("数据库备份信息无效。");
@@ -291,7 +327,7 @@ final class StartupController {
                 if(savedSize!=size||!hexDigest(saved.digest()).equals(expected))throw new IOException("保存的数据库备份校验失败。");
                 app.runOnUiThread(()->{if(!app.destroyed)phase("重建数据库","备份已保存，正在重建数据库。");});
                 app.recordListCache.clear();
-                JSONObject reset=new JSONObject(root.command(admin("rebuild-database-external "+token),10));
+                JSONObject reset=new JSONObject(root.rebuildCommand(admin("rebuild-database-external "+token)));
                 if(!reset.optBoolean("ok"))throw new IOException("数据库重建未完成，请重试。");committed=true;
                 RootSession authorized=root;
                 app.runOnUiThread(()->{if(!app.destroyed){rebuilding=false;Toast.makeText(app,"数据库备份已保存，正在重新初始化",Toast.LENGTH_LONG).show();initialize(authorized);}});
@@ -340,7 +376,7 @@ final class StartupController {
                 phase("准备独立运行环境","程序与记录保存在独立的 root 目录。");
                 File archive=payload();String version=assetText("payload.sha256");
                 verifyOwner(root,true);
-                root.command(RuntimeSetup.recover()+"; /system/bin/rm -f "+BASE+"/cleanup.request",10);
+                root.command(RuntimeSetup.recover()+" && /system/bin/rm -f "+BASE+"/cleanup.request",10);
                 String current=root.command("cat "+BASE+"/runtime.version 2>/dev/null || true",10);
                 boolean updating=!version.equals(current);
                 if(updating){
@@ -348,12 +384,12 @@ final class StartupController {
                     // executing their old finish-and-auto-delete shutdown behavior.
                     File extracted=java.nio.file.Files.createTempDirectory(app.getCacheDir().toPath(),"aco-runtime-").toFile();
                     try{
-                        RuntimePayload.extract(archive,extracted,version);
+                        String stagedDigest=RuntimePayload.extract(archive,extracted,version);
                         root.command(RuntimeSetup.stage(extracted),10);
                         checkProbe(RuntimeSetup.STAGE);
                         phase("更新独立后台","新环境已检查，正在切换运行文件；失败时恢复原环境。");
                         updateAttempted=true;
-                        root.command(RuntimeSetup.install(version),10);
+                        root.command(RuntimeSetup.install(version,stagedDigest),10);
                     }finally{RuntimePayload.discard(extracted);}
                 }
                 if(app.destroyed)return;
@@ -388,7 +424,7 @@ final class StartupController {
         if(report==null)throw new InitFailure("未能取得电池接口检查结果。",probe.trim().isEmpty()?"探针没有输出。":"探针输出：\n"+probe.trim());
         probeReport=report;
         JSONObject reading=report.getJSONObject("reading");
-        int cells=reading.optInt("cellCount",0);
+        int cells=report.optInt("cellCount",reading.optInt("cellCount",0));
         phase("电池接口检查完成",cells==2?"已识别双电芯。":cells==1?"已识别单电芯。":"正在继续准备后台。");
     }
     void connectExisting(){

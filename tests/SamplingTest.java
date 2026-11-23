@@ -8,7 +8,8 @@ public final class SamplingTest {
     static void check(boolean value){if(!value)throw new AssertionError();}
     static Core.Reading tail(long elapsed){
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.rm=5000;r.pct=100;
-        r.online=true;Core.applyTail(r,4450,1,1);r.current=-20;r.vmin=r.vmax=4400;r.temp=30;return r;
+        // This reading qualifies through the vendor log alone.
+        r.online=true;Core.applyTail(r,4450,1,1);r.current=-20;r.vmin=r.vmax=4399;r.temp=30;return r;
     }
     static void reuseGameCharge(){
         Core.Reading game=tail(2000),last=tail(1500);
@@ -89,11 +90,12 @@ public final class SamplingTest {
             for(long t=0;t<=finish;t+=step)check(gate.update(electrical(t),step)==(t>=300000));
         }
         Core.Reading r=electrical(0);check(!r.valid()&&Core.FullGate.electricalCandidate(r));
-        r.vmax=4410;check(!Core.FullGate.electricalCandidate(r)); // Mean exactly 4.4 V is excluded.
+        r.vmax=4408;check(!Core.FullGate.electricalCandidate(r)); // 4399 mV mean.
+        r.vmax=4410;check(Core.FullGate.electricalCandidate(r)); // 4400 mV mean.
         r.vmax=4430;
         for(double current:new double[]{-50,50,Double.NaN,Double.POSITIVE_INFINITY}){r.current=current;check(!Core.FullGate.electricalCandidate(r));}
         for(double current:new double[]{-49.999,49.999,0}){r.current=current;check(Core.FullGate.electricalCandidate(r));}
-        r.cellCount=0;check(!Core.FullGate.electricalCandidate(r));r.cellCount=1;r.vmin=4401;check(Core.FullGate.electricalCandidate(r));
+        r.cellCount=0;check(!Core.FullGate.electricalCandidate(r));r.cellCount=1;r.vmin=4400;check(Core.FullGate.electricalCandidate(r));
         r.current=100;check(!Core.FullGate.electricalCandidate(r));r.current=-100;check(!Core.FullGate.electricalCandidate(r));
         r.current=99.999;check(Core.FullGate.electricalCandidate(r));r.current=-99.999;check(Core.FullGate.electricalCandidate(r));
         r.online=false;check(!Core.FullGate.electricalCandidate(r));r.online=true;r.onlineKnown=false;check(!Core.FullGate.electricalCandidate(r));
@@ -129,6 +131,26 @@ public final class SamplingTest {
             gate=new Core.FullGate();r=tail(0);r.cellCount=cells;r.current=cells==2?50:100;
             for(long t=0;t<=600000;t+=10000){r.elapsed=t;check(!gate.update(r,10000));} // Both rules exclude exactly 100 mA after compensation.
         }
+    }
+    static void resumeAfterTail(){
+        Core.FullGate gate=new Core.FullGate();
+        Core.Reading r=electrical(0);r.cellCount=1;r.current=-75;
+        check(!gate.resumedCharging(r));
+        r.elapsed=15000;r.current=-100;check(!gate.resumedCharging(r));
+        r.elapsed=16000;check(!gate.resumedCharging(r)); // A screen event cannot confirm a spike.
+        r.elapsed=30000;r.current=Double.NaN;check(!gate.resumedCharging(r));
+        r.elapsed=45000;r.current=-100;check(!gate.resumedCharging(r));
+        r.elapsed=90000;check(!gate.resumedCharging(r)); // The gap invalidates the earlier reading.
+        r.elapsed=105000;check(gate.resumedCharging(r));
+
+        gate.interrupt();r.cellCount=2;
+        r.elapsed=120000;r.current=-49;check(!gate.resumedCharging(r));
+        r.elapsed=135000;r.current=60;check(!gate.resumedCharging(r)); // Positive raw current is discharge.
+        r.elapsed=150000;r.current=-50;r.full=true;check(!gate.resumedCharging(r));
+        r.elapsed=165000;r.full=false;check(!gate.resumedCharging(r));
+        r.elapsed=180000;r.online=false;check(!gate.resumedCharging(r));
+        r.elapsed=195000;r.online=true;check(!gate.resumedCharging(r));
+        r.elapsed=210000;check(gate.resumedCharging(r));
     }
     static void optionalChargingLog(){
         Core.Reading r=new Core.Reading();r.online=false;
@@ -263,7 +285,7 @@ public final class SamplingTest {
             node->{throw new AssertionError("valid primary current fell through: "+node);});
         check(charging.chargingCurrent()==1400&&charging.compensatedCurrent()==2800&&charging.currentSource.equals("current_now"));
 
-        Core.Reading discharging=new Core.Reading();discharging.cellCount=1;
+        Core.Reading discharging=new Core.Reading();discharging.cellCount=Core.effectiveCellCount(0);
         BatteryService.applyGaugeFallback(discharging,4000,Long.MIN_VALUE,30,true,
             node->"2147483647",node->{check(node.equals("current_now"));return "-650000";});
         check(discharging.chargingCurrent()==-650&&discharging.power()==-2.6);
@@ -400,7 +422,7 @@ public final class SamplingTest {
         check(memory.totalGB()==11.665641472&&memory.usedGB()==6.914293760);
         check(MemoryStats.parse("MemTotal: 100 kB\nMemAvailable: 100 kB\n").usedBytes==0);
         for(String invalid:new String[]{"","MemTotal: 100 kB","MemTotal: 100 kB\nMemAvailable: 101 kB","MemTotal: 100 kB\nMemAvailable: -1 kB","MemTotal: bad kB\nMemAvailable: 0 kB","MemTotal: 9223372036854775807 kB\nMemAvailable: 0 kB"})check(MemoryStats.parse(invalid)==null);
-        reuseGameCharge();chargeTail();electricalTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();minimumFps();fpsSourceDuringGame();gameSelection();powerReadBackoff();thermalUnits();
+        reuseGameCharge();chargeTail();electricalTail();resumeAfterTail();optionalChargingLog();screenFallback();powerInputFallback();systemPowerFallback();usageCaptureCadence();alternateBatteryDiscovery();gaugeFallback();gaugeCurrentFallback();cpuUsage();fpsLayerSelection();minimumFps();fpsSourceDuringGame();gameSelection();powerReadBackoff();thermalUnits();
         System.out.println("Sampling: 500 ms charging reuse, tail rules, optional charging-only logs, screen and power input fallback, screen-aware usage capture passed");
     }
 }

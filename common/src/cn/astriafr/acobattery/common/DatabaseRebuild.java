@@ -5,15 +5,33 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.*;
 import org.json.JSONObject;
 
 /** Explicit database reset: verified backup first; interrupted resets block normal opening. */
 public final class DatabaseRebuild {
     public static final String PENDING="database.rebuild.pending";
+    public static final String PROGRESS_LINE="__ACO_DATABASE_REBUILD_PROGRESS__";
+    public static final int IDLE_TIMEOUT_SECONDS=60;
     public interface Stop {void stop()throws Exception;}
     public interface Guard {void check(String phase)throws Exception;}
     private DatabaseRebuild(){}
+    public static Guard reportProgress(PrintStream output){
+        return new Guard(){
+            long lastReport=System.nanoTime()-1_000_000_000L;
+            public void check(String phase)throws IOException{
+                long now=System.nanoTime();
+                long elapsed=now-lastReport;
+                if(elapsed>=TimeUnit.SECONDS.toNanos(IDLE_TIMEOUT_SECONDS))
+                    throw new java.net.SocketTimeoutException("操作超时，请重试。");
+                if(elapsed<1_000_000_000L)return;
+                lastReport=now;
+                output.println(PROGRESS_LINE);
+                if(output.checkError())throw new IOException("root 连接已关闭。");
+            }
+        };
+    }
     static String[] names(String database){
         if(!database.matches("[a-zA-Z0-9._-]+\\.db"))throw new IllegalArgumentException("数据库文件名无效。");
         return new String[]{database,database+"-wal",database+"-shm",database+"-journal"};

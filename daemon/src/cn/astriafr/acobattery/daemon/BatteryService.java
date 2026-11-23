@@ -18,6 +18,7 @@ final class BatteryService {
     }
 
     Integer designCapacityMah(){return designCapacityMah;}
+    static String batteryType(){return read(BAT+"battery_type");}
 
     static final String BAT="/sys/class/oplus_chg/battery/";
     static final String PS="/sys/class/power_supply/";
@@ -163,18 +164,21 @@ final class BatteryService {
         return new MonitorTemperature(Core.batteryTemperature(temp)?temp:Double.NaN,"Charging".equalsIgnoreCase(status));
     }
     static Core.Reading readGauge(Context ctx,int cells,boolean withTemperature) {
-        return readGauge(ctx,cells,true,true,withTemperature);
+        return readGauge(ctx,cells,true,true,withTemperature,true);
     }
-    private static Core.Reading readGauge(Context ctx,int cells,boolean withVoltage,boolean withCurrent,boolean withTemperature) {
+    static Core.Reading readBatteryInfoGauge(Context ctx,int cells) {
+        return readGauge(ctx,cells,true,true,true,false);
+    }
+    private static Core.Reading readGauge(Context ctx,int cells,boolean withVoltage,boolean withCurrent,boolean withTemperature,boolean allowAndroidCurrent) {
         Core.Reading r=new Core.Reading();r.elapsed=SystemClock.elapsedRealtime();r.wall=System.currentTimeMillis();
-        r.cellCount=cells;r.onlineKnown=false;
+        r.cellCount=Core.effectiveCellCount(cells);r.onlineKnown=false;
         if(!withVoltage&&!withCurrent&&!withTemperature)return r;
         // Reading bcc_parms requests a new ADSP gauge response. GET_BATT_VOL alone
         // can return a stale BCC cache on some drivers.
         Core.applyBcc(r,read(BAT+"bcc_parms"));
         if(!withVoltage)r.vmin=r.vmax=r.cell1=r.cell2=Double.NaN;
         if(!withCurrent)r.current=Double.NaN;
-        if(!withTemperature)r.temp=Double.NaN;
+        if(!withTemperature){r.temp=Double.NaN;r.tempSource="";}
         if(withVoltage&&!Core.finite(r.displayVoltage())||withCurrent&&!Core.finite(r.current)||withTemperature&&!Core.finite(r.temp)){
             double voltage=Double.NaN,current=Double.NaN,temp=Double.NaN;
             if(ctx!=null){
@@ -186,9 +190,17 @@ final class BatteryService {
                         if(withTemperature&&rawTemp!=Integer.MIN_VALUE)temp=rawTemp/10.0;
                     }
                 }catch(Exception ignored){}
-                if(withCurrent&&!Core.finite(r.current)){
+                if(allowAndroidCurrent&&withCurrent&&!Core.finite(r.current)){
                     long raw=batteryProperty(ctx,BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
                     if(raw!=Long.MIN_VALUE)current=raw;
+                }
+            }
+            if(!allowAndroidCurrent&&withCurrent&&!Core.finite(r.current)&&"RMX5010".equals(Build.MODEL)){
+                // This firmware reports battery/current_now in mA, negative while charging.
+                double milliamps=num(read(PS+"battery/current_now"));
+                if(Core.finite(milliamps)&&Math.abs(milliamps)<=30_000){
+                    r.current=milliamps;
+                    r.currentSource="current_now";
                 }
             }
             applyGaugeFallback(r,voltage,current,temp,withVoltage,withCurrent,withTemperature,
@@ -216,19 +228,21 @@ final class BatteryService {
             current=num(fixed.apply("current_now"));
             if(!Core.validSystemCurrent(current))current=num(alternate.apply("current_now"));
         }
-        if(withTemperature&&!Core.batteryTemperature(r.temp)&&!Core.batteryTemperature(temp)){
+        boolean useTemperatureNode=withTemperature&&!Core.batteryTemperature(r.temp)&&!Core.batteryTemperature(temp);
+        if(useTemperatureNode){
             temp=num(fixed.apply("temp"))/10;
             if(!Core.batteryTemperature(temp))temp=num(alternate.apply("temp"))/10;
         }
         Core.applySystem(r,voltage,current,withTemperature?temp:Double.NaN);
         if(useCurrentNode&&Core.finite(r.current))r.currentSource="current_now";
+        if(useTemperatureNode&&Core.batteryTemperature(r.temp))r.tempSource="temp";
     }
     static Core.Reading readGameHardware(Context ctx,int cells,int metrics){
         boolean voltage=(metrics&(GameMetrics.VOLTAGE|GameMetrics.WATTS))!=0;
         boolean current=(metrics&(GameMetrics.CURRENT|GameMetrics.WATTS))!=0;
         boolean temp=(metrics&GameMetrics.BATTERY_TEMP)!=0;
         boolean capacity=(metrics&GameMetrics.CAPACITY)!=0,level=(metrics&GameMetrics.LEVEL)!=0;
-        Core.Reading r=readGauge(ctx,cells,voltage,current,temp);
+        Core.Reading r=readGauge(ctx,cells,voltage,current,temp,true);
         r.gamePartial=true;
         r.gameAccounting=(metrics&GameMetrics.ACCOUNTING)==GameMetrics.ACCOUNTING;
         if(capacity)readRemainingCapacity(ctx,r);
@@ -275,7 +289,7 @@ final class BatteryService {
     static Core.Reading readHardware(Context ctx,String[] knownHeader,int cells,java.util.function.Consumer<String[]> rememberHeader) {
         Core.Reading r=readGauge(ctx,cells);
         readRemainingCapacity(ctx,r);readPercentage(ctx,r);
-        if(cells==0)FallbackDiagnostics.record("电芯数量待确认","厂商和标准电池节点均未能确认电芯数量。");
+        if(cells==0)FallbackDiagnostics.record("无法读取电芯数量","暂按单电芯计算。请在进阶设置中手动选择单电芯或双电芯。");
         PowerInputs.Result power=online(ctx);r.online=power.online;r.onlineKnown=power.known;r.onlineSource=power.source;
         String[] chargeHeader=ChargingLog.apply(r,knownHeader,BAT,path->new String(Files.readAllBytes(Paths.get(path)),StandardCharsets.UTF_8));
         if(rememberHeader!=null&&chargeHeader!=null)rememberHeader.accept(chargeHeader);
@@ -300,22 +314,23 @@ final class BatteryService {
     JSONObject batteryInfoSnapshot()throws Exception {
         Integer fcc=integer(read(BAT+"battery_fcc")),soh=integer(read(BAT+"battery_soh"));
         Integer cutoff=BatteryDetails.termVoltage(read("/proc/oplus-votable/GAUGE_TERM_VOLTAGE/status")),design=designCapacityMah();
-        String type=read(BAT+"battery_type");byte[] coefficients=new byte[0];
+        String type=batteryType();byte[] coefficients=new byte[0];
         String tree="/proc/device-tree/soc/oplus,mms_gauge/";
         String[] paths=type.matches("[A-Za-z0-9_.-]+")?new String[]{tree+type+"/deep_spec,term_coeff",tree+"deep_spec,term_coeff"}:new String[]{tree+"deep_spec,term_coeff"};
         for(String path:paths)try{coefficients=Files.readAllBytes(Paths.get(path));break;}catch(IOException ignored){}
         List<int[]> table=BatteryDetails.coefficients(coefficients);
         JSONArray relationships=new JSONArray();
         for(int[] row:table)relationships.put(new JSONObject().put("cutoffMv",row[0]).put("fccOffset",row[1]).put("sohOffset",row[2]));
+        boolean noCompensation=BatteryDetails.noCompensation(cutoff,table);
         Double rawSoh=BatteryDetails.rawSoh(soh,cutoff,table);
         Integer rawFcc=BatteryDetails.rawFcc(fcc,rawSoh,cutoff,table,design);
         Integer rawFccAbove=BatteryDetails.rawFccAbove(fcc,soh,cutoff,table,design);
         String[] keys=read(BAT+"battery_log_head").split(",",-1),values=read(BAT+"battery_log_content").split(",",-1);
-        Integer qmax=null;if(keys.length==values.length)for(int i=1;i<keys.length;i++)if("batt_qmax".equals(keys[i].trim()))qmax=integer(values[i]);
+        Integer qmax=integer(ChargingLog.fields(keys,values).get("batt_qmax"));
         Integer cycles=readCycleCount();
         return new JSONObject().put("cycles",jsonValue(cycles)).put("fcc",jsonValue(fcc)).put("rawFcc",jsonValue(rawFcc)).put("rawFccAbove",jsonValue(rawFccAbove))
             .put("soh",jsonValue(soh)).put("rawSoh",jsonValue(rawSoh)).put("qmax",jsonValue(BatteryDetails.normalizeQmax(qmax,fcc,design)))
-            .put("cutoffMv",jsonValue(cutoff)).put("designCapacity",jsonValue(design))
+            .put("cutoffMv",jsonValue(cutoff)).put("designCapacity",jsonValue(design)).put("noCompensation",noCompensation)
             .put("serial",jsonValue(optionalText(read(BAT+"battery_sn"))))
             .put("manufactureDate",jsonValue(optionalText(read(BAT+"battery_manu_date"))))
             .put("batteryType",jsonValue(optionalText(type))).put("coefficients",relationships);
@@ -329,11 +344,66 @@ final class BatteryService {
         o.put("vmax",nullable(r.vmax)).put("vmin",nullable(r.vmin)).put("power",nullable(r.power()));
         o.put("cell1",nullable(r.cell1)).put("cell2",nullable(r.cell2));
         o.put("onlineKnown",r.onlineKnown).put("online",r.onlineKnown?r.online:JSONObject.NULL).put("driverFull",r.full).put("enabled",r.enabled).put("fv",nullable(r.fv));
-        o.put("temp",jsonValue(nullable(r.temp))).put("source",r.source).put("error",r.error);return o;
+        o.put("temp",jsonValue(nullable(r.temp))).put("tempSource",r.tempSource).put("source",r.source).put("error",r.error);return o;
+    }
+
+    static void addChargingInfo(JSONObject reading)throws JSONException {
+        String usb=PS+"usb/";
+        boolean usbOnline=Boolean.TRUE.equals(PowerInputs.parseOnline(read(usb+"online")));
+        double inputMillivolts=Double.NaN;
+        if(usbOnline){
+            inputMillivolts=num(read(usb+"voltage_now"))/1000;
+            if(Core.finite(inputMillivolts)&&inputMillivolts>0)reading.put("usbInputVoltage",inputMillivolts);
+        }
+        Integer type=integer(read("/sys/class/oplus_chg/common/protocol_type"));
+        if(type==null)return;
+        String protocol=chargingProtocolName(type);
+        if(protocol==null)return;
+        if((type==0||!usbOnline)&&!isChargingNow(reading.optDouble("current",Double.NaN)))return;
+        if(type==0&&!(inputMillivolts>=4000&&inputMillivolts<=6000)){
+            reading.put("chargingProtocol","未知");
+            return;
+        }
+        reading.put("chargingProtocol",protocol);
+        if(!usbOnline)return;
+        OplusVotes.Node currentVote=inputCurrentVote(type);
+        if(currentVote==null)return;
+        Long target=OplusVotes.readEffectiveValue(currentVote);
+        if(target!=null)reading.put("targetInputCurrent",target);
+    }
+
+    private static boolean isChargingNow(double current){
+        String status=read(PS+"battery/status");
+        if(status.isEmpty()||"Unknown".equalsIgnoreCase(status))return current>0;
+        return "Charging".equalsIgnoreCase(status);
+    }
+
+    private static String chargingProtocolName(int type){
+        switch(type){
+            case 0:return "普通充电";
+            case 1:return "VOOC";
+            case 2:return "SUPERVOOC";
+            case 3:return "USB PD";
+            case 4:return "QC";
+            case 5:return "USB PD PPS";
+            case 6:return "UFCS";
+            case 7:return "PE 2.0";
+            default:return null;
+        }
+    }
+
+    private static OplusVotes.Node inputCurrentVote(int type){
+        switch(type){
+            case 0:case 3:case 4:return OplusVotes.Node.WIRED_ICL;
+            case 1:case 2:return OplusVotes.Node.VOOC_CURR;
+            case 5:return OplusVotes.Node.PPS_CURR;
+            case 6:return OplusVotes.Node.UFCS_CURR;
+            default:return null;
+        }
     }
 
     static boolean highDesignCapacity(Integer designCapacityMah){
-        return designCapacityMah!=null&&designCapacityMah>=7400;
+        return designCapacityMah!=null&&designCapacityMah>=7100;
     }
 
 

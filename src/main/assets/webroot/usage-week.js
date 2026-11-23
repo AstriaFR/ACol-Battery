@@ -1,8 +1,8 @@
 import{isoWeek,moveWeek,firstUsageWeek,calendarMonth,moveMonth,firstUsageMonth}from'./usage-calendar.js?v=acol-2.2s';
 import{roundedDuration,dateText}from'./daily-usage-chart.js?v=acol-2.2s';
 import{midnight,canDeleteUsageWeek}from'./daily-usage-cache.js?v=acol-2.2s';
-const ns='http://www.w3.org/2000/svg',names=['一','二','三','四','五','六','日'];
-function svg(tag,attrs){const node=document.createElementNS(ns,tag);for(const[key,value]of Object.entries(attrs))node.setAttribute(key,String(value));return node;}
+import{drawUsageStack,rankUsageApps,svg,usageSegments}from'./usage-stack.js?v=acol-2.2s';
+const names=['一','二','三','四','五','六','日'];
 export class UsageWeekPanel{
   constructor(getCache,navigate,options={}){
     this.node=id=>document.getElementById(id.replace(/^usageWeek/,options.prefix??'usageWeek'));this.appMode=!!options.app;this.monthMode=!!options.month;this.page=this.monthMode?'usage-month':this.appMode?'usage-app-week':'usage-week';this.period=this.monthMode?calendarMonth:isoWeek;this.firstPeriod=this.monthMode?firstUsageMonth:firstUsageWeek;this.periodText=this.monthMode?'本月':'本周';
@@ -44,19 +44,21 @@ export class UsageWeekPanel{
       // Monthly charts read only daily summaries; weekly app views use their bounded totals.
       const result=this.monthMode?{summaries:await this.getCache().summaries(week.start,week.end,31)}:this.appMode?await this.getCache().weeklyApp(week.start,week.end,this.pkg):await this.getCache().weeklyOverview(week.start,week.end);if(token!==this.token)return;
       this.data=result;const byDay=new Map(result.summaries.map(row=>[row.dayStart,row])),byApp=new Map((result.appTotals??[]).map(row=>[row.dayStart,row])),today=midnight(Date.now());
+      const ranks=this.monthMode||this.appMode?null:rankUsageApps(result.apps??[]);
       if(this.deleteButton)this.deleteButton.hidden=!canDeleteUsageWeek(week)||!result.summaries.some(row=>!row.deleted&&row.through>row.dayStart);
       this.rows=week.days.map((date,index)=>{
         const data=byDay.get(date),end=week.days[index+1]??week.end;
         const known=date<=today&&Number.isFinite(data?.onMs)&&data.onMs>=0&&data.coveredMs>0;
         const complete=known&&end<=today&&data.through>=end&&data.coveredMs>=end-date;
         const ms=this.appMode?(byApp.get(date)?.ms??0):(data?.onMs??0);
-        return{day:date,known,complete,ms:known?ms:0,future:date>today};
+        const stack=known&&ranks?usageSegments(ms,result.dayApps?.get(date)??[],ranks):null;
+        return{day:date,known,complete,ms:known?ms:0,future:date>today,stack};
       });
       const known=this.rows.filter(row=>row.known),total=known.reduce((n,row)=>n+row.ms,0),completed=known.filter(row=>row.complete);
       this.node('usageWeekAverageLabel').textContent=completed.length?`${completed.length}日均`:'日均';
       this.node('usageWeekAverage').textContent=completed.length?roundedDuration(completed.reduce((n,row)=>n+row.ms,0)/completed.length):'—';
       this.node('usageWeekTotal').textContent=known.length?`总计 ${roundedDuration(total)}`:'总计 —';
-      this.draw();this.select(this.selected);return result;
+      this.draw();this.select(this.selected);return {...result,ranks};
     }catch{if(token===this.token)this.node('usageWeekHint').textContent=`${this.periodText}汇总暂不可用`;}
   }
   refresh(day){if(this.week&&day>=this.week.start&&day<this.week.end&&!this.node('usageWeekDetail').hidden)return this.display(this.week.start,this.pkg,this.label);}
@@ -67,7 +69,12 @@ export class UsageWeekPanel{
     for(let i=0;i<count;i++){
       const date=this.week.days[i],row=this.rows?.[i],known=!!row?.known,x=width*(i+.5),group=svg('g',{'data-day':i,class:`usage-week-day${i===this.selected?' selected':''}`,role:'button',tabindex:0,'aria-label':`${dateText(date)}${this.monthMode?'':`，周${names[i]}`}，${known?roundedDuration(row.ms):'暂无数据'}`});
       this.plot.append(svg('line',{x1:x,x2:x,y1:7,y2:133,class:'screen-time-grid vertical'}));group.append(svg('rect',{x:i*width,y:0,width,height:140,fill:'transparent'}));
-      if(known){const height=Math.max(1,row.ms/3600000/maximum*126);group.append(svg('rect',{x:i*width+width*(this.monthMode ? .19 : .22),y:133-height,width:width*(this.monthMode ? .62 : .56),height,rx:this.monthMode?1.2:3,class:'screen-time-bar'}));}
+      if(known){
+        const height=Math.max(1,row.ms/3600000/maximum*126);
+        const bar={x:i*width+width*(this.monthMode ? .19 : .22),y:133-height,width:width*(this.monthMode ? .62 : .56),height,rx:this.monthMode?1.2:3};
+        if(row.stack)drawUsageStack(group,bar,row.stack,row.ms,`${this.plot.id}-${i}`);
+        else group.append(svg('rect',{...bar,class:'screen-time-bar'}));
+      }
       this.plot.append(group);
       if(!this.monthMode||i===0||(i+1)%5===0&&i<count-3||i===count-1){const label=document.createElement('span');label.style.left=`${(i+.5)/count*100}%`;if(!this.monthMode){const weekday=document.createElement('b');weekday.textContent=`周${names[i]}`;label.append(weekday);}const number=document.createElement('small');number.textContent=String(new Date(date).getDate()).padStart(2,'0');label.append(number);axis.append(label);}
     }

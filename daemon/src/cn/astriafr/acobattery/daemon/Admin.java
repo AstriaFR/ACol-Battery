@@ -179,20 +179,20 @@ public final class Admin {
                 clearAllData(OperationTimeout.deadline());System.out.println(new JSONObject().put("ok",true));
             }
             else if(action.equals("prepare-database-export")){
-                if(args.length!=2)throw new IOException("数据库备份参数无效。");long deadline=OperationTimeout.deadline();
-                System.out.println(DatabaseRebuild.prepareExternal(Owner.BASE,"records.db",args[1],()->stopForUpdate(deadline),phase->{OperationTimeout.remaining(deadline);}));
+                if(args.length!=2)throw new IOException("数据库备份参数无效。");
+                System.out.println(DatabaseRebuild.prepareExternal(Owner.BASE,"records.db",args[1],Admin::stopForUpdate,DatabaseRebuild.reportProgress(System.out)));
             }
             else if(action.equals("cancel-database-export")){
                 if(args.length!=2)throw new IOException("数据库备份参数无效。");DatabaseRebuild.cancelExternal(Owner.BASE,args[1]);System.out.println(new JSONObject().put("ok",true));
             }
             else if(action.equals("rebuild-database-external")){
-                if(args.length!=2)throw new IOException("数据库重建参数无效。");long deadline=OperationTimeout.deadline();
-                DatabaseRebuild.commitExternal(Owner.BASE,"records.db",args[1],()->stopForUpdate(deadline),phase->{OperationTimeout.remaining(deadline);});System.out.println(new JSONObject().put("ok",true));
+                if(args.length!=2)throw new IOException("数据库重建参数无效。");
+                DatabaseRebuild.commitExternal(Owner.BASE,"records.db",args[1],Admin::stopForUpdate,DatabaseRebuild.reportProgress(System.out));System.out.println(new JSONObject().put("ok",true));
             }
             else if(action.equals("apply-update")){
-                if(args.length!=3||!args[1].matches("[0-9a-f]{64}"))throw new IOException("后台更新参数无效。");
+                if(args.length!=4||!args[1].matches("[0-9a-f]{64}"))throw new IOException("后台更新参数无效。");
                 String owner=ownerToken(Integer.parseInt(args[2]));if(owner.isEmpty())throw new IOException("无法确认后台更新会话。");
-                transaction().apply(args[1],owner,updateControl(),false);System.out.println("INSTALLED");
+                transaction().applyVerified(args[1],owner,updateControl(),args[3]);System.out.println("INSTALLED");
             }else if(action.equals("recover-update")){
                 transaction().recover("",Admin::ownerAlive,updateControl());System.out.println("RECOVERED");
             }

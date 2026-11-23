@@ -24,6 +24,7 @@ exports.recordDom=()=>{
     insertBefore(node,anchor){node.remove();node.parentElement=this;const index=anchor?this.children.indexOf(anchor):-1;index<0?this.children.push(node):this.children.splice(index,0,node);}
     remove(){if(this.parentElement){const list=this.parentElement.children,index=list.indexOf(this);if(index>=0)list.splice(index,1);this.parentElement=null;}}
     setAttribute(key,value){this.attributes[key]=String(value);if(key==='class')this.className=String(value);}
+    getAttribute(key){return this.attributes[key]??null;}
     removeAttribute(key){delete this.attributes[key];}
     matches(selector){
       if(selector.startsWith('.'))return this.classList.contains(selector.slice(1));

@@ -9,7 +9,7 @@ final class ChargingLog {
     private static String read(Reader reader,String path){
         try{String value=reader.read(path);return value==null?"":value;}catch(Exception ignored){return "";}
     }
-    private static Map<String,String> fields(String[] head,String[] values){
+    static Map<String,String> fields(String[] head,String[] values){
         Map<String,String> result=new HashMap<>();
         if(head.length==values.length)for(int i=0;i<head.length;i++)result.put(head[i].trim(),values[i].trim());
         return result;

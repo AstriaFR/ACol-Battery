@@ -1,12 +1,13 @@
-import{DEFAULT_SETTINGS}from'./config.js?v=acol-2.2s';
+import{chartSettings}from'./config.js?v=acol-2.2s';
+import{valid,duration}from'./record-display.js?v=acol-2.2s';
+export{setChartSettings}from'./config.js?v=acol-2.2s';
+export{valid,duration};
 import{remainingEstimate,unclassifiedCells,gameEnergyDisabled}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
 import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
 const rebootGap=64;
 const dischargeRebase=128;
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
-let chartSettings={...DEFAULT_SETTINGS};
-export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
 const scaleSettingsKey=()=>JSON.stringify([chartSettings.energyWh,chartSettings.capacityAh,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
 const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
   &&peak-base>=(full-base)*1.1-Math.max(1,Math.abs(full-base))*1e-12;
@@ -21,7 +22,6 @@ export const series=[
   {key:'energy',index:11,name:'剩余能量(估算)',axis:'剩余能量(估算)',unit:'Wh',digits:2},
   {key:'ram',index:14,name:'RAM 已用',axis:'RAM 已用',unit:'GB',digits:2}
 ];
-export const valid=v=>typeof v==='number'&&Number.isFinite(v);
 export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>s.key==='ram'?kind==='discharge'&&!fast:kind==='charge'?s.key!=='energy':fast||s.key!=='current').map(s=>{
   let item={...s,color:batteryColor(s.key)};
   if(kind==='discharge'&&s.key==='current')item={...item,name:'电流'};
@@ -112,6 +112,20 @@ export function signalScale(s,values,kind='charge',fast=false,previous=null){
   const unit=compact?{mAh:'Ah',mA:'A',mV:'V'}[s.unit]:s.unit;
   let min=previous?.min??0;for(const value of values)if(valid(value))min=Math.min(min,value);
   return{base:0,full,min,label:`${sampleText(full/factor)} ${unit}`};
+}
+export function chartRangeGrowth(chart,settings){
+  const manual=settings.manualChartRanges??0;
+  const signals=chart.signals();
+  const growth=(signal,manualBit,divisor,current,limit)=>{
+    if(manual&manualBit)return 0;
+    const series=signals.find(item=>item.key===signal);
+    if(!series)return 0;
+    const scale=chart.scaleFor(series);
+    if(signal==='energy'&&!scale.observed)return 0;
+    const wanted=Math.min(limit,Math.ceil(scale.full/divisor-1e-8));
+    return wanted>Math.round(current*100)?wanted:0;
+  };
+  return [growth('rm',1,10,settings.capacityAh,2000),growth('energy',2,0.01,settings.energyWh??0,10000)];
 }
 export const scalePercent=(value,scale)=>(value-scale.base)/(scale.full-scale.base)*100;
 export const axisMinimum=(kind,scales)=>kind==='charge'?0:Math.floor(Math.min(0,...scales.map(s=>scalePercent(s.min,s)))/10)*10;
@@ -262,7 +276,6 @@ export function smoothPath(ctx,points,quantized=false){
     ctx.bezierCurveTo(a[0]+dx,a[1]+m[i]*dx,b[0]-dx,b[1]-m[i+1]*dx,...b);
   }
 }
-export function duration(ms){const s=Math.max(0,Math.round(ms/1000)),h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}小时${m}分`:m?`${m}分${s%60}秒`:`${s}秒`;}
 function pointBound(points,x,after=false){
   let lo=0,hi=points.length;
   while(lo<hi){const mid=(lo+hi)>>>1,t=points[mid][0];if(t<x||after&&t===x)lo=mid+1;else hi=mid;}
@@ -279,8 +292,8 @@ export class Chart{
     this.markerLine.setAttribute('aria-hidden','true');canvas.after(this.markerLine);
     this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;this.highDesignCapacity=false;
     this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.startWall=null;this.wallByX=new Map();
-    new ResizeObserver(()=>this.draw()).observe(canvas.parentElement);
-    globalThis.visualViewport?.addEventListener('resize',()=>this.draw());
+    new ResizeObserver(()=>this.scheduleDraw()).observe(canvas.parentElement);
+    globalThis.visualViewport?.addEventListener('resize',()=>this.scheduleDraw());
     canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=this.local(e);this.pointers.set(e.pointerId,p);this.gesture=this.capture();this.moved=false;this.dragMarker=this.pointers.size===1&&this.marker!==null&&Math.abs(p[0]-this.markerX())<=14?e.pointerId:null;this.beginInspectionHold(e.pointerId,p);});
     canvas.addEventListener('pointermove',e=>{const hold=this.inspectionHold;if(hold&&!hold.active&&Math.hypot(...this.local(e).map((v,i)=>v-hold.point[i]))>14){if(Date.now()-hold.started>=180)this.activateInspectionHold(hold);else this.cancelInspectionHold();}this.move(e);if(this.inspectionHold?.active&&e.cancelable)e.preventDefault();},{passive:false});
     const end=e=>{this.cancelInspectionHold();const dragging=this.dragMarker===e.pointerId;if(!this.moved)this.inspect(...this.local(e));this.pointers.delete(e.pointerId);this.gesture=this.capture();this.dragMarker=null;if(this.moved&&!dragging)this.onWindow?.(this.window);};
@@ -309,6 +322,7 @@ export class Chart{
   }
   local(e){const r=this.canvas.getBoundingClientRect();if(this.canvas.closest('.rotate'))return[e.clientY-r.top,r.right-e.clientX];return[e.clientX-r.left,e.clientY-r.top];}
   signals(){return seriesFor(this.kind,this.cellCount,this.fast);}
+  signalWindow(signal,visible){return visible;}
   timeAxis(width){
     const wall=this.kind==='discharge'||this.kind==='performance';
     const label=x=>wall?systemTimeLabel(chartSystemWall(this.points,this.startWall,x,this.kind,this.wallByX)):elapsedMinuteLabel(x);
@@ -346,14 +360,23 @@ export class Chart{
   capture(){return{points:[...this.pointers.values()],window:[...this.window]};}
   set(points,total,window,options={}){
     const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2,highDesignCapacity=options.highDesignCapacity===true;
-    if(kind!==this.kind||fast!==this.fast||cells!==this.cellCount||highDesignCapacity!==this.highDesignCapacity||options.recordId!==undefined&&options.recordId!==this.recordId)this.scaleCache.clear();
+    const changed=kind!==this.kind||fast!==this.fast||cells!==this.cellCount||highDesignCapacity!==this.highDesignCapacity||options.recordId!==undefined&&options.recordId!==this.recordId;
+    if(changed)this.scaleCache.clear();
     if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
     this.startWall=valid(options.startWall)?options.startWall:null;
     this.kind=kind;this.fast=fast;this.cellCount=cells;this.highDesignCapacity=highDesignCapacity;
-    this.points=this.preparePoints(points);this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
+    if(options.appendOnly&&!changed&&this.streamSource===points&&this.streamLength<=points.length){
+      for(const row of this.preparePoints(points.slice(this.streamLength)))this.points.push(row);
+    }else this.points=this.preparePoints(points);
+    this.streamSource=options.appendOnly?points:null;this.streamLength=points.length;
+    this.total=Math.max(1,total);this.window=window??[0,this.total];this.ranges=options.ranges??this.ranges;
     if(!options.live||this.marker<this.window[0]||this.marker>this.window[1]){this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);}this.draw();
   }
-  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.draw();}
+  scheduleDraw(){
+    if(this.drawFrame)return;
+    this.drawFrame=requestAnimationFrame(()=>{this.drawFrame=0;if(!this.canvas.closest('[hidden]'))this.draw();});
+  }
+  setWindow(a,b){const span=Math.max(Math.min(this.kind==='charge'||this.fast?1000:60000,this.total),Math.min(this.total,b-a));a=Math.max(0,Math.min(this.total-span,a));this.window=[a,a+span];this.inspectionTarget=null;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.scheduleDraw();}
   zoom(factor,anchor=.5){anchor=Math.max(0,Math.min(1,anchor));const[a,b]=this.window,span=(b-a)*factor;this.setWindow(a+(b-a)*anchor-span*anchor,a+(b-a)*anchor+span*(1-anchor));}
   move(e){
     if(!this.pointers.has(e.pointerId))return;this.pointers.set(e.pointerId,this.local(e));
@@ -381,7 +404,7 @@ export class Chart{
           if(segment.length===1)return Math.hypot(pixel-segment[0][0],y-segment[0][1])<=13;
           ctx.beginPath();this.traceSignal(ctx,segment,s,scale);return ctx.isPointInStroke(pixel,y);
         };
-        for(const row of visible){
+        for(const row of this.signalWindow(s,visible)){
           if(!valid(row[s.index])||(row[6]&gapMask)){
             if(hit())return true;segment=[];
             if(!valid(row[s.index]))continue;
@@ -439,13 +462,22 @@ export class Chart{
     this.marker=row[0];this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
     const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~(unclassifiedCells|dischargeRebase|gameEnergyDisabled)?' · 数据异常':'';
+    const signals=this.signals();
     this.tooltip.textContent=`时间  ${systemTimeLabel(wall,true)}\n计时  ${timeLabel(row[0])}${quality}\n`+
       (this.kind==='discharge'&&valid(row[7])?`区间  ${duration(row[7])}\n`:'')+
-      this.signals().filter(s=>this.enabled.has(s.key)).map(s=>{
+      signals.filter(s=>this.enabled.has(s.key)).map(s=>{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
         if(s.unit==='FPS')return`${s.name}  ${recordedFpsText(value)??'缺失'} ${s.unit}`;
         if(this.kind==='discharge'&&this.fast&&(s.key==='current'||s.key==='power'))return`${s.name}  ${gameSampleText(value,s.key,s.key==='current'?0:2)} ${s.unit}`;
-        return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='power'&&this.kind==='discharge'?(valid(value)?value.toFixed(2):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
+        if(this.kind==='discharge'&&s.key==='power'){
+          const energy=signals.find(signal=>signal.key==='energy');
+          const scale=valid(value)&&energy?this.scaleFor(energy):null;
+          const rate=scale?.observed?-100*value/scale.full:NaN;
+          const powerText=valid(value)?value.toFixed(2):'缺失';
+          const rateText=valid(rate)?`${rate.toFixed(2)}%/h`:'缺失';
+          return`${s.name}  ${powerText} ${s.unit}\n放电速率(估算)  ${rateText}`;
+        }
+        return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+
       (this.cellCount===2&&this.enabled.has('voltage')?[[8,'电芯 1'],[9,'电芯 2']].filter(([i])=>valid(row[i])).map(([i,name])=>`\n${name}  ${(row[i]/1000).toFixed(3)} V`).join(''):'');this.tooltip.hidden=false;this.onInspect?.(row);this.refreshInspection();
   }
@@ -462,6 +494,7 @@ export class Chart{
     ctx.restore();
   }
   draw(){
+    if(this.drawFrame){cancelAnimationFrame(this.drawFrame);this.drawFrame=0;}
     const w=this.canvas.clientWidth,h=this.canvas.clientHeight;if(!w||!h)return;
     const ratio=(devicePixelRatio||1)*(globalThis.visualViewport?.scale||1),width=Math.round(w*ratio),height=Math.round(h*ratio);
     if(this.canvas.width!==width)this.canvas.width=width;
@@ -524,7 +557,7 @@ export class Chart{
         this.traceSignal(ctx,segment,s,scale);
         ctx.stroke();if(segment.length===1){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
       };
-      for(const p of visible){if(!valid(p[s.index])){flush();continue;}if(p[6]&gapMask)flush();segment.push(map(p));}flush();ctx.restore();
+      for(const p of this.signalWindow(s,visible)){if(!valid(p[s.index])){flush();continue;}if(p[6]&gapMask)flush();segment.push(map(p));}flush();ctx.restore();
     });
     if(!visible.length||!selected.length){ctx.fillStyle=cssColor('--plot-label','#64748b');ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
     this.refreshInspection();

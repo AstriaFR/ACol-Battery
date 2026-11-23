@@ -3,6 +3,7 @@ package cn.astriafr.acobattery.daemon;
 import android.database.Cursor;
 import android.database.sqlite.*;
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
 
@@ -10,6 +11,34 @@ import java.util.Arrays;
 public final class SafeDatabaseDeviceTest {
     static void check(boolean value,String text){if(!value)throw new AssertionError(text);}
     static long scalar(SQLiteDatabase db,String sql){try(Cursor row=db.rawQuery(sql,null)){check(row.moveToFirst(),"Missing scalar");return row.getLong(0);}}
+    interface DatabaseOperation {void run()throws Exception;}
+    static void rejectFutureVersion(DatabaseOperation operation,int version)throws Exception{
+        try{operation.run();throw new AssertionError("A newer database was accepted");}
+        catch(IOException expected){check(expected.getMessage().contains("版本 "+version),"Missing compatibility error");}
+    }
+    static void newerDatabase(File root)throws Exception{
+        File incoming=new File(root,"incoming"),base=new File(incoming,"root");
+        check(base.mkdirs(),"Cannot create downgrade fixture");
+        File file=new File(base,"records.db");
+        int version=RecordStore.SCHEMA_VERSION+1;
+        try{
+            try(SQLiteDatabase db=SafeDatabase.open(file)){
+                db.execSQL("CREATE TABLE future_data(value INTEGER)");
+                db.execSQL("INSERT INTO future_data VALUES(42)");
+                db.setVersion(version);
+            }
+            byte[] original=Files.readAllBytes(file.toPath());
+            rejectFutureVersion(()->SafeDatabase.inspectExisting(file),version);
+            rejectFutureVersion(()->{try(SQLiteDatabase db=new RecordStore(base).db){}},version);
+            rejectFutureVersion(()->DataTransfer.compactDatabase(base),version);
+            rejectFutureVersion(()->DataTransfer.validateDatabase(incoming),version);
+            check(Arrays.equals(original,Files.readAllBytes(file.toPath())),"Downgrade changed the database bytes");
+            try(SQLiteDatabase db=SafeDatabase.open(file)){
+                check(db.getVersion()==version&&scalar(db,"SELECT value FROM future_data")==42,"Newer version or rows changed");
+            }
+            System.out.println("Downgrade: startup, compaction and restore reject newer schemas and preserve database bytes: PASS");
+        }finally{cn.astriafr.acobattery.common.DataArchive.removeTree(root,incoming);}
+    }
     static void compact(File root)throws Exception{
         File base=new File(root,"compact");check(base.mkdir(),"Cannot create compaction fixture");File file=new File(base,"records.db");
         try{
@@ -56,6 +85,7 @@ public final class SafeDatabaseDeviceTest {
         try{
             Admin.context();
             compact(root);
+            newerDatabase(root);
             File healthy=new File(root,"healthy.db");
             try(SQLiteDatabase db=SafeDatabase.open(healthy)){db.execSQL("CREATE TABLE sentinel(value INTEGER)");db.execSQL("INSERT INTO sentinel VALUES(42)");}
             byte[] healthyBytes=Files.readAllBytes(healthy.toPath());SafeDatabase.inspectExisting(healthy);check(Arrays.equals(healthyBytes,Files.readAllBytes(healthy.toPath())),"Read-only preflight changed healthy data");

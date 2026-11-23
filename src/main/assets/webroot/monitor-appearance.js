@@ -1,3 +1,5 @@
+import{installMonitorOrder}from'./monitor-order.js';
+
 const $=id=>document.getElementById(id);
 const thresholdGroups=[
   {first:1,last:3,unit:'%',max:100},
@@ -17,14 +19,18 @@ export function createMonitorAppearancePage(api,keypad){
   const reset=$('resetMonitorAppearance');
   const switches=[...root.querySelectorAll('[data-monitor-bit]')];
   const thresholds=[...root.querySelectorAll('[data-monitor-threshold]')];
-  let values=null,pending=null;
+  let values=null,order=null,pending=null;
+  const metricOrder=installMonitorOrder($('monitorMetricOrder'),
+    ()=>!!values&&!controls.disabled&&!pending&&!root.hidden,
+    next=>request('set_monitor_order',[next]).catch(()=>{}));
 
   function message(text){
     status.textContent=text;
     status.hidden=!text;
   }
-  function fill(saved){
-    values=saved;
+  function fill(saved,savedOrder){
+    values=saved;order=savedOrder;
+    metricOrder.apply(order);
     for(const input of switches)input.checked=!!(saved[0]&Number(input.dataset.monitorBit));
     for(const button of thresholds){
       const index=Number(button.dataset.monitorThreshold);
@@ -43,13 +49,14 @@ export function createMonitorAppearancePage(api,keypad){
   }
   async function request(action,args=[]){
     if(pending)await pending.catch(()=>{});
+    metricOrder.cancel();
     controls.disabled=reset.disabled=true;
     message('');
     const work=api(action,...args);
     pending=work;
-    try{fill((await work).values);}
+    try{const result=await work;fill(result.values,result.order);}
     catch(error){
-      if(values)fill(values);
+      if(values)fill(values,order);
       message(error.message);
       throw error;
     }finally{
@@ -90,7 +97,8 @@ export function createMonitorAppearancePage(api,keypad){
       commit:async value=>{
         if(!Number.isInteger(value)||value<min||value>max)throw Error(`请输入 ${min}–${max} ${unit} 的整数。`);
         await change(index,value);
-      }
+      },
+      restore:()=>request('reset_monitor_threshold',[index])
     },button.getAttribute('aria-label'),unit,`${min}–${max} ${unit}\n整数`,
     push?{page:'monitor-appearance',keypad:true,key:index}:null);
   }
@@ -114,6 +122,7 @@ export function createMonitorAppearancePage(api,keypad){
     handleHistory,
     close(){
       if(root.hidden)return;
+      metricOrder.cancel();
       root.hidden=true;
       if(keypad.editor?.commit)keypad.closeEditor();
     }

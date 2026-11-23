@@ -4,5 +4,5 @@ package cn.astriafr.acobattery.daemon;
 final class RecordOrder {
     private static final String RANK="CASE WHEN active=1 AND fast_seconds>0 THEN 0 WHEN active=1 THEN 1 ELSE 2 END";
     static final String SQL=" ORDER BY "+RANK+",id DESC";
-    static final String AFTER="("+RANK+">? OR ("+RANK+"=? AND id<?))";
+    static final String AFTER="("+RANK+">CAST(? AS INTEGER) OR ("+RANK+"=CAST(? AS INTEGER) AND id<?))";
 }

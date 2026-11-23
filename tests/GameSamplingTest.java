@@ -1,5 +1,6 @@
 package cn.astriafr.acobattery.daemon;
 
+import android.content.Context;
 import android.database.Cursor;
 import android.os.SystemClock;
 import java.io.File;
@@ -7,11 +8,14 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import org.json.*;
 
-/** Host SQLite integration: independent deadlines, upgrades and unchanged records. */
+/** Android SQLite integration with independent deadlines and isolated database and gauge fixtures. */
 public final class GameSamplingTest {
+    static Context context;
     static void check(boolean v){if(!v)throw new AssertionError();}
     static Main open(File directory)throws Exception{
-        Main m=new Main(null,new File(directory,"runtime"),directory);
+        Main m=new Main(context,new File(directory,"runtime"),directory);
+        Field gauge=Main.class.getDeclaredField("gaugeUpdate");gauge.setAccessible(true);
+        gauge.set(m,new GaugeUpdate(directory.toPath().resolve("mock-gauge"),new File(directory,"mock-gauge.state"),"game-test"));
         Field boot=Main.class.getDeclaredField("boot");boot.setAccessible(true);boot.set(m,"game-test");
         m.performance.close();return m;
     }
@@ -32,8 +36,7 @@ public final class GameSamplingTest {
             m.settings=Main.decodeSettings(settings(power,performance));m.fastEnabled=true;m.state=0;m.configureSampling(false);
             long base=SystemClock.elapsedRealtime();m.begin(reading(base));m.sampling.sampled(0,base);long ordinary=m.session;
             m.withGame(()->{m.begin(reading(base));m.sampling.sampled(0,base);});long game=m.gameTrack.session,stats=m.gameTrack.fastStatsNext;
-            // A wall-clock correction takes the existing attribution fallback;
-            // this host harness has no Android UsageStats service.
+            // Exercise the wall-clock fallback independently of live usage events.
             m.gameTrack.fastStatsPrevious.wall-=3000;
             int perfCount=1;
             for(int tenth=1;tenth<=600;tenth++){
@@ -107,6 +110,7 @@ public final class GameSamplingTest {
         }finally{close(m);}
     }
     public static void main(String[] args)throws Exception{
+        context=Admin.context();
         JSONArray legacy=new JSONArray("[5,30,560,1,300,450,50,60,2,15,7,1,2]");
         JSONObject decodedLegacy=Main.decodeSettings(legacy);
         check(decodedLegacy.getDouble("performanceSeconds")==decodedLegacy.getDouble("fastSeconds"));
@@ -121,5 +125,6 @@ public final class GameSamplingTest {
         }
         schedule(20,0.5);schedule(0.5,20);schedule(7,1.1);chargingReuse();edits();
         System.out.println("Game sampling: independent clocks, 0.5-20 s bounds, fractional intervals, settings/schema upgrade, unchanged session and minute RM accounting passed");
+        System.exit(0);
     }
 }

@@ -6,12 +6,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.view.Surface;
 import android.view.SurfaceControl;
@@ -33,6 +35,7 @@ final class PowerIndicator implements AutoCloseable {
     private static final float HEIGHT=11, PADDING=3, ICON_SCALE=.72f, ICON_ADVANCE=8.5f;
     private static final float CPU_CHART_WIDTH=24, GPU_BAR_WIDTH=3, BAR_HEIGHT=6.5f, FIELD_GAP=2, GROUP_GAP=3.5f;
     private static final int FPS_CELLS=3;
+    private static final int LANDSCAPE_RENDER_SCALE=2;
     private static final int FOREGROUND=Color.rgb(248,248,248);
     private static final int FPS_COLOR=Color.rgb(155,213,255);
     private static final int DARK_BLUE=Color.rgb(31,83,158);
@@ -60,7 +63,11 @@ final class PowerIndicator implements AutoCloseable {
     private SurfaceControl layer;
     private Surface surface;
     private int surfaceWidth,surfaceHeight;
-    private boolean displayChanged=true,drawnAtBottom;
+    private boolean displayChanged=true,drawnAtBottom,drawnLandscape;
+    private Bitmap landscapeBitmap;
+    private Canvas landscapeCanvas;
+    private Paint landscapeFilter;
+    private final Rect landscapeBounds=new Rect();
     private int layerStack;
     private float layerX,layerY,drawnScaleX,drawnScaleY;
     private MonitorAppearance drawnAppearance;
@@ -141,10 +148,26 @@ final class PowerIndicator implements AutoCloseable {
     }
     private void removeLayer()throws Exception{
         drawnContent=null;drawnAppearance=null;
+        releaseLandscapeBitmap();
         if(surface!=null){surface.release();surface=null;}
         if(layer!=null){try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
             SurfaceControl.Transaction.class.getMethod("remove",SurfaceControl.class).invoke(tx,layer);tx.apply();
         }finally{layer.release();layer=null;}}
+    }
+    private void releaseLandscapeBitmap(){
+        if(landscapeBitmap==null)return;
+        landscapeCanvas=null;
+        landscapeBitmap.recycle();
+        landscapeBitmap=null;
+    }
+    private Canvas prepareLandscapeCanvas(int width,int height){
+        if(landscapeCanvas==null){
+            landscapeBitmap=Bitmap.createBitmap(width*LANDSCAPE_RENDER_SCALE,height*LANDSCAPE_RENDER_SCALE,Bitmap.Config.ARGB_8888);
+            landscapeCanvas=new Canvas(landscapeBitmap);
+            landscapeBounds.set(0,0,width,height);
+            if(landscapeFilter==null)landscapeFilter=new Paint(Paint.FILTER_BITMAP_FLAG);
+        }
+        return landscapeCanvas;
     }
     private void configureTouchPassthrough(SurfaceControl.Transaction tx,int displayId)throws ReflectiveOperationException{
         Class<?> handleClass=Class.forName("android.view.InputWindowHandle");
@@ -187,9 +210,12 @@ final class PowerIndicator implements AutoCloseable {
         float scaleX=baseScaleX*size,scaleY=metrics.density*size;
         int width=Math.max(1,Math.round(contentWidth*scaleX));
         int height=Math.max(1,Math.round(HEIGHT*scaleY));
-        boolean atBottom=appearance.landscapeBottom&&metrics.widthPixels>metrics.heightPixels;
+        boolean landscape=metrics.widthPixels>metrics.heightPixels;
+        boolean atBottom=appearance.landscapeBottom&&landscape;
         boolean newLayer=layer==null||width!=surfaceWidth||height!=surfaceHeight;
         float x=(metrics.widthPixels-width)/2f,y=atBottom?Math.max(0,metrics.heightPixels-height):0;
+        // In landscape the compositor can otherwise sample the text at a half-pixel offset.
+        if(landscape)x=Math.round(x);
         int stack=layerStack;
         if(newLayer||displayChanged){
             stack=(Integer)Display.class.getMethod("getLayerStack").invoke(display);
@@ -201,21 +227,34 @@ final class PowerIndicator implements AutoCloseable {
             layer=new SurfaceControl.Builder().setName(LAYER_NAME).setBufferSize(width,height).setFormat(PixelFormat.TRANSLUCENT).setHidden(true).build();
             surface=Surface.class.getConstructor(SurfaceControl.class).newInstance(layer);
         }
+        if(!landscape)releaseLandscapeBitmap();
         PerformanceCollector.MonitorSample sample=performance;
         BatteryValues reading=battery;
         double fps=sample==null?Double.NaN:sample.fps;
         boolean blackText=appearance.followSystem?!systemDark:appearance.blackText;
         foreground=blackText?Color.BLACK:FOREGROUND;
         String content=visibleContent(appearance,sample,reading,fps,scaleY,blackText);
-        if(drawnAppearance!=appearance||!content.equals(drawnContent)||scaleX!=drawnScaleX||scaleY!=drawnScaleY||atBottom!=drawnAtBottom){
+        if(drawnAppearance!=appearance||!content.equals(drawnContent)||scaleX!=drawnScaleX||scaleY!=drawnScaleY
+                ||atBottom!=drawnAtBottom||landscape!=drawnLandscape){
+            Canvas raster=landscape?prepareLandscapeCanvas(width,height):null;
             Canvas canvas=surface.lockCanvas(null);
             try{
-                canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
-                canvas.save();canvas.scale(scaleX,scaleY);
-                drawMonitor(canvas,contentWidth,cell,sample,reading,appearance,atBottom,blackText,fps);
-                canvas.restore();
+                // Draw at twice the output resolution, then filter back to the original layer size.
+                Canvas target=landscape?raster:canvas;
+                int factor=landscape?LANDSCAPE_RENDER_SCALE:1;
+                target.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
+                int checkpoint=target.save();
+                try{
+                    target.scale(scaleX*factor,scaleY*factor);
+                    drawMonitor(target,contentWidth,cell,sample,reading,appearance,atBottom,blackText,fps);
+                }finally{target.restoreToCount(checkpoint);}
+                if(landscape){
+                    canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);
+                    canvas.drawBitmap(landscapeBitmap,null,landscapeBounds,landscapeFilter);
+                }
             }finally{surface.unlockCanvasAndPost(canvas);}
             drawnAppearance=appearance;drawnContent=content;drawnScaleX=scaleX;drawnScaleY=scaleY;drawnAtBottom=atBottom;
+            drawnLandscape=landscape;
         }
         if(positionChanged)try(SurfaceControl.Transaction tx=new SurfaceControl.Transaction()){
             if(newLayer||stack!=layerStack)SurfaceControl.Transaction.class.getMethod("setLayerStack",SurfaceControl.class,int.class).invoke(tx,layer,stack);
@@ -293,45 +332,51 @@ final class PowerIndicator implements AutoCloseable {
         canvas.drawPath(background,paint);
         float baseline=(HEIGHT+MonitorGlyphs.CAP_HEIGHT)/2;
         float x=PADDING;
-        if(appearance.shows(FPS)){
-            x=drawField(canvas,PowerDisplayState.fps(fps),FPS_CELLS,cell,x,baseline,blackText?DARK_BLUE:FPS_COLOR)+GROUP_GAP;
-        }
-        if(appearance.shows(CPU_CHART|CPU_FREQUENCY))x=drawProcessor(canvas,x,cell,baseline,sample,appearance,false)+GROUP_GAP;
-        if(appearance.shows(GPU_CHART|GPU_FREQUENCY))x=drawProcessor(canvas,x,cell,baseline,sample,appearance,true)+GROUP_GAP;
-        if(!appearance.shows(POWER|TEMPERATURE))return;
-        drawBatteryIcon(canvas,x,battery);
-        x+=ICON_ADVANCE;
-        double watts=battery==null?Double.NaN:battery.watts;
-        double temperature=battery==null?Double.NaN:battery.temperature;
-        if(appearance.shows(POWER)){
-            x=drawSignedField(canvas,PowerDisplayState.power(watts),watts,true,cell,x,baseline,warningColor(-watts,appearance.power));
-            x=drawUnit(canvas,"W",x,baseline)+FIELD_GAP;
-        }
-        if(appearance.shows(TEMPERATURE)){
-            x=drawSignedField(canvas,PowerDisplayState.temperature(temperature),temperature,false,cell,x,baseline,warningColor(temperature,appearance.temperature));
-            drawUnit(canvas,"°C",x,baseline);
-        }
-    }
-
-    private float drawProcessor(Canvas canvas,float x,float cell,float baseline,PerformanceCollector.MonitorSample sample,
-            MonitorAppearance appearance,boolean gpu){
-        int chart=gpu?GPU_CHART:CPU_CHART,frequency=gpu?GPU_FREQUENCY:CPU_FREQUENCY;
-        drawProcessorIcon(canvas,x,gpu);
-        x+=ICON_ADVANCE;
-        if(appearance.shows(chart)){
-            if(gpu){
-                double usage=sample==null?Double.NaN:sample.gpuUsage;
-                drawUsageBar(canvas,x,x+GPU_BAR_WIDTH,usage,usage>=90?YELLOW:usageBlue());
-                x+=GPU_BAR_WIDTH;
-            }else{
-                drawCpuUsage(canvas,x,sample,appearance);
-                x+=CPU_CHART_WIDTH;
+        int previousGroup=0;
+        for(int index=0;index<appearance.order.length();index++){
+            int metric=appearance.metricAt(index);
+            if(!appearance.shows(metric))continue;
+            int group=groupOf(metric);
+            if(previousGroup==group)x+=FIELD_GAP;
+            else{
+                if(previousGroup!=0)x+=GROUP_GAP;
+                if(group!=FPS){
+                    if(group==BATTERY)drawBatteryIcon(canvas,x,battery);
+                    else drawProcessorIcon(canvas,x,group==GPU);
+                    x+=ICON_ADVANCE;
+                }
+                previousGroup=group;
             }
-            if(appearance.shows(frequency))x+=FIELD_GAP;
+            switch(metric){
+                case FPS:
+                    x=drawField(canvas,PowerDisplayState.fps(fps),FPS_CELLS,cell,x,baseline,blackText?DARK_BLUE:FPS_COLOR);
+                    break;
+                case CPU_CHART:
+                    drawCpuUsage(canvas,x,sample,appearance);
+                    x+=CPU_CHART_WIDTH;
+                    break;
+                case GPU_CHART:
+                    double usage=sample==null?Double.NaN:sample.gpuUsage;
+                    drawUsageBar(canvas,x,x+GPU_BAR_WIDTH,usage,usage>=90?YELLOW:usageBlue());
+                    x+=GPU_BAR_WIDTH;
+                    break;
+                case CPU_FREQUENCY:
+                case GPU_FREQUENCY:
+                    double frequency=sample==null?Double.NaN:group==GPU?sample.gpuMHz:sample.cpuMHz;
+                    x=drawFrequency(canvas,frequency,cell,x,baseline);
+                    break;
+                case POWER:
+                    double watts=battery==null?Double.NaN:battery.watts;
+                    x=drawSignedField(canvas,PowerDisplayState.power(watts),watts,true,cell,x,baseline,warningColor(-watts,appearance.power));
+                    x=drawUnit(canvas,"W",x,baseline);
+                    break;
+                case TEMPERATURE:
+                    double temperature=battery==null?Double.NaN:battery.temperature;
+                    x=drawSignedField(canvas,PowerDisplayState.temperature(temperature),temperature,false,cell,x,baseline,warningColor(temperature,appearance.temperature));
+                    x=drawUnit(canvas,"°C",x,baseline);
+                    break;
+            }
         }
-        if(appearance.shows(frequency))
-            x=drawFrequency(canvas,sample==null?Double.NaN:gpu?sample.gpuMHz:sample.cpuMHz,cell,x,baseline);
-        return x;
     }
 
     private int warningColor(double value,MonitorAppearance.Thresholds thresholds){

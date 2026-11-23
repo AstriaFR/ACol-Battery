@@ -1,11 +1,10 @@
 import{ScreenTimeCache,resetScreenEntry,normalizeSpans,missingSpans,hourlyTotals,normalizeAppSpans,hourAppRows}from'./screen-time-cache.js?v=acol-2.2s';
-const ns='http://www.w3.org/2000/svg';
+import{drawUsageStack,svg}from'./usage-stack.js?v=acol-2.2s';
 const startOfDay=wall=>{const d=new Date(wall);d.setHours(0,0,0,0);return d.getTime()};
 const moveDay=(wall,amount)=>{const d=new Date(wall);d.setDate(d.getDate()+amount);return d.getTime()};
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
 const dateText=wall=>{const d=new Date(wall);return`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`};
 function duration(ms){const minutes=Math.floor(Math.max(0,ms)/60000),hours=Math.floor(minutes/60);return hours?`${hours}小时${minutes%60?`${minutes%60}分钟`:''}`:minutes?`${minutes}分钟`:ms>0?'不足1分钟':'0分钟'}
-function svg(tag,attributes){const node=document.createElementNS(ns,tag);for(const [key,value]of Object.entries(attributes))node.setAttribute(key,String(value));return node}
 
 export class ScreenTimePanel{
   constructor(api,options={}){
@@ -160,7 +159,11 @@ export class ScreenTimePanel{
       const value=Math.max(0,Number(hours[hour])||0),known=(covered[hour]??0)>0;
       const group=svg('g',{'data-hour':hour,class:`screen-time-hour${hour===this.selected?' selected':''}`,role:'button',tabindex:0,'aria-label':`${clock(hour)}—${clock(hour+1)}，${known?this.formatDuration(value):'暂无分时数据'}`});
       group.append(svg('rect',{x:hour*12,y:0,width:12,height:140,fill:'transparent'}));
-      if(known&&value>0){const height=Math.max(.5,value/divisor/maximum*126);group.append(svg('rect',{x:hour*12+2.5,y:133-height,width:7,height,rx:2,class:'screen-time-bar'}));}
+      if(known&&value>0){
+        const height=Math.max(.5,value/divisor/maximum*126),bar={x:hour*12+2.5,y:133-height,width:7,height,rx:2};
+        if(data.stacks)drawUsageStack(group,bar,data.stacks[hour],value,`${this.plot.id}-${hour}`);
+        else group.append(svg('rect',{...bar,class:'screen-time-bar'}));
+      }
       this.plot.append(group);
     }
     if(loading)return;
@@ -231,7 +234,12 @@ export class ScreenTimePanel{
     const content=document.createElement('div');tip.append(content);
     if(!details)content.textContent='当天小时详情尚未准备完成';
     else{
-      for(const app of details.rows){const row=document.createElement('div');row.className='screen-time-app';const name=document.createElement('span');name.textContent=app.label;const value=document.createElement('span');value.textContent=`${app.minutes}${this.minuteUnit}`;row.append(name,value);content.append(row);}
+      for(const app of details.rows){
+        const row=document.createElement('div');row.className='screen-time-app';
+        const name=document.createElement('span');name.textContent=app.label;
+        const rank=this.data?.appRanks?.get(app.pkg);if(rank)name.dataset.usageRank=rank;
+        const value=document.createElement('span');value.textContent=`${app.minutes}${this.minuteUnit}`;row.append(name,value);content.append(row);
+      }
       if(!details.rows.length)content.textContent=details.known?'没有使用满30秒的应用':'该小时暂无已确认数据';
       else if(details.partial){const note=document.createElement('small');note.textContent='部分时段暂无数据';content.append(note);}
     }

@@ -42,16 +42,16 @@ const root=path.join(__dirname,'../src/main/assets/webroot/');
  for(const key of ['fastSeconds','performanceSeconds']){
   let accepted=false,dismissed=false,hint='',saved;
   const draft=key==='performanceSeconds'?'0.7':'0.6',index=key==='performanceSeconds'?13:10;
-  const nodes={keypadTitle:{textContent:key==='fastSeconds'?'功耗采样间隔':'性能采样间隔'},keypadApply:{disabled:false}};
+  const nodes={keypadTitle:{textContent:key==='fastSeconds'?'功耗采样间隔':'性能采样间隔'},keypadApply:{disabled:false},keypadRestore:{disabled:false}};
   globalThis.document={getElementById:id=>nodes[id]};
   const panel=Object.create(SettingsPanel.prototype);
   panel.ready=true;panel.editor={key,draft,field:{value:'10'}};
   panel.values=()=>({...DEFAULT_SETTINGS,[key]:Number(panel.editor.field.value)});
   panel.askChange=async(title,text)=>{hint=text;return accepted};
   panel.api=async(action,...args)=>{
-   assert.equal(action,'set_settings');validateApiArgs(action,args);saved=args[index];return{settings:panel.values()};
+   assert.equal(action,'set_setting');validateApiArgs(action,args);assert.equal(args[0],index);saved=args[1];return{settings:{...panel.values(),[key]:saved}};
   };
-  panel.onSaved=()=>{};panel.fill=()=>{};panel.setStatus=()=>{};
+  panel.onSaved=()=>{};panel.fill=settings=>{panel.editor.field.value=String(settings[key]);};panel.setStatus=()=>{};
   panel.editorError=text=>{throw Error(text)};panel.dismissEditor=()=>{dismissed=true};
   await panel.commitEditor();assert.equal(panel.editor.field.value,'10');assert.equal(saved,undefined);assert.ok(!dismissed);assert.ok(hint.includes(`${draft} 秒`));
   accepted=true;await panel.commitEditor();assert.equal(panel.editor.field.value,draft);assert.equal(saved,Number(draft));assert.ok(dismissed);assert.ok(hint.includes('继续当前记录'));
@@ -78,6 +78,79 @@ const{SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.j
  await panel.toggleRecording(true);assert.equal(reads,2);assert.equal(panel.recording.checked,true);assert.equal(panel.recordingProblem,'');
 }
 
+async function restoreOneField(){
+ const root=path.join(__dirname,'../src/main/assets/webroot/');
+ const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
+ const {DEFAULT_SETTINGS,settingSlots}=await import(pathToFileURL(path.join(root,'config.js')).href);
+ const field={value:'1',min:'0',max:'20'},writes=[];
+ const panel=Object.assign(Object.create(SettingsPanel.prototype),{
+   ready:true,keypad:{open:false},form:{elements:{namedItem:()=>field}},
+   flush:async()=>true,openEditor(editor){this.editor=editor;},
+   writeSetting:async(...args)=>writes.push(args)
+ });
+ for(const [index,key] of settingSlots.entries()){
+   if(!key||typeof DEFAULT_SETTINGS[key]==='boolean')continue;
+   panel.edit(key,false);
+   await panel.editor.restore();
+   assert.deepEqual(writes.at(-1),['reset_setting',index]);
+ }
+}
+
+async function advancedOptions(){
+ const root=path.join(__dirname,'../src/main/assets/webroot/');
+ const {createAdvancedPage}=await import(pathToFileURL(path.join(root,'advanced-settings.js')).href);
+ const nodes=new Map(),writes=[];
+ function element(){
+   const attributes=new Map();
+   return{
+     hidden:true,append(){},getAttribute:key=>attributes.get(key),setAttribute:(key,value)=>attributes.set(key,value),
+     showModal(){this.open=true;},addEventListener(name,callback){this.onclose=callback;},
+     close(value){this.open=false;this.returnValue=value;this.onclose?.();}
+   };
+ }
+ const get=id=>{
+   if(!nodes.has(id))nodes.set(id,element());
+   return nodes.get(id);
+ };
+ globalThis.document={getElementById:get,createElement:element,hidden:false};
+ globalThis.history={state:null};
+ get('singleCell').textContent='单电芯';
+ get('dualCell').textContent='双电芯';
+ let cellCount=2,advancedAutoRestore=false,rejectToggle=false;
+ const page=createAdvancedPage(async(action,value)=>{
+   if(action==='oplus_votes')return{nodes:{},cellCount,advancedAutoRestore};
+   writes.push([action,value]);
+   if(action==='set_cell_count')return{cellCount:cellCount=value};
+   if(rejectToggle)throw Error('后台暂不可用');
+   return{advancedAutoRestore:advancedAutoRestore=value===1};
+ },{keypad:{}});
+ const flush=()=>new Promise(resolve=>setImmediate(resolve));
+ try{
+   page.open();
+   await flush();
+   assert.equal(get('dualCell').getAttribute('aria-pressed'),'true');
+   assert.equal(get('singleCell').disabled,false);
+   const cancelled=get('singleCell').onclick();
+   get('advancedConfirmCancel').onclick();
+   await cancelled;
+   assert.deepEqual(writes,[]);
+   const confirmed=get('singleCell').onclick();
+   get('advancedConfirmApply').onclick();
+   await confirmed;
+   assert.deepEqual(writes,[['set_cell_count',1]]);
+   assert.equal(get('singleCell').getAttribute('aria-pressed'),'true');
+   const toggle=get('advancedAutoRestore');
+   assert.equal(toggle.checked,false);
+   toggle.checked=true;
+   await toggle.onchange();
+   assert.equal(toggle.checked,true);
+   rejectToggle=true;
+   toggle.checked=false;
+   await toggle.onchange();
+   assert.equal(toggle.checked,true);
+   assert.deepEqual(writes.slice(1),[['set_advanced_auto_restore',1],['set_advanced_auto_restore',0]]);
+ }finally{page.close();}
+}
 async function selectionPreferences(){
 const storage=new Map();
 globalThis.localStorage={
@@ -106,17 +179,18 @@ const{loadSelection,saveSelection}=await import(pathToFileURL(path.join(root,'pr
 async function resetSettings(){
  const root=path.join(__dirname,'../src/main/assets/webroot/');
  const {SettingsPanel}=await import(pathToFileURL(path.join(root,'settings-panel.js')).href);
- const {DEFAULT_SETTINGS,encodeSettings}=await import(pathToFileURL(path.join(root,'config.js')).href);
+ const {DEFAULT_SETTINGS}=await import(pathToFileURL(path.join(root,'config.js')).href);
  const nodes={resetSettings:{disabled:false},themeToggle:{disabled:false}};globalThis.document={getElementById:id=>nodes[id]};
  const store=new Map();globalThis.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};
  const panel=Object.create(SettingsPanel.prototype),calls=[],defaults={...DEFAULT_SETTINGS,capacityAh:6.23};
+ let filled;
  Object.assign(panel,{ready:true,form:{elements:[{disabled:false}]},fastButton:{},recording:{},powerDisplay:{},fastValue:true,powerDisplayValue:true,recordingValue:false,
-   askChange:async()=>true,flush:async()=>true,fill:()=>{},onSaved:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
+   askChange:async()=>true,flush:async()=>true,fill:value=>{filled=value;},onSaved:()=>{},onResetUi:()=>calls.push(['theme']),setStatus:()=>{},
    updateFast(v){if(typeof v==='boolean')this.fastValue=v},updatePowerDisplay(v){this.powerDisplayValue=v},updateRecording(v){this.recordingValue=v},
    api:async(action,...args)=>{calls.push([action,...args]);if(action==='reset_settings')return{settings:defaults};if(action==='set_fast')return{fastEnabled:false,settings:defaults};if(action==='set_power_display')return{powerDisplayEnabled:false,settings:defaults};if(action==='set_recording')return{recordingEnabled:true,settings:defaults};throw Error(action);}
  });
  assert.equal(await panel.resetDefaults(),true);
- assert.deepEqual(JSON.parse(panel.lastSaved),encodeSettings(defaults),'uses the defaults supplied by the device');
+ assert.deepEqual(filled,defaults,'uses the defaults supplied by the device');
  assert.deepEqual(calls.map(([action])=>action),['reset_settings','set_fast','set_power_display','set_recording','theme']);
  assert.equal(panel.resetBusy,false);assert.equal(panel.resetPromise,null);
  calls.length=0;panel.askChange=async()=>false;assert.equal(await panel.resetDefaults(),false);assert.equal(calls.length,0,'cancelling does not modify settings');
@@ -175,4 +249,4 @@ async function keypadKeyboard(){
  press('Enter',nodes.get('keypadCancel'));press('Enter',digit);press('7',digit);press('Enter',nodes.get('keypadApply'));
  assert.deepEqual(calls,['cancel','3','7','apply']);
 }
-runCases([samplingSettings,recordingControl,selectionPreferences,resetSettings,gameToggle,gameMetrics,keypadKeyboard]).then(()=>console.log('Settings: intervals, confirmation, recording control, reset, saved selections and keypad passed')).catch(error=>{console.error(error);process.exitCode=1;});
+runCases([samplingSettings,recordingControl,restoreOneField,advancedOptions,selectionPreferences,resetSettings,gameToggle,gameMetrics,keypadKeyboard]).then(()=>console.log('Settings: intervals, confirmation, recording control, cell count, reset, saved selections and keypad passed')).catch(error=>{console.error(error);process.exitCode=1;});

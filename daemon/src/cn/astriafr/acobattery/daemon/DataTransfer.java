@@ -94,7 +94,6 @@ final class DataTransfer {
         File file=new File(base,"records.db");
         if(Files.isSymbolicLink(file.toPath()))throw new IOException("记录数据库路径异常，未进行整理。");
         if(!file.exists())return;
-        SafeDatabase.inspectExisting(file);
         RecordStore store=new RecordStore(base);
         try(SQLiteDatabase db=store.db){new DeferredStats(ctx,store,null).settleForBackup();}
     }
@@ -103,8 +102,7 @@ final class DataTransfer {
         File file=new File(base,"records.db");
         if(Files.isSymbolicLink(file.toPath()))throw new IOException("记录数据库路径异常，未进行整理。");
         if(!file.exists())return;
-        SafeDatabase.inspectExisting(file);
-        try(SQLiteDatabase db=SafeDatabase.open(file)){
+        try(SQLiteDatabase db=SafeDatabase.openRecords(file)){
             checkpoint(db);
             long required=Math.multiplyExact(file.length(),2L);
             if(base.getUsableSpace()<required)throw new IOException("存储空间不足，无法整理数据库并继续备份。");
@@ -121,10 +119,9 @@ final class DataTransfer {
         }
     }
     static void validateDatabase(File incoming)throws Exception{
-        File file=new File(incoming,"root/records.db");SafeDatabase.inspectExisting(file);
-        try(SQLiteDatabase db=SafeDatabase.open(file)){
+        File file=new File(incoming,"root/records.db");
+        try(SQLiteDatabase db=SafeDatabase.openRecords(file)){
             try(android.database.Cursor check=db.rawQuery("PRAGMA quick_check(1)",null)){if(!check.moveToFirst()||!"ok".equalsIgnoreCase(check.getString(0)))throw new IOException("备份数据库校验失败。");}
-            if(db.getVersion()>RecordStore.SCHEMA_VERSION)throw new IOException("备份数据库校验失败。");
             for(String name:new String[]{"sessions","samples","runtime"})try(android.database.Cursor tables=db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?",new String[]{name})){if(!tables.moveToFirst())throw new IOException("备份数据库缺少必要数据表。");}
             // Check the base columns. Older databases may omit columns added by RecordStore.upgrade().
             for(String sql:new String[]{
@@ -132,7 +129,9 @@ final class DataTransfer {
                 "SELECT session,x,rm,pct,current,voltage,power,quality,interval_ms FROM samples LIMIT 0",
                 "SELECT key,value FROM runtime LIMIT 0"
             })try(android.database.Cursor columns=db.rawQuery(sql,null)){columns.moveToFirst();}
-            db.execSQL("UPDATE sessions SET active=0,reason='backup_restored' WHERE active=1");db.execSQL("DELETE FROM runtime WHERE key IN ('session_progress_v1','game_progress_v1','full_tail_boot','cell_count_v1')");
+            db.execSQL("UPDATE sessions SET active=0,reason='backup_restored' WHERE active=1");
+            db.execSQL("DELETE FROM runtime WHERE key IN ('session_progress_v1','game_progress_v1','full_tail_boot','cell_count_v1','manual_cell_count_v1')");
+            db.execSQL("DELETE FROM runtime WHERE key=?",new Object[]{AdvancedRestore.KEY});
             RecordStore.markSamplingDefaultsMigrated(db);
             try(android.database.Cursor checkpoint=db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)",null)){if(!checkpoint.moveToFirst()||checkpoint.getInt(0)!=0)throw new IOException("备份数据库尚未完成写入。");}
         }

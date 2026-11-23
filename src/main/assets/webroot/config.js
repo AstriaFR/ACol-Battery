@@ -1,5 +1,8 @@
 export const DEFAULT_SETTINGS=Object.freeze({deletePct:1,hidePct:10,energyWh:19,capacityAh:5,voltageMin:3.00,voltageMax:4.50,tempMin:20,tempMax:40,screenOnMinutes:2,screenOffMinutes:30,fastSeconds:1.5,fastAutoOff:true,chargeSeconds:3,performanceSeconds:1.5,gaugeIntervalOverride:false});
 export const settingsKeys=Object.keys(DEFAULT_SETTINGS);
+export const settingSlots=['deletePct','hidePct','capacityAh',null,'voltageMin','voltageMax','tempMin','tempMax','screenOnMinutes','screenOffMinutes','fastSeconds','fastAutoOff','chargeSeconds','performanceSeconds','energyWh','gaugeIntervalOverride'];
+export let chartSettings={...DEFAULT_SETTINGS};
+export function setChartSettings(value){chartSettings={...DEFAULT_SETTINGS,...value};}
 export function encodeSettings(value){
   const finite=v=>typeof v==='number'&&Number.isFinite(v);
   const step=(v,n)=>Math.abs(v*n-Math.round(v*n))<1e-7;

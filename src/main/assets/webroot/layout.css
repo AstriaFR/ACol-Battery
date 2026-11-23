@@ -99,3 +99,43 @@ dialog{max-height:calc(100dvh - 24px);overflow-y:auto;overflow-wrap:anywhere}
 .detail[data-panel-loading]>.page-scroll{display:none}
 .detail[data-panel-loading] .subpage-header button:not(.back):not(.page-home){visibility:hidden}
 .panel-loading-status{margin:12px 2px;color:var(--muted)}
+
+/* The tab bar stays in its own row while the selected page moves. */
+#appShell{display:grid;grid-template: minmax(0,1fr) auto / minmax(0,1fr)}
+#appShell>.app-page{grid-area:1/1;background:var(--bg)}
+#appShell>.bottom-nav{grid-area:2/1}
+body>.detail{background:var(--bg)}
+body>#detail{background:var(--plot-bg)}
+
+.bottom-nav{position:relative;isolation:isolate}
+.bottom-nav::before{content:"";position:absolute;z-index:-1;inset:5px auto 5px 5px;width:calc((100% - 18px)/3);border-radius:13px;background:#eaf7f2;pointer-events:none}
+body[data-tab=records] .bottom-nav::before{transform:translateX(calc(100% + 4px))}
+body[data-tab=settings] .bottom-nav::before{transform:translateX(calc(200% + 8px))}
+:root[data-theme=dark] .bottom-nav::before{background:#0d2016}
+#tabBar .tab-button{background:transparent}
+.panel-loading-status{animation:acol-loading-appear 140ms 130ms both}
+@keyframes acol-loading-appear{from{opacity:0}to{opacity:1}}
+#detail[data-record-pending] #detailScroll>:not(.record-detail-head):not(#chartPanel):not(.panel-loading-status){display:none}
+#detail[data-record-pending] #chartPanel>:not(.plotwrap){visibility:hidden}
+#detail[data-record-pending] #chartPanel .plotwrap{visibility:hidden}
+#detail[data-record-pending] .panel-loading-status{margin:6px 18px 12px;min-height:64px}
+#detail .record-entry-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--detail-wash);border-radius:11px;animation:none}
+.record-entry-summary>div{display:grid;align-content:center;gap:4px;padding:8px}
+.record-entry-summary strong{font-size:17px;color:var(--text);line-height:1.2}
+.record-entry-summary small{font-size:10px;color:var(--muted)}
+.detail[data-panel-loading]::after{content:"";display:block;flex:none;height:clamp(90px,22vh,170px);border-radius:14px;background:var(--card);border:1px solid var(--line);animation:acol-loading-appear 140ms 130ms both}
+@media(prefers-reduced-motion:no-preference){
+  .bottom-nav::before{transition:transform 180ms cubic-bezier(.2,.75,.25,1)}
+  .chartpanel.expanded .plotwrap{animation:acol-plot-enter 155ms ease-out}
+  @keyframes acol-plot-enter{from{opacity:.65}to{opacity:1}}
+  :where(.subpage-header button,.page-head button,.tab-button,.dialogbuttons button,.keypad-grid button,.record-open,.usage-app-row,.setting-switch input){transition:scale 85ms ease-out}
+  :where(.subpage-header button,.page-head button,.tab-button,.dialogbuttons button,.keypad-grid button,.record-open,.usage-app-row,.setting-switch input):enabled:active{scale:.97}
+  dialog::backdrop{transition:opacity 150ms ease-out,display 150ms allow-discrete,overlay 150ms allow-discrete}
+  @starting-style{dialog[open]::backdrop{opacity:0}}
+  dialog:not([open])::backdrop{opacity:0}
+  @supports (transition-behavior:allow-discrete){
+    dialog:not([open]){opacity:0;transform:scale(.97);pointer-events:none;transition:opacity 110ms,transform 110ms,display 110ms allow-discrete,overlay 110ms allow-discrete}
+    dialog.numeric-keypad:not([open]){transform:translateY(24px)}
+  }
+}
+@media(prefers-reduced-motion:reduce){.panel-loading-status,.detail[data-panel-loading]::after{animation:none}}

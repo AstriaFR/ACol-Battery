@@ -353,8 +353,16 @@ body:has(main:not([hidden])){overflow:hidden}
 .battery-info-card strong.battery-near-actual{color:var(--charge)}
 .battery-info-note{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 .battery-info-note{display:flex;align-items:center;flex-wrap:wrap;column-gap:8px;row-gap:2px}
-.battery-info-note .battery-calibration-note{flex-basis:100%}
 .battery-info-note .battery-estimate-info{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;min-height:0;flex-shrink:0;padding:0;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 14px Georgia,serif}
+#batteryInfoPanel{padding-bottom:calc(15.6px + env(safe-area-inset-bottom))}
+#batteryInfoPanel>.page-scroll{margin-inline:-8px}
+#batteryInfoPanel .battery-info-cards{gap:4.8px}
+#batteryInfoPanel .battery-info-card{padding:8.4px 9.6px;gap:7.2px}
+#batteryInfoPanel .battery-info-card small{font-size:12.6px;margin-bottom:1.2px}
+#batteryInfoPanel .battery-info-card strong{font-size:17.1px}
+#batteryInfoPanel .battery-info-note{font-size:10.8px;gap:1.2px 4.8px}
+#batteryInfoPanel .battery-estimate-info{width:13.2px;height:13.2px;font-size:12.6px}
+#batteryInfoPanel .battery-info-error{margin:6px 1.2px 0;font-size:9.9px}
 .summary .remaining-info{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;min-height:0;flex-shrink:0;padding:0;margin-left:2px;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 11px Georgia,serif;letter-spacing:0;align-self:center}
 .remaining-explanation{padding:22px;max-height:80dvh;overflow-y:auto}
 .remaining-explanation h3{font-size:16px;margin:0 0 12px}
@@ -507,6 +515,10 @@ body:has(dialog[open])>.edge-scrollbar{visibility:hidden}
 :is(#monitorAppearanceControls,#gameMetricsControls){min-width:0;padding:0;margin:0;border:0;display:grid;gap:10px}
 :is(#monitorAppearanceControls,#gameMetricsControls) h2{margin:0 0 6px;color:var(--accent)}
 :is(#monitorAppearanceControls,#gameMetricsControls) .setting-heading{min-height:36px}
+.monitor-metric-list{position:relative}
+.monitor-metric-list[data-reordering] label{cursor:grabbing}
+.monitor-metric-list [data-dragged]{position:relative;z-index:2;translate:0 var(--monitor-drag-y);background:var(--card);border-radius:8px;box-shadow:0 3px 12px #0003;outline:1px solid var(--theme-line)}
+.monitor-metric-list[data-drop]::after{content:"";position:absolute;z-index:3;top:var(--monitor-drop-y);left:0;right:0;height:2px;border-radius:2px;background:var(--accent);pointer-events:none}
 .monitor-threshold-grid{display:grid;grid-template-columns:auto repeat(3,minmax(0,1fr));gap:7px;align-items:center;text-align:center}
 .monitor-threshold-grid>span{font-size:12px;color:var(--muted)}
 .monitor-threshold-grid>span:nth-child(4n+1){text-align:left}
@@ -514,9 +526,9 @@ body:has(dialog[open])>.edge-scrollbar{visibility:hidden}
 .monitor-slider{display:block;width:100%;margin:0 0 8px;accent-color:var(--accent)}
 .monitor-options{display:inline-grid;grid-template-columns:repeat(2,1fr);padding:2px;gap:2px;border:1px solid var(--line);border-radius:9px;background:var(--card)}
 #advancedChargingMode{grid-template-columns:repeat(4,1fr)}
-:is(#monitorAppearanceControls,#gameMetricsControls) .monitor-options button,#advancedChargingMode button{min-height:29px;padding:3px 9px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;white-space:nowrap}
-:is(#monitorAppearanceControls,#gameMetricsControls) .monitor-options button[aria-pressed=true],#advancedChargingMode button[aria-pressed=true]{background:var(--theme-soft);color:var(--accent);font-weight:600}
-#advancedChargingMode button:disabled{opacity:.5}
+:is(#monitorAppearanceControls,#gameMetricsControls) .monitor-options button,.advanced-options button{min-height:29px;padding:3px 9px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;white-space:nowrap}
+:is(#monitorAppearanceControls,#gameMetricsControls) .monitor-options button[aria-pressed=true],.advanced-options button[aria-pressed=true]{background:var(--theme-soft);color:var(--accent);font-weight:600}
+.advanced-options button:disabled{opacity:.5}
 #resetMonitorAppearance,#resetAdvancedSettings{min-height:38px;padding:8px 12px;font-size:14px;white-space:nowrap}
 .monitor-sampling-note{color:var(--muted);font-size:11px;line-height:1.65;margin:10px 0 0}
 #confirmRecording{transition:none}
@@ -718,6 +730,13 @@ main.app-shell{--accent:inherit;--theme-soft:inherit;--theme-line:inherit;displa
 .usage-week-day .screen-time-bar{opacity:.7}
 .usage-week-day.selected .screen-time-bar{opacity:1}
 .usage-week-day:focus-visible .screen-time-bar{stroke:var(--text);stroke-width:1}
+:root{--usage-rank-1:#037ffb;--usage-rank-2:#a923fe;--usage-rank-3:#fe7702;--usage-other:#cecece}
+:root[data-theme=dark]{--usage-rank-1:#58a9ff;--usage-rank-2:#c477ff;--usage-rank-3:#ff9a44;--usage-other:#777}
+[data-usage-rank="1"]{--usage-rank-color:var(--usage-rank-1)}
+[data-usage-rank="2"]{--usage-rank-color:var(--usage-rank-2)}
+[data-usage-rank="3"]{--usage-rank-color:var(--usage-rank-3)}
+.usage-app-text strong[data-usage-rank],.screen-time-app span[data-usage-rank]{color:var(--usage-rank-color)}
+.screen-time-bar[data-usage-rank]{fill:var(--usage-rank-color,var(--usage-other));opacity:.95}
 
 .usage-week-app-list{margin-top:14px}
 
@@ -751,6 +770,7 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 .advanced-card{border-radius:16px;margin-bottom:12px;padding:14px 15px}
 .advanced-card:last-child{margin-bottom:0}
 .advanced-card h2{font-size:16px;margin:0 0 8px;color:var(--accent)}
+.advanced-battery-type{margin-inline-start:4px;color:var(--muted);font-size:9px;font-weight:400;line-height:1;vertical-align:-2px;white-space:nowrap}
 .advanced-live-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .advanced-live-heading h2{margin:0}
 .advanced-live-heading>.settings-button{min-height:18px;padding:0 8px}

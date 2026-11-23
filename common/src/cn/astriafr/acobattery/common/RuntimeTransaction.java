@@ -64,7 +64,6 @@ public final class RuntimeTransaction {
         Properties state=new Properties();try(InputStream in=new FileInputStream(transaction)){state.load(in);}return state;
     }
     private void prepare(String version,String owner)throws Exception{
-        for(String name:RuntimePayload.FILES)if(!new File(stage,name).isFile()||new File(stage,name).length()==0)throw new IOException("待更新的后台文件不完整。");
         cleanBackup();if(backup.exists())throw new IOException("无法准备后台恢复目录。");
         Files.createDirectories(new File(backup,"bin").toPath());
         for(String name:RuntimePayload.FILES)optional(new File(runtime,name),new File(backup,name));
@@ -77,8 +76,9 @@ public final class RuntimeTransaction {
         text(transaction,new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.ISO_8859_1));
         Files.deleteIfExists(new File(base,"update.installed").toPath());text(new File(base,"update.pending"),"1");
     }
-    private void install()throws Exception{
+    private void install(String contentsDigest)throws Exception{
         for(String name:RuntimePayload.FILES)copy(new File(stage,name),new File(runtime,name));
+        if(contentsDigest!=null)RuntimePayload.verifyContents(runtime,contentsDigest);
         permissions(runtime);text(new File(base,"update.installed"),"1");
     }
 
@@ -109,14 +109,24 @@ public final class RuntimeTransaction {
     private void clearPending()throws IOException{
         Files.deleteIfExists(new File(base,"update.pending").toPath());Files.deleteIfExists(new File(base,"update.installed").toPath());
     }
-    public void apply(String version,String owner,Control control)throws Exception{
+    void apply(String version,String owner,Control control)throws Exception{
         apply(version,owner,control,true);
     }
-    public void apply(String version,String owner,Control control,boolean startAfterInstall)throws Exception{
+    void apply(String version,String owner,Control control,boolean startAfterInstall)throws Exception{
+        apply(version,owner,control,startAfterInstall,null);
+    }
+    public void applyVerified(String version,String owner,Control control,String contentsDigest)throws Exception{
+        if(contentsDigest==null||!contentsDigest.matches("[0-9a-f]{64}"))throw new IOException("后台更新文件校验值无效。");
+        apply(version,owner,control,false,contentsDigest);
+    }
+    private void apply(String version,String owner,Control control,boolean startAfterInstall,String contentsDigest)throws Exception{
         locked(()->{
             if(transaction.exists())throw new IOException("上次后台更新尚未恢复，请重新打开应用。");
+            if(contentsDigest!=null)RuntimePayload.verifyContents(stage,contentsDigest);
+            else for(String name:RuntimePayload.FILES)if(!new File(stage,name).isFile()||new File(stage,name).length()==0)
+                throw new IOException("待更新的后台文件不完整。");
             try{
-                prepare(version,owner);control.stop();install();
+                prepare(version,owner);control.stop();install(contentsDigest);
                 if(startAfterInstall)control.start();
             }catch(Exception failure){
                 try{

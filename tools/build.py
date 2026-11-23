@@ -68,14 +68,21 @@ for name in ['tmp','daemon-classes','daemon-dex','classes','dex','generated','re
 (app/'dist').mkdir(exist_ok=True)
 env=os.environ.copy();env.update(TEMP=str(build/'tmp'),TMP=str(build/'tmp'),TMPDIR=str(build/'tmp'),ACO_SIGNING_PASSWORD=signing_password)
 def run(*args):subprocess.run([str(arg) for arg in args],check=True,env=env)
+def write_zip_entry(archive,path,name):
+    entry=zipfile.ZipInfo(name)
+    entry.create_system=3
+    entry.external_attr=0o100644<<16
+    archive.writestr(entry,path.read_bytes(),compress_type=archive.compression)
+
 def jar_classes(directory,output):
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(directory.rglob('*.class')):archive.write(path,path.relative_to(directory).as_posix())
+        for path in sorted(directory.rglob('*.class')):write_zip_entry(archive,path,path.relative_to(directory).as_posix())
 
 run(jdk/('javac'+exe),'--release','8','-encoding','UTF-8','-cp',android,'-d',build/'daemon-classes',*sorted((app/'daemon/src').rglob('*.java')),*sorted((app/'common/src').rglob('*.java')))
 jar_classes(build/'daemon-classes',build/'daemon.jar')
 run(jdk/('java'+exe),'-cp',tools/'lib/d8.jar','com.android.tools.r8.D8','--min-api',min_api,'--lib',android,'--output',build/'daemon-dex',build/'daemon.jar')
-with zipfile.ZipFile(build/'payload/bin/daemon.dex.jar','w',zipfile.ZIP_DEFLATED) as archive:archive.write(build/'daemon-dex/classes.dex','classes.dex')
+# Store inner entries directly. The APK compresses the complete payload later.
+with zipfile.ZipFile(build/'payload/bin/daemon.dex.jar','w') as archive:write_zip_entry(archive,build/'daemon-dex/classes.dex','classes.dex')
 for source,output,flags in [('wait.c','libcurvewait.so',['-shared','-fPIC']),('launcher.c','aco-launcher',['-fPIE','-pie'])]:
     run(ndk/('bin/clang'+exe),'--target=aarch64-linux-android'+min_api,'--sysroot='+str(ndk/'sysroot'),*flags,'-O2','-Wall','-Wextra','-Werror','-Wl,-z,max-page-size=16384','-Wl,-z,relro,-z,now',app/'daemon/src'/source,'-o',build/'payload/bin'/output)
 for path in (app/'runtime').glob('*.sh'):
@@ -85,9 +92,9 @@ for path in (app/'runtime').glob('*.sh'):
     if script.startswith(b'\xef\xbb\xbf'):script=script[3:]
     (build/'payload'/path.name).write_bytes(script)
 payload=app/'src/main/assets/payload.zip'
-with zipfile.ZipFile(payload,'w',zipfile.ZIP_DEFLATED) as archive:
+with zipfile.ZipFile(payload,'w') as archive:
     for path in sorted((build/'payload').rglob('*')):
-        if path.is_file():archive.write(path,path.relative_to(build/'payload').as_posix())
+        if path.is_file():write_zip_entry(archive,path,path.relative_to(build/'payload').as_posix())
 (app/'src/main/assets/payload.sha256').write_text(hashlib.sha256(payload.read_bytes()).hexdigest(),encoding='ascii')
 shutil.copyfile(app/'src/main/assets/webroot/assets/acol-icon.png',build/'res/drawable/acol_icon.png')
 compiled=build/'res/compiled'

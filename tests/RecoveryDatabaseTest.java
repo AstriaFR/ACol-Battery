@@ -4,6 +4,7 @@ import android.database.Cursor;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
+import org.json.JSONArray;
 
 /** Runs real Main recovery/append SQL against an isolated SQLite database. */
 public final class RecoveryDatabaseTest {
@@ -14,10 +15,14 @@ public final class RecoveryDatabaseTest {
         Core.Reading r=new Core.Reading();r.elapsed=elapsed;r.wall=1000000+elapsed;r.rm=rm;r.pct=rm/100;
         r.cellCount=2;r.cell1=r.vmin=3900;r.cell2=r.vmax=4000;r.current=online?-1000:300;r.online=online;return r;
     }
-    static Main open(File directory,String boot)throws Exception {
+    static Main open(File directory)throws Exception {
         Main m=new Main(context,new File(directory,"runtime"),directory);
-        Field id=Main.class.getDeclaredField("boot");id.setAccessible(true);id.set(m,boot);
         m.performance.close();return m;
+    }
+    static Main open(File directory,String boot)throws Exception {
+        Main m=open(directory);
+        Field id=Main.class.getDeclaredField("boot");id.setAccessible(true);id.set(m,boot);
+        return m;
     }
     static void release(Main m)throws Exception {m.performance.close();m.db.close();m.lock.release();m.lockFile.close();}
     static long value(Main m,String sql){try(Cursor c=m.db.rawQuery(sql,null)){check(c.moveToFirst());return c.getLong(0);}}
@@ -65,8 +70,14 @@ public final class RecoveryDatabaseTest {
             check(next.session!=old);check(next.state==1);check(value(next,"SELECT COUNT(*) FROM sessions WHERE active=1")==1);release(next);
         }
         File dir=Files.createTempDirectory("acol-recovery-full-").toFile();Main first=open(dir,"boot-a");
-        first.state=1;first.begin(reading(10000,5000,true));first.finish("full_tail_confirmed");release(first);
-        Main next=open(dir,"boot-a");Core.Reading r=reading(11000,5000,true);r.full=true;next.recover(r);
+        first.state=1;first.begin(reading(10000,5000,true));first.append(reading(13000,5008,true));first.finish("full_tail_confirmed");
+        org.json.JSONObject manual=first.store.recordBatteryHistory(new org.json.JSONObject().put("cycles",2),1014000);
+        check(!manual.getJSONObject("snapshot").has("tailRm"));
+        org.json.JSONArray trend=first.store.history("battery_history_trend",new org.json.JSONArray()).getJSONArray("items");
+        close(trend.getJSONObject(0).getDouble("tailRm"),5008);
+        check(trend.getJSONObject(1).isNull("tailRm"));
+        release(first);
+        Main next=open(dir,"boot-a");Core.Reading r=reading(14000,5008,true);r.full=true;next.recover(r);
         check(next.session<0);check(next.state==2);check(value(next,"SELECT COUNT(*) FROM sessions WHERE active=1")==0);release(next);
         File logDir=Files.createTempDirectory("acol-recovery-charge-log-").toFile();Main logged=open(logDir,"boot-a");
         logged.state=1;Core.Reading observed=reading(10000,5000,true);Core.applyTail(observed,4490,0,1);
@@ -135,13 +146,13 @@ public final class RecoveryDatabaseTest {
     static void standaloneGameWaitsForReadings()throws Exception {
         File dir=Files.createTempDirectory("acol-recovery-game-only-").toFile();
         Files.createFile(new File(dir,"recording.disabled").toPath());
-        Main first=open(dir,"boot-a");
+        Main first=open(dir);
         first.rememberFast(true);
         first.withGame(()->first.begin(reading(10000,5000,false)));
         long id=first.gameTrack.session;
         release(first);
 
-        Main next=open(dir,"boot-a");
+        Main next=open(dir);
         next.recoverWhenReady(reading(11000,Double.NaN,false));
         check(next.fastEnabled&&!next.recordingEnabled&&!next.powerReady&&next.powerRetryAt>11000);
         check(value(next,"SELECT active FROM sessions")==1);
@@ -151,13 +162,66 @@ public final class RecoveryDatabaseTest {
         check(value(next,"SELECT COUNT(*) FROM sessions")==1);
         release(next);
     }
+    static Core.Reading tailReading(long elapsed,double mv,double current){
+        Core.Reading r=reading(elapsed,5000,true);
+        r.cellCount=1;r.vmin=r.vmax=r.cell1=mv;r.cell2=Double.NaN;r.current=current;
+        return r;
+    }
+    static void completedTailAtStableCurrent()throws Exception {
+        File dir=Files.createTempDirectory("acol-recovery-tail-standby-").toFile();
+        Main m=open(dir,"boot-a");
+        try{
+            m.state=1;m.stableOnline=true;
+            m.begin(tailReading(0,4400,-75));
+            m.sampling.sampled(1,0);
+            for(long t=3000;t<=630000;t+=3000)m.collectStable(tailReading(t,4400,-75),false,t);
+            check(m.state==2&&m.session<0&&value(m,"SELECT COUNT(*) FROM battery_history")==1);
+            check(value(m,"SELECT COUNT(*) FROM sessions WHERE active=1")==0);
+        }finally{release(m);}
+
+        Main recovered=open(dir,"boot-a");
+        try{
+            recovered.stableOnline=true;
+            recovered.recoverTracks(tailReading(645000,4399,-75));
+            check(recovered.state==2&&recovered.session<0);
+            recovered.collectStable(tailReading(660000,4399,-120),false,660000);
+            check(recovered.state==2&&recovered.session<0);
+            recovered.collectStable(tailReading(675000,4399,-75),false,675000);
+            recovered.collectStable(tailReading(690000,4399,-120),false,690000);
+            check(recovered.state==2&&recovered.session<0);
+            recovered.collectStable(tailReading(705000,4399,-120),false,705000);
+            check(recovered.state==1&&recovered.session>0);
+            check(value(recovered,"SELECT COUNT(*) FROM battery_history")==1);
+            check(value(recovered,"SELECT COUNT(*) FROM sessions WHERE active=1 AND kind='charge'")==1);
+        }finally{release(recovered);}
+    }
+    static void historyPagination(File directory)throws Exception {
+        RecordStore store=new RecordStore(directory);
+        try(android.database.sqlite.SQLiteDatabase db=store.db){
+            store.upgrade();
+            for(int id=1;id<=46;id++)db.execSQL("INSERT INTO sessions(id,kind,active,fast_seconds) VALUES(?,'discharge',?,?)",
+                new Object[]{id,id<=2?1:0,id==1?1:0});
+            JSONArray args=new JSONArray().put(1).put(0).put(0).put(0).put(0);
+            JSONArray first=store.list(args,0,1).getJSONArray("records");
+            check(first.length()==40&&first.getJSONObject(0).getInt("id")==1&&first.getJSONObject(1).getInt("id")==2);
+            int last=first.getJSONObject(39).getInt("id");check(last==9);
+            args.put(1,last).put(1).put(2);
+            JSONArray second=store.list(args,0,1).getJSONArray("records");
+            check(second.length()==6);
+            for(int i=0;i<second.length();i++)check(second.getJSONObject(i).getInt("id")==8-i);
+            args.put(1,1).put(6,0);
+            check(store.list(args,0,1).getJSONArray("records").getJSONObject(0).getInt("id")==2);
+        }
+    }
     public static void main(String[] args)throws Exception {
         android.os.Looper.prepareMainLooper();
         Class<?> activityThread=Class.forName("android.app.ActivityThread");
         Object thread=activityThread.getMethod("systemMain").invoke(null);
         context=(android.content.Context)activityThread.getMethod("getSystemContext").invoke(thread);
+        historyPagination(Files.createTempDirectory("acol-history-page-").toFile());
+        completedTailAtStableCurrent();
         sameBootAndLegacy();fastMinuteAnchor();splitAndTail();rebootResume();damagedCheckpointAndRollback();samplingSettings();standaloneGameWaitsForReadings();
-        System.out.println("SQLite recovery: legacy upgrade, repeated resume, game minute accounting, power transition, kernel reboot, completed tail, charging, corrupt checkpoint and transaction rollback passed");
+        System.out.println("SQLite recovery: legacy upgrade, repeated resume, game minute accounting, power transition, kernel reboot, one tail snapshot at 4400 mV, charging restart, corrupt checkpoint and transaction rollback passed");
         System.exit(0);
     }
 }

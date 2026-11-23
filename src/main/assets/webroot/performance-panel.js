@@ -25,7 +25,7 @@ export class PerformanceChart extends Chart{
 }
 export class PerformancePanel{
   constructor(api){
-    this.api=api;this.id=null;this.token=0;this.points=[];this.cursor=0;this.follow=true;this.busy=false;this.expanded=false;
+    this.api=api;this.id=null;this.token=0;this.points=[];this.cursor=0;this.follow=true;this.busy=false;this.pollAgain=false;this.expanded=false;
     bindExport($('performanceExport'),()=>`性能曲线-${this.id}.csv`,()=>performanceCsv(api,this.id));
     this.chart=new PerformanceChart($('performancePlot'),$('performanceTooltip'),()=>{this.follow=false;this.renderFollow();});
     this.chart.onInteract=()=>{this.follow=false;this.renderFollow();};
@@ -34,8 +34,12 @@ export class PerformancePanel{
     $('performanceFullscreen').onclick=()=>this.fullscreen(true);
     $('performanceExit').onclick=()=>this.fullscreen(false);
     $('performanceSources').onclick=()=>{$('performanceMethod').hidden=!$('performanceMethod').hidden;};
-    document.addEventListener('visibilitychange',()=>{clearTimeout(this.timer);if(!document.hidden&&this.id)this.poll(this.token);});
-    window.addEventListener('pagehide',()=>clearTimeout(this.timer));
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden)this.pausePolling();
+      else this.poll(this.token);
+    });
+    window.addEventListener('pagehide',()=>{this.pageHidden=true;this.pausePolling();});
+    window.addEventListener('pageshow',event=>{this.pageHidden=false;if(event.persisted)this.poll(this.token);});
     document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement&&this.expanded)this.fullscreen(false);});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'&&this.expanded)this.fullscreen(false);});
     for(const target of[window,window.visualViewport].filter(Boolean)){
@@ -54,20 +58,24 @@ export class PerformancePanel{
     this.poll(this.token);
   }
   close(){
-    clearTimeout(this.timer);++this.token;this.id=null;
+    this.pausePolling();++this.token;this.id=null;
     if(this.expanded)this.fullscreen(false);
     $('performancePanel').hidden=true;
   }
+  pausePolling(){
+    clearTimeout(this.timer);this.timer=undefined;this.pollAgain=false;
+  }
   async poll(token){
-    if(token!==this.token||!this.id||document.hidden)return;
-    if(this.busy){this.timer=setTimeout(()=>this.poll(token),300);return;}
+    if(token!==this.token||!this.id||document.hidden||this.pageHidden)return;
+    clearTimeout(this.timer);this.timer=undefined;
+    if(this.busy){this.pollAgain=true;return;}
     this.busy=true;const started=performance.now();let changed=false;
     try{
       let data;
       do{
         const first=this.cursor===0;
         data=await this.api('performance',this.id,this.cursor,first?600:2000);
-        if(token!==this.token)return;
+        if(token!==this.token||document.hidden||this.pageHidden)return;
         const active=!!data.active,end=Math.max(this.end,data.end??1);
         if(active!==this.active||!active&&end!==this.end)changed=true;
         this.active=active;this.end=end;
@@ -79,17 +87,22 @@ export class PerformancePanel{
         this.cursor=data.cursor;
         if(data.more){
           if(first&&changed){this.render();changed=false;}
-          if(document.hidden)return;
         }
       }while(data.more);
       if(changed||!this.points.length)this.render();
       $('performanceHint').textContent=this.points.length?
         `每 ${(this.interval/1000).toFixed(1)} 秒采样 · CPU 使用率取相邻区间，GPU 取驱动当前值，温度取 CPU/GPU 最高值 · 长按图例显示实际刻度。`:
         this.active?'等待下一次游戏模式采样；不可用指标留空。':'此记录没有性能采样数据。';
-    }catch(e){if(token===this.token)$('performanceHint').textContent=e.message;}
+    }catch(e){if(token===this.token&&!document.hidden&&!this.pageHidden)$('performanceHint').textContent=e.message;}
     finally{
       this.busy=false;
-      if(token===this.token&&this.id&&!document.hidden&&this.active)this.timer=setTimeout(()=>this.poll(token),Math.max(500,this.interval-(performance.now()-started)));
+      const pollAgain=this.pollAgain;this.pollAgain=false;
+      if(this.id&&!document.hidden&&!this.pageHidden&&(pollAgain||token===this.token&&this.active)){
+        // A newly opened record may be waiting for the previous read to finish.
+        const nextToken=this.token;
+        const delay=pollAgain?0:Math.max(500,this.interval-(performance.now()-started));
+        this.timer=setTimeout(()=>this.poll(nextToken),delay);
+      }
     }
   }
   configure(meta){

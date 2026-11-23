@@ -13,6 +13,7 @@ public final class ParallelRecordingTest {
         Class<?> type=Class.forName("sun.misc.Unsafe");Field field=type.getDeclaredField("theUnsafe");field.setAccessible(true);
         Main main=(Main)type.getMethod("allocateInstance",Class.class).invoke(field.get(null),Main.class);
         set(main,"gameTrack",new Main.RecordTrack());set(main,"normalContext",new Main.RecordTrack());
+        main.gameMetrics=GameMetrics.DEFAULT;
         main.settings=new JSONObject().put("fastSeconds",3);
         main.sampling=new Core.Sampling();main.sampling.next=120000;main.sampling.expected=120000;
         main.fullGate=new Core.FullGate();main.depletion=new Core.Depletion();main.timeline=new Core.Timeline();

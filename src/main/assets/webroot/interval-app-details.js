@@ -13,7 +13,11 @@ export class IntervalAppDetails{
     if(Number.isFinite(statsVersion))state.statsVersion=statsVersion;
     const end=record.end_elapsed-record.start_elapsed;
     if(state.busy)return state.busy;
-    if(state.loadedEnd>=end&&state.complete||Date.now()<(state.retryAt??0))return Promise.resolve();
+    if(state.loadedEnd>=end&&state.complete||Date.now()<(state.retryAt??0)){
+      this.scheduleRetry(record,state);
+      return Promise.resolve();
+    }
+    if(this.retry?.key===key)this.pause();
     const startedVersion=state.statsVersion;
     state.busy=(async()=>{
       try{
@@ -42,15 +46,28 @@ export class IntervalAppDetails{
       }
     })();return state.busy;
   }
+  pause(){
+    clearTimeout(this.retryTimer);this.retryTimer=undefined;this.retry=null;
+  }
   scheduleRetry(record,state){
-    clearTimeout(this.retryTimer);
-    if(!state.retryAt||!this.visible()||this.getRecord()?.id!==record.id||this.chart.recordId!==record.id)return;
-    this.retryTimer=setTimeout(()=>{const latest=this.getRecord();if(this.visible()&&latest?.id===record.id&&latest.start_wall===record.start_wall)this.preload(latest);},Math.max(1000,state.retryAt-Date.now()));
+    const latest=this.getRecord(),key=this.key(record);
+    if(!latest||this.key(latest)!==key||this.chart.recordId!==record.id||this.deleted.has(record.id)||!this.visible())return;
+    if(!state.retryAt){if(this.retry?.key===key)this.pause();return;}
+    if(this.retry?.key===key&&this.retry.at===state.retryAt)return;
+    this.pause();
+    const retry={key,id:record.id,at:state.retryAt};
+    this.retry=retry;
+    this.retryTimer=setTimeout(()=>{
+      if(this.retry!==retry)return;
+      this.pause();
+      const current=this.getRecord();
+      if(current&&this.key(current)===key&&this.chart.recordId===record.id&&this.visible())this.preload(current);
+    },Math.max(1000,retry.at-Date.now()));
   }
   visible(){return typeof document!=='undefined'&&!document.hidden&&!this.chart.canvas?.closest('[hidden]');}
   inspect(row){this.inspection=row?{row,base:this.chart.tooltip.textContent}:null;this.render();}
   key(record){return`${record.id}:${record.start_wall}:${record.app_revision??0}`;}
-  async remove(id){this.deleted.add(id);clearTimeout(this.retryTimer);for(const[key]of this.records)if(key.startsWith(id+':'))this.records.delete(key);await this.cache.remove(id);}
+  async remove(id){this.deleted.add(id);if(this.retry?.id===id)this.pause();for(const[key]of this.records)if(key.startsWith(id+':'))this.records.delete(key);await this.cache.remove(id);}
   prune(){if(this.pruning||Date.now()<(this.pruneAt??0))return;this.pruneAt=Date.now()+60000;this.pruning=this.cache.prune(this.api).catch(()=>{}).finally(()=>this.pruning=null);}
   render(){
     const record=this.getRecord(),chart=this.chart,item=this.inspection;

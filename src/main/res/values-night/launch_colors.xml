@@ -1,0 +1,4 @@
+<resources>
+  <color name="acol_launch_surface">#000000</color>
+  <bool name="acol_light_bars">false</bool>
+</resources>

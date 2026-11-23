@@ -3,7 +3,6 @@ package cn.astriafr.acobattery;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
-import android.graphics.Color;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
@@ -44,7 +43,7 @@ final class WebViewHost {
     }
     @SuppressLint({"SetJavaScriptEnabled","AddJavascriptInterface"}) void showWeb(){
         if(app.destroyed)return;destroy();
-        app.startup.initialized=true;web=new WebView(app);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(Color.rgb(246,248,251));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setUseWideViewPort(true);settings.setSupportZoom(false);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
+        app.startup.initialized=true;web=new WebView(app);web.setOverScrollMode(View.OVER_SCROLL_NEVER);web.setVerticalScrollBarEnabled(false);web.setHorizontalScrollBarEnabled(false);web.setBackgroundColor(MainActivity.surface(app.launchDark()));WebSettings settings=web.getSettings();settings.setTextZoom(100);settings.setUseWideViewPort(true);settings.setSupportZoom(false);settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setSupportMultipleWindows(false);settings.setMediaPlaybackRequiresUserGesture(true);web.addJavascriptInterface(new Bridge(),"AcoNative");
         web.setWebViewClient(new WebViewClient(){
             @Override public void onPageFinished(WebView view,String url){if(view==web){pageLoaded=true;openTileSettings();app.startup.showStartupNotice();}}
@@ -97,7 +96,7 @@ final class WebViewHost {
     }
     void commitThemeBars(boolean dark){
         activeDarkTheme=dark;
-        int surface=dark?Color.BLACK:Color.rgb(246,248,251);
+        int surface=MainActivity.surface(dark);
         app.getWindow().setStatusBarColor(surface);app.getWindow().setNavigationBarColor(surface);
         WindowInsetsController controller=app.getWindow().getInsetsController();
         if(controller!=null){int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(dark?0:appearance,appearance);}
@@ -166,7 +165,7 @@ final class WebViewHost {
             catch(java.util.concurrent.RejectedExecutionException ignored){}
         }
         @JavascriptInterface public void clearRecordListCache(){if(active())app.recordListCache.clear();}
-        @JavascriptInterface public void post(String text){if(active())app.startup.post(text);}
+        @JavascriptInterface public void post(String text){if(active())app.startup.post(text,generation);}
         @JavascriptInterface public void requestDischargeNotificationPermission(){
             ui(()->app.requestDischargeNotificationPermission(allowed->{
                 if(active())web.evaluateJavascript("window.__acoDischargeNotificationPermission?.("+allowed+")",null);
@@ -190,7 +189,12 @@ final class WebViewHost {
             }catch(Exception e){return"{}";}
         }
         @JavascriptInterface public void fullScreen(boolean enabled){ui(()->WebViewHost.this.fullScreen(enabled));}
-        @JavascriptInterface public void setDarkTheme(boolean enabled){ui(()->applyThemeBars(enabled));}
+        @JavascriptInterface public void setDarkTheme(boolean enabled,boolean manual){ui(()->{
+            android.content.SharedPreferences display=app.getSharedPreferences("display",android.content.Context.MODE_PRIVATE);
+            if(manual)display.edit().putBoolean("manualDark",enabled).apply();
+            else if(display.contains("manualDark"))display.edit().remove("manualDark").apply();
+            applyThemeBars(enabled);
+        });}
         @JavascriptInterface public boolean isSystemDark(){return app.systemDark();}
         @JavascriptInterface public String connectionStatus(){return app.startup.rootReady?"":app.startup.connectionStatus;}
         @JavascriptInterface public void repair(){ui(()->{destroy();app.startup.showInitialization();app.startup.initialize();});}

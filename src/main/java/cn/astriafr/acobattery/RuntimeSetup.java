@@ -32,18 +32,31 @@ final class RuntimeSetup {
     }
     static String hasOwner(){return "[ -s "+BASE+"/owner.user ] && [ -s "+BASE+"/owner.cert ]";}
     static String stage(File source){
-        StringBuilder command=new StringBuilder("umask 077; /system/bin/mkdir -p "+STAGE+"/bin; ");
-        for(String name:RuntimePayload.FILES)command.append("/system/bin/cp ").append(quote(new File(source,name).getAbsolutePath())).append(' ').append(quote(STAGE+"/"+name)).append("; ");
-        return command.append(permissions(STAGE)).toString();
+        StringBuilder command=new StringBuilder(
+            "(aco_compare() { if [ -x /system/bin/cmp ]; then /system/bin/cmp -s \"$1\" \"$2\"; "
+            +"else /system/bin/toybox cmp -s \"$1\" \"$2\"; fi; }; "
+            +"umask 077 && [ ! -e "+BASE+"/update.transaction ] && /system/bin/mkdir -p "+STAGE+"/bin");
+        for(String name:RuntimePayload.FILES){
+            String from=quote(new File(source,name).getAbsolutePath()),to=quote(STAGE+"/"+name);
+            command.append(" && /system/bin/cp ").append(from).append(' ').append(to)
+                .append(" && aco_compare ").append(from).append(' ').append(to);
+        }
+        return command.append(" && ").append(permissions(STAGE))
+            .append(") || { echo '无法完整复制并校验后台安装文件。'; false; }").toString();
     }
     static String permissions(String directory){
-        return "/system/bin/chmod 700 "+directory+" "+directory+"/bin "+directory+"/bin/aco-launcher "+directory+"/boot.sh "+directory+"/service.sh "+directory+"/transfer.sh; /system/bin/chmod 600 "+directory+"/bin/daemon.dex.jar "+directory+"/bin/libcurvewait.so";
+        return "/system/bin/chmod 700 "+directory+" "+directory+"/bin "+directory+"/bin/aco-launcher "+directory+"/boot.sh "+directory+"/service.sh "+directory+"/transfer.sh && /system/bin/chmod 600 "+directory+"/bin/daemon.dex.jar "+directory+"/bin/libcurvewait.so";
     }
-    static String install(String version){
-        return "CLASSPATH="+STAGE+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin apply-update "+quote(version)+" \"$$\"";
+    static String install(String version,String contentsDigest){
+        return "CLASSPATH="+STAGE+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin apply-update "+quote(version)+" \"$$\" "+quote(contentsDigest);
     }
     static String recover(){
-        return "if [ -f "+BASE+"/update.transaction ]; then aco_recovery="+STAGE+"/bin/daemon.dex.jar; [ -f \"$aco_recovery\" ] || aco_recovery="+RUNTIME+"/bin/daemon.dex.jar; CLASSPATH=\"$aco_recovery\" /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin recover-update; fi";
+        String journal=BASE+"/update.transaction",jar="/bin/daemon.dex.jar";
+        return "(if [ ! -f "+journal+" ]; then exit 0; fi; "
+            +"for aco_recovery in "+STAGE+jar+" "+RUNTIME+jar+" "+BASE+"/runtime.rollback"+jar+"; do "
+            +"[ -s \"$aco_recovery\" ] || continue; "
+            +"CLASSPATH=\"$aco_recovery\" /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin recover-update && exit 0; "
+            +"[ -f "+journal+" ] || exit 0; done; exit 1)";
     }
     static String cleanStage(){
         StringBuilder command=new StringBuilder("/system/bin/rm -f");

@@ -69,7 +69,7 @@ public final class RootSessionStartupTest {
         for(java.lang.reflect.Method method:WebViewHost.Bridge.class.getDeclaredMethods())if(method.isAnnotationPresent(android.webkit.JavascriptInterface.class)){
             check(java.lang.reflect.Modifier.isPublic(method.getModifiers()),"Native bridge method is not public");bridge.add(method.getName());
         }
-        check(bridge.equals(new HashSet<>(Arrays.asList("backupAllData","restoreAllData","openErrorLogs","clearAllData","readRecordListCache","writeRecordListCache","clearRecordListCache","post","beginChartExport","appendChartExport","finishChartExport","cancelChartExport","appIcons","fullScreen","setDarkTheme","isSystemDark","connectionStatus","repair"))),"WebView bridge contract changed during the split");
+        check(bridge.equals(new HashSet<>(Arrays.asList("backupAllData","restoreAllData","openErrorLogs","clearAllData","readRecordListCache","writeRecordListCache","clearRecordListCache","post","beginChartExport","appendChartExport","finishChartExport","cancelChartExport","appIcons","fullScreen","setDarkTheme","isSystemDark","connectionStatus","repair","requestDischargeNotificationPermission"))),"WebView bridge contract changed during the split");
         System.out.println("Root startup: one bridge, health handshake, phase feedback, native/WebView routing, failure diagnostics and bridge contract passed");
     }
 }

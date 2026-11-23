@@ -6,11 +6,15 @@ import java.util.concurrent.TimeUnit;
 /** A single operation's deadline; sampling cadence and retry intervals are separate. */
 public final class OperationTimeout {
     public static final int MAX_MS=10000,MAX_SECONDS=10;
+    public static final String START_BEFORE="startBeforeElapsedMs";
     private OperationTimeout(){}
     public static long deadline(){return deadline(MAX_MS);}
     public static long deadline(int milliseconds){return System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(1,Math.min(MAX_MS,milliseconds)));}
     public static int remaining(long deadline)throws SocketTimeoutException{
         long left=deadline-System.nanoTime();if(left<=0)throw new SocketTimeoutException("操作超时，请重试。");
         return (int)Math.min(MAX_MS,Math.max(1,TimeUnit.NANOSECONDS.toMillis(left)));
+    }
+    public static void requireStartBefore(long deadline,long elapsedMs)throws SocketTimeoutException{
+        if(deadline>0&&elapsedMs>=deadline)throw new SocketTimeoutException("操作超时，请重试。");
     }
 }

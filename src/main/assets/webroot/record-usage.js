@@ -4,6 +4,7 @@ import{fmt,el,recordFast,pad2,longPressFeedback}from'./record-display.js?v=acol-
 import{RecordUsageRefresh}from'./record-usage-refresh.js?v=acol-2.2s';
 import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2s';
 import{RecordEnergyCache,energyRows,formatWh}from'./record-energy-cache.js?v=acol-2.2s';
+import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
 
 const nextDay=wall=>{const d=new Date(wall);d.setDate(d.getDate()+1);return d.getTime();};
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
@@ -133,10 +134,11 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     }
     host.querySelector(':scope > p')?.remove();
     let anchor=host.firstChild;
+    const game=recordFast(r);
     for(const a of apps){
       let entry=rows.get(a.pkg);
       if(!entry){entry=appRow(a);rows.set(a.pkg,entry);watchIcon(entry);}
-      updateAppRow(entry,a,sum);
+      updateAppRow(entry,a,sum,game);
       if(entry.row===anchor)anchor=anchor.nextSibling;else host.insertBefore(entry.row,anchor);
     }
   }
@@ -156,11 +158,15 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     bindAppEnergyTip(energy,()=>entry.data);
     return entry;
   }
-  function updateAppRow(entry,a,sum){
+  function updateAppRow(entry,a,sum,game){
     entry.data=a;
     const share=sum>0?`${fmt(appEnergy(a)/sum*100,1)}%`:'—',wh=appWhText(a);
     const meta=[roundedDuration(a.ms)];
-    if(valid(a.avgPower))meta.push(`平均${a.avgPower.toFixed(2)}W`);
+    const average=[];
+    if(valid(a.avgPower))average.push(`${a.avgPower.toFixed(2)}W`);
+    const fps=game?recordedFpsText(a.avgFps):null;
+    if(fps!==null)average.push(`${fps}FPS`);
+    if(average.length)meta.push(`平均${average.join(' ')}`);
     setText(entry.name,a.label??a.pkg);setText(entry.share,share);setText(entry.meta,meta.join(' · '));setText(entry.wh,wh);
     const label=`${wh} Wh${sum>0?`，占 ${share}`:''}，长按查看 mAh 统计`;
     if(entry.energy.getAttribute('aria-label')!==label)entry.energy.setAttribute('aria-label',label);

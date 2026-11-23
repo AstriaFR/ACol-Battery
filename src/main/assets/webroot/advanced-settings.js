@@ -1,4 +1,4 @@
-const LOW_VOLTAGE_CONFIRM_MV=2700;
+const LOW_VOLTAGE_CONFIRM_MV=2650;
 const dischargeVoltageFields=[
   {key:'GAUGE_TERM_VOLTAGE',label:'电量计截止电压',unit:'mV',confirmVoltage:true},
   {key:'GAUGE_SHUTDOWN_VOLTAGE',label:'软件关机电压',unit:'mV',confirmVoltage:true}
@@ -55,8 +55,10 @@ export function createAdvancedPage(api,keypad){
   const root=$('advancedPage'),status=$('advancedStatus');
   const confirmation=$('advancedConfirm'),safetyNotice=$('advancedSafetyNotice');
   const reset=$('resetAdvancedSettings');
+  const autoRestore=$('advancedAutoRestore'),cellButtons=[$('singleCell'),$('dualCell')];
   const modeGroup=$('advancedChargingMode'),modeUnavailable=$('advancedChargingModeUnavailable');
   const capacityList=$('advancedCapacityReadings'),chargingList=$('advancedChargingReadings');
+  const batteryType=$('advancedBatteryType');
   const rows=new Map(),controls=new Map();
   const limitedModes=chargingModes.slice(1);
   let timer,revision=0,reading=false,refreshPending=false,applying=false,state,resetError='';
@@ -125,6 +127,9 @@ export function createAdvancedPage(api,keypad){
   }
   function render(data,error=''){
     state=data;
+    const suffix=typeof data?.batteryType==='string'?data.batteryType.trim().match(/(?:^|[_.-])([a-z][0-9]+[a-z]?)$/i)?.[1]??'':'';
+    if(batteryType.textContent!==suffix)batteryType.textContent=suffix;
+    batteryType.hidden=!suffix;
     const snapshot=data?.nodes,nodes=snapshot??{};
     const isMissing=key=>!!snapshot&&(!nodes[key]||nodes[key].missing===true);
     for(const [field,{row,value}] of rows){
@@ -167,7 +172,14 @@ export function createAdvancedPage(api,keypad){
       missingLabel.hidden=!modeMissing;
       button.disabled=applying||!available||(index!==0&&(!known||modeMissing));
     });
-    reset.disabled=!data||applying||!fields.some(field=>nodes[field.key]?.forced)&&!active.length;
+    autoRestore.checked=data?.advancedAutoRestore===true;
+    autoRestore.disabled=applying||!data;
+    cellButtons.forEach((button,index)=>{
+      const pressed=String(!!data&&(data.cellCount||1)===index+1);
+      if(button.getAttribute('aria-pressed')!==pressed)button.setAttribute('aria-pressed',pressed);
+      button.disabled=applying||!data;
+    });
+    reset.disabled=!data||applying||!data.hasAdvancedTargets&&!fields.some(field=>nodes[field.key]?.forced)&&!active.length;
     const message=error||resetError||(!data?'正在读取…':Object.keys(nodes).length?'':'未读取到投票节点。');
     if(status.textContent!==message)status.textContent=message;
     status.hidden=!message;
@@ -212,6 +224,34 @@ export function createAdvancedPage(api,keypad){
   }
   $('advancedConfirmCancel').onclick=()=>confirmation.close('cancel');
   $('advancedConfirmApply').onclick=()=>confirmation.close('apply');
+  async function updateOption(action,value,confirm){
+    if(applying||!state)return;
+    applying=true;
+    revision++;
+    resetError='';
+    render(state);
+    if(action==='set_advanced_auto_restore')autoRestore.checked=value===1;
+    try{
+      if(confirm&&(!await confirm()||root.hidden))return;
+      const updated=await api(action,value);
+      state={...state,...updated};
+    }catch(error){resetError=error.message;}
+    finally{
+      applying=false;
+      if(visible()){render(state);refresh();}
+    }
+  }
+  autoRestore.onchange=()=>updateOption('set_advanced_auto_restore',autoRestore.checked?1:0);
+  cellButtons.forEach((button,index)=>{
+    const count=index+1;
+    button.onclick=()=>{
+      if(!state||state.cellCount===count)return;
+      const hint=count!==(state.cellCount||1)?
+        '请确认与设备规格一致。进行中的记录会结束，后续记录将使用新的电芯数量。':
+        '请确认与设备规格一致。后台将按此计算电流和功率。';
+      return updateOption('set_cell_count',count,()=>askChange(`设为${button.textContent}？`,hint));
+    };
+  });
   async function setChargingMode(option){
     const {button}=modeButtons[option];
     if(applying||!state||button.disabled||button.getAttribute('aria-pressed')==='true')return;
@@ -234,7 +274,7 @@ export function createAdvancedPage(api,keypad){
       restoring?'确定恢复厂商截止电压？':'确定修改截止电压？',
       restoring?`取消「${field.label}」的手动覆盖，交回厂商动态策略。恢复值由驱动决定。`:`${field.label}：${value} mV`);
     if(!accepted||root.hidden)return false;
-    if(value!==null&&value<LOW_VOLTAGE_CONFIRM_MV){
+    if(value!==null&&value<LOW_VOLTAGE_CONFIRM_MV&&state?.highDesignCapacity!==true){
       const low=await askChange('低电压风险确认',
         `${field.label}：${value} mV\n\n设置低于 ${LOW_VOLTAGE_CONFIRM_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用');
       if(!low||root.hidden)return false;

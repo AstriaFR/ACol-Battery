@@ -99,11 +99,8 @@ final class OplusVotes {
         Path activePath=node.directory.resolve("force_active"),valuePath=node.directory.resolve("force_val");
         if(Files.notExists(status))return result.put("missing",true);
         if(node.maximum>0&&(Files.notExists(activePath)||Files.notExists(valuePath)))result.put("controlMissing",true);
-        Matcher vote=EFFECTIVE.matcher(read(status));
-        if(vote.find()){
-            long value=Long.parseLong(vote.group(2));
-            if(value>=0)result.put("effective",value);
-        }
+        Long effective=effectiveValue(status);
+        if(effective!=null)result.put("effective",effective);
         try{
             String active=read(activePath);
             if(active.equals("0")||active.equals("1")){
@@ -112,6 +109,18 @@ final class OplusVotes {
             }
         }catch(IOException|NumberFormatException ignored){}
         return result;
+    }
+
+    static Long readEffectiveValue(Node node){
+        try{return effectiveValue(node.directory.resolve("status"));}
+        catch(IOException unreadable){return null;}
+    }
+
+    private static Long effectiveValue(Path status)throws IOException {
+        Matcher vote=EFFECTIVE.matcher(read(status));
+        if(!vote.find())return null;
+        long value=Long.parseLong(vote.group(2));
+        return value>=0?value:null;
     }
 
     static synchronized void apply(Node node,Integer value,GaugeUpdate gaugeUpdate)throws IOException {
@@ -131,6 +140,26 @@ final class OplusVotes {
         }
         if(node==Node.GAUGE_UPDATE){gaugeUpdate.applyManually(value,()->applyForce(node,value));return;}
         synchronized(node){applyForce(node,value);}
+    }
+
+    static synchronized void restoreIfChanged(Node node,int value,GaugeUpdate gaugeUpdate)throws IOException {
+        synchronized(node){
+            if(node==Node.DEC_DELTA){
+                if(readNumber(DEC_DELTA,DEC_DELTA_VALUE)!=value)apply(node,value,gaugeUpdate);
+                return;
+            }
+            String target=Integer.toString(value);
+            if(read(node.directory.resolve("force_active")).equals("1")&&
+                read(node.directory.resolve("force_val")).equals(target)){
+                boolean matches;
+                try{
+                    verifyForce(node,true,target);
+                    matches=node!=Node.GAUGE_SHUTDOWN_VOLTAGE||read(SHUTDOWN_READBACK).equals(target);
+                }catch(IOException changed){matches=false;}
+                if(matches)return;
+            }
+            apply(node,value,gaugeUpdate);
+        }
     }
 
     private static void applyForce(Node node,Integer value)throws IOException {
