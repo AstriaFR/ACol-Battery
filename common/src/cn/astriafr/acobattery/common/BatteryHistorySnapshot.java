@@ -15,7 +15,7 @@ public final class BatteryHistorySnapshot {
             ?snapshot.optDouble("rawFccAbove"):null;
     }
     public static JSONObject withTailRm(JSONObject snapshot,double rm)throws JSONException{
-        if(!Double.isFinite(rm)||rm<0)return snapshot;
+        if(!Double.isFinite(rm)||rm<=0)return snapshot;
         return (snapshot==null?new JSONObject():snapshot).put("tailRm",rm);
     }
     static boolean positive(JSONObject info,String key){double v=info.optDouble(key,Double.NaN);return Double.isFinite(v)&&v>0;}
@@ -42,10 +42,10 @@ public final class BatteryHistorySnapshot {
         boolean bounded=known&&!noCompensation&&positive(info,"rawFccAbove");
         if(bounded)out.put("rawFccAbove",info.get("rawFccAbove"));
         out.put("lockedCapacity",!bounded&&Double.isFinite(qmax)&&qmax>0&&Double.isFinite(reference)&&reference>0?Math.max(0,qmax-reference):JSONObject.NULL);
-        JSONArray green=new JSONArray();
-        if(positive(info,"qmax"))green.put("qmax");
+        JSONArray references=new JSONArray();
+        if(positive(info,"qmax"))references.put("qmax");
         String capacityKey=noCompensation?"fcc":"rawFcc";
-        if(bounded||known&&positive(info,capacityKey))green.put(capacityKey);
-        return out.put("nearActual",green).put("noCompensation",noCompensation).put("snapshotVersion",1);
+        if(bounded||known&&positive(info,capacityKey))references.put(capacityKey);
+        return out.put("nearActual",references).put("noCompensation",noCompensation).put("snapshotVersion",1);
     }
 }

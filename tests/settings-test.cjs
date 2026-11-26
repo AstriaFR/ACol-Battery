@@ -103,7 +103,7 @@ async function advancedOptions(){
  function element(){
    const attributes=new Map();
    return{
-     hidden:true,append(){},getAttribute:key=>attributes.get(key),setAttribute:(key,value)=>attributes.set(key,value),
+     hidden:true,children:[],append(...items){this.children.push(...items);},getAttribute:key=>attributes.get(key),setAttribute:(key,value)=>attributes.set(key,value),
      showModal(){this.open=true;},addEventListener(name,callback){this.onclose=callback;},
      close(value){this.open=false;this.returnValue=value;this.onclose?.();}
    };
@@ -116,9 +116,9 @@ async function advancedOptions(){
  globalThis.history={state:null};
  get('singleCell').textContent='单电芯';
  get('dualCell').textContent='双电芯';
- let cellCount=2,advancedAutoRestore=false,rejectToggle=false;
+ let cellCount=2,advancedAutoRestore=false,rejectToggle=false,batteryType='example-type';
  const page=createAdvancedPage(async(action,value)=>{
-   if(action==='oplus_votes')return{nodes:{},cellCount,advancedAutoRestore};
+   if(action==='oplus_votes')return{nodes:{},cellCount,advancedAutoRestore,batteryType};
    writes.push([action,value]);
    if(action==='set_cell_count')return{cellCount:cellCount=value};
    if(rejectToggle)throw Error('后台暂不可用');
@@ -128,6 +128,12 @@ async function advancedOptions(){
  try{
    page.open();
    await flush();
+   const capacityReadings=get('advancedCapacityReadings').children;
+   const typeRow=capacityReadings.at(-1);
+   assert.equal(capacityReadings.at(-2).children[0].textContent,'FV_MIN');
+   assert.equal(typeRow.children[1].textContent,'example-type');
+   assert.equal(typeRow.hidden,false);
+   batteryType=undefined;
    assert.equal(get('dualCell').getAttribute('aria-pressed'),'true');
    assert.equal(get('singleCell').disabled,false);
    const cancelled=get('singleCell').onclick();
@@ -138,6 +144,7 @@ async function advancedOptions(){
    get('advancedConfirmApply').onclick();
    await confirmed;
    assert.deepEqual(writes,[['set_cell_count',1]]);
+   assert.equal(typeRow.hidden,true);
    assert.equal(get('singleCell').getAttribute('aria-pressed'),'true');
    const toggle=get('advancedAutoRestore');
    assert.equal(toggle.checked,false);

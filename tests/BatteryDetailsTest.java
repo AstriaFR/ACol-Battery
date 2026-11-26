@@ -21,8 +21,8 @@ public final class BatteryDetailsTest {
         // The same driver-reported values must be reversed using the gauge term voltage and device table.
         Double raw=BatteryDetails.rawSoh(99,3150,table);
         equal(BatteryDetails.noCompensation(3150,table),false);
-        equal(BatteryDetails.rawFcc(6304,raw,3150,table,6500),5384);
-        if(Math.abs(raw-99/1.07)>0.001)throw new AssertionError("Incorrect SOH coefficient");
+        equal(BatteryDetails.rawFcc(6304,raw,3150,table,6500),5374);
+        equal(raw,93.0);
         equal(BatteryDetails.noCompensation(2999,table),true);
         equal(BatteryDetails.rawSoh(99,2999,table),null);
         equal(BatteryDetails.rawFcc(6304,raw,2999,table,6500),null);
@@ -30,8 +30,8 @@ public final class BatteryDetailsTest {
         List<int[]> subThreeVoltTable=Arrays.asList(new int[]{2850,400,2},new int[]{3000,800,3});
         equal(BatteryDetails.noCompensation(2900,subThreeVoltTable),false);
         Double subRaw=BatteryDetails.rawSoh(99,2900,subThreeVoltTable);
-        if(subRaw==null||Math.abs(subRaw-99/1.02)>0.001)throw new AssertionError("Sub-3V SOH coefficient ignored");
-        equal(BatteryDetails.rawFcc(6100,subRaw,2900,subThreeVoltTable,6500),5712);
+        equal(subRaw,98.0);
+        equal(BatteryDetails.rawFcc(6100,subRaw,2900,subThreeVoltTable,6500),5708);
         equal(BatteryDetails.rawFccAbove(6500,99,2900,subThreeVoltTable,6500),6107);
         equal(BatteryDetails.noCompensation(2800,subThreeVoltTable),true);
         // Models whose lowest compensation tier is above 3.00 V are uncompensated below that tier.

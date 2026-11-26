@@ -8,13 +8,16 @@
 
 | 入口 | 覆盖范围 |
 | --- | --- |
-| `charts-test.cjs` | 图表量程、命中、温度数据、息屏投影及其缓存时机 |
-| `settings-test.cjs` | 采样间隔、确认取消、记录开关及勾选记忆 |
+| `charts-test.cjs` | 图表量程、曲线连接与命中、温度数据、息屏投影及其缓存时机 |
+| `chart-export-test.cjs` | CSV 转义、缺失值、分页和导出中断 |
+| `settings-test.cjs` | 采样间隔、确认取消、记录开关、勾选记忆及电池类型的显示与隐藏 |
 | `records-test.cjs` | 实时游标、记录筛选、分页、异步响应及容量变化显示 |
 | `startup-test.cjs` | 初始化进度、错误保留、降级提示及前台请求超时 |
 | `theme-test.cjs` | 系统与手动主题、系统栏更新时序及图表状态保留 |
 | `record-energy-test.cjs` | 分时耗电缓存、归属修补、并发读取及手势 |
-| `battery-explanation-test.cjs` | 电池说明弹窗的焦点与页面滚动保留 |
+| `battery-explanation-test.cjs` | 电池说明弹窗的焦点、页面滚动保留及当前满充容量基准 |
+| `battery-history-test.cjs` | 历史快照、满充容量基准、趋势及分页 |
+| `page-navigation-test.cjs` | 页面进退、动画取消和减少动态效果设置 |
 | `edge-scrollbar-test.cjs` | 滚动指示器的比例、边界、显示范围和资源释放 |
 
 `helpers.cjs` 为合并后的测试场景统一隔离浏览器和原生接口替身，不是独立测试入口。

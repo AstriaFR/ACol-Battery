@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | JDK 根目录 | `JAVA_HOME`，未设置时尝试 PATH 中的 javac | `--java-home` |
 | SDK 根目录 | `ANDROID_SDK_ROOT` 或 `ANDROID_HOME` | `--sdk` |
-| NDK 根目录 | `ANDROID_NDK_HOME` 或 `ANDROID_NDK_ROOT` | `--ndk` |
+| NDK 根目录 | `ANDROID_NDK_HOME` 或 `ANDROID_NDK_ROOT`，默认使用 SDK 下的 `ndk/29.0.14206865` | `--ndk` |
 | SDK 平台目录名 | 默认 `android-37`，兼容已安装的 `android-37.0` | `--platform` |
 | Build Tools 版本 | 默认 `37.0.0` | `--build-tools` |
 | 签名密钥库 | `ACO_KEYSTORE` | `--keystore` |

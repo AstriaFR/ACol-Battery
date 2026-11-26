@@ -309,7 +309,6 @@ body:has(main:not([hidden])){overflow:hidden}
 .game-explanation{--accent:var(--charge);--theme-line:#c7e8dc}
 .game-explanation p{font-size:12px;line-height:1.7;color:var(--muted);margin:10px 0}
 .game-explanation-actions{display:flex;justify-content:flex-end;margin-top:16px}
-#advancedSafetyMessage{font-size:14px}
 .settings-change-confirm{--accent:var(--charge);--theme-soft:#eaf7f2;--theme-line:#c7e8dc}
 .settings-change-confirm #settingsChangeApply{background:var(--charge);border-color:var(--charge);color:#fff}
 .settings-change-confirm[data-action=stop] #settingsChangeApply,.settings-change-confirm[data-action=stop] #settingsChangeApply:active{background:#c4443f;border-color:#c4443f;color:#fff}
@@ -351,18 +350,22 @@ body:has(main:not([hidden])){overflow:hidden}
 .battery-info-card small{display:block;color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:2px}
 .battery-info-card strong{display:block;font-size:19px;line-height:1.45;font-weight:600;overflow-wrap:anywhere}
 .battery-info-card strong.battery-near-actual{color:var(--charge)}
+.battery-temperature-row{display:flex;align-items:center;justify-content:space-between;gap:6.8px}
+.battery-temperature-row>div{min-width:0}
 .battery-info-note{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 .battery-info-note{display:flex;align-items:center;flex-wrap:wrap;column-gap:8px;row-gap:2px}
+.battery-info-note-reference{flex-basis:100%}
 .battery-info-note .battery-estimate-info{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;min-height:0;flex-shrink:0;padding:0;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 14px Georgia,serif}
-#batteryInfoPanel{padding-bottom:calc(15.6px + env(safe-area-inset-bottom))}
+#batteryInfoPanel{padding-bottom:calc(13.26px + env(safe-area-inset-bottom))}
+#batteryInfoPanel>.subpage-header{margin-bottom:13.6px}
 #batteryInfoPanel>.page-scroll{margin-inline:-8px}
-#batteryInfoPanel .battery-info-cards{gap:4.8px}
-#batteryInfoPanel .battery-info-card{padding:8.4px 9.6px;gap:7.2px}
-#batteryInfoPanel .battery-info-card small{font-size:12.6px;margin-bottom:1.2px}
+#batteryInfoPanel .battery-info-cards{gap:4.08px}
+#batteryInfoPanel .battery-info-card{padding:7.14px 8.16px;gap:6.12px}
+#batteryInfoPanel .battery-info-card small{font-size:12.6px;margin-bottom:1.02px}
 #batteryInfoPanel .battery-info-card strong{font-size:17.1px}
-#batteryInfoPanel .battery-info-note{font-size:10.8px;gap:1.2px 4.8px}
+#batteryInfoPanel .battery-info-note{font-size:10.8px;gap:1.02px 4.08px}
 #batteryInfoPanel .battery-estimate-info{width:13.2px;height:13.2px;font-size:12.6px}
-#batteryInfoPanel .battery-info-error{margin:6px 1.2px 0;font-size:9.9px}
+#batteryInfoPanel .battery-info-error{margin:5.1px 1.02px 0;font-size:9.9px}
 .summary .remaining-info{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;min-height:0;flex-shrink:0;padding:0;margin-left:2px;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 11px Georgia,serif;letter-spacing:0;align-self:center}
 .remaining-explanation{padding:22px;max-height:80dvh;overflow-y:auto}
 .remaining-explanation h3{font-size:16px;margin:0 0 12px}
@@ -386,7 +389,7 @@ body:has(main:not([hidden])){overflow:hidden}
 .battery-coefficient-table th{position:sticky;top:0;padding:8px 3px;background:#fff;font-weight:600;font-size:12px;border-bottom:1px solid var(--line)}
 .battery-coefficient-table th span{font-size:11px;font-weight:400;color:var(--muted)}
 .battery-coefficient-table td{padding:9px 3px;border-bottom:1px solid #edf0f5}
-.battery-coefficient-table .current-coefficient{background:#eaf7f2;color:#078267}
+.battery-coefficient-table .current-coefficient{background:var(--line)}
 .battery-explanation .battery-coefficient-note{font-size:11px;color:var(--muted);line-height:1.6}
 @keyframes battery-explanation-enter{from{opacity:.88;transform:translateX(var(--explanation-enter-x,-5px))}to{opacity:1;transform:translateX(0)}}
 @media(prefers-reduced-motion:reduce){
@@ -458,7 +461,6 @@ body:has(main:not([hidden])){overflow:hidden}
 :root[data-theme=dark] .battery-info-card strong.battery-near-actual{color:#74e3a5}
 :root[data-theme=dark] .battery-coefficient-table th{background:#090d0a;border-color:#26372b}
 :root[data-theme=dark] .battery-coefficient-table td{border-color:#1c2a20}
-:root[data-theme=dark] .battery-coefficient-table .current-coefficient{background:#102319;color:#8aefb5}
 :root[data-theme=dark] .theme-toggle{background:transparent;color:#75dfa4}
 :root[data-theme=dark] .theme-toggle:active{background:#102319}
 
@@ -609,7 +611,7 @@ main.app-shell{--accent:inherit;--theme-soft:inherit;--theme-line:inherit;displa
 .appInfo{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}
 .appNameLine{display:flex;align-items:center;gap:7px;min-width:0}
 .appName{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:600;line-height:1.35}
-.appInfo .appMeta{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+.appInfo .appMeta{margin:0;line-height:1.4}
 .app-share{flex:none;color:var(--charge);font-size:10px;font-weight:600;line-height:1.2;white-space:nowrap}
 .appEnergy{display:flex;flex:none;flex-direction:column;align-items:flex-end;justify-content:center;align-self:stretch;min-width:70px;text-align:right}
 .appEnergy strong{display:flex;align-items:baseline;gap:3px;font-size:20px;font-weight:600;line-height:1.1;letter-spacing:-.4px;white-space:nowrap}
@@ -767,13 +769,14 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 :root[data-theme=dark] .settings-maintenance .settings-link-button{color:#79adff}
 .settings-maintenance button.maintenance-danger{color:#be4141}
 .settings-about{padding:2.4px 0 1.2px;text-align:center;font-size:11px;line-height:1.8;color:var(--muted)}
-.advanced-card{border-radius:16px;margin-bottom:12px;padding:14px 15px}
+.advanced-card{border-radius:16px;margin-bottom:10.2px;padding:11.9px 12.75px}
+.advanced-live-card{margin-bottom:9.6px;padding:11.2px 12px}
 .advanced-card:last-child{margin-bottom:0}
-.advanced-card h2{font-size:16px;margin:0 0 8px;color:var(--accent)}
-.advanced-battery-type{margin-inline-start:4px;color:var(--muted);font-size:9px;font-weight:400;line-height:1;vertical-align:-2px;white-space:nowrap}
-.advanced-live-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-.advanced-live-heading h2{margin:0}
-.advanced-live-heading>.settings-button{min-height:18px;padding:0 8px}
+.advanced-card h2{font-size:16px;margin:0 0 6.8px;color:var(--accent)}
+.advanced-live-heading{display:flex;align-items:center;justify-content:space-between;gap:6.4px;margin-bottom:6.4px}
+.advanced-live-heading h2{font-size:15px;margin:0}
+.advanced-live-heading>.settings-button{min-height:18px;padding:0 6.4px;font-size:10px}
+.advanced-live-card>.small{font-size:11px}
 .advanced-info-intro,.advanced-definitions{color:var(--muted);font-size:13px;line-height:1.65;margin:0}
 .advanced-info-intro+.advanced-info-intro{margin-top:8px}
 .advanced-definitions{margin:12px 0}
@@ -787,19 +790,21 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 .cool-down-table thead{background:var(--card)}
 #coolDownDetailsStatus{margin-top:8px}
 .advanced-readings{margin:0}
-.advanced-readings>div,.advanced-field{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.advanced-readings>div{min-height:31px}
+.advanced-readings>div,.advanced-field{display:flex;align-items:center;justify-content:space-between}
+.advanced-readings>div{min-height:24.8px;gap:6.4px}
 .advanced-readings>div:not([hidden])~div{border-top:1px solid var(--line)}
 .advanced-readings:not([hidden])+.advanced-readings{border-top:1px solid var(--charge)}
-.advanced-readings dt{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
-.advanced-readings dd{margin:0;white-space:nowrap;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
-.advanced-field{min-height:51px}
+.advanced-readings dt{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.advanced-readings dd{margin:0;white-space:nowrap;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.advanced-battery-type dd{min-width:0;white-space:normal;overflow-wrap:anywhere;text-align:end}
+.advanced-field{min-height:43.35px;gap:6.8px}
+.advanced-card .setting-switch{min-height:31.45px}
 .advanced-field>span{min-width:0;font-size:14px;overflow-wrap:anywhere}
 .advanced-field-label{line-height:1.2}
 .advanced-field-node{display:block;color:var(--muted);font-size:10px;line-height:1.2}
 .advanced-field>button{flex:0 0 108px;min-height:34px;padding:4px 8px;color:var(--accent);font-variant-numeric:tabular-nums;text-align:center}
 .advanced-setting-note{margin:0;color:var(--muted);font-size:11px;line-height:1.65}
-.advanced-setting-note:not(:last-child){padding-bottom:4px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.advanced-setting-note:not(:last-child){padding-bottom:3.4px;border-bottom:1px solid var(--line);margin-bottom:3.4px}
 #advancedConfirmText{white-space:pre-line}
 #advancedConfirmCancel,#advancedConfirmApply{color:#fff;border-color:transparent}
 #advancedConfirmCancel{background:#078267}

@@ -408,7 +408,7 @@ final class OplusVotes {
         JSONObject result=new JSONObject();
         if(!Files.isReadable(Node.COOL_DOWN.directory.resolve("status")))return result;
         Path wired=DEVICE_TREE.resolve(WIRED_DT);
-        String type=BatteryService.read(BatteryService.BAT+"battery_type");
+        String type=BatteryService.readBatteryType();
         if(type.matches("[a-zA-Z0-9_-]+")&&Files.isDirectory(wired.resolve(type)))wired=wired.resolve(type);
         JSONObject tables=new JSONObject();
         for(String mode:WIRED_COOL_DOWN_TYPES){

@@ -18,7 +18,6 @@ final class BatteryService {
     }
 
     Integer designCapacityMah(){return designCapacityMah;}
-    static String batteryType(){return read(BAT+"battery_type");}
 
     static final String BAT="/sys/class/oplus_chg/battery/";
     static final String PS="/sys/class/power_supply/";
@@ -289,7 +288,7 @@ final class BatteryService {
     static Core.Reading readHardware(Context ctx,String[] knownHeader,int cells,java.util.function.Consumer<String[]> rememberHeader) {
         Core.Reading r=readGauge(ctx,cells);
         readRemainingCapacity(ctx,r);readPercentage(ctx,r);
-        if(cells==0)FallbackDiagnostics.record("无法读取电芯数量","暂按单电芯计算。请在进阶设置中手动选择单电芯或双电芯。");
+        if(cells==0)FallbackDiagnostics.record("无法读取电芯数量","暂按单电芯计算。请在参数设置中手动选择单电芯或双电芯。");
         PowerInputs.Result power=online(ctx);r.online=power.online;r.onlineKnown=power.known;r.onlineSource=power.source;
         String[] chargeHeader=ChargingLog.apply(r,knownHeader,BAT,path->new String(Files.readAllBytes(Paths.get(path)),StandardCharsets.UTF_8));
         if(rememberHeader!=null&&chargeHeader!=null)rememberHeader.accept(chargeHeader);
@@ -303,6 +302,7 @@ final class BatteryService {
     static Integer integer(String value){try{return Integer.valueOf(value.trim());}catch(Exception e){return null;}}
     static Object jsonValue(Object value){return value==null?JSONObject.NULL:value;}
     static String optionalText(String value){return value.isEmpty()?null:value;}
+    static String readBatteryType(){return read(BAT+"battery_type");}
     Integer readCycleCount(){
         Integer cycles=integer(read(PS+"battery/cycle_count"));
         if(cycles==null||cycles<0)try{
@@ -311,26 +311,36 @@ final class BatteryService {
         }catch(Exception ignored){cycles=null;}
         return cycles;
     }
-    JSONObject batteryInfoSnapshot()throws Exception {
+    JSONObject batteryInfoSnapshot(boolean compensationFloorConfirmed)throws Exception {
+        return batteryInfoSnapshot(compensationFloorConfirmed,Double.NaN);
+    }
+    JSONObject batteryInfoSnapshot(boolean compensationFloorConfirmed,double tailRm)throws Exception {
         Integer fcc=integer(read(BAT+"battery_fcc")),soh=integer(read(BAT+"battery_soh"));
+        if(fcc!=null&&fcc<=0)fcc=null;
+        if(soh!=null&&(soh<=0||soh>100))soh=null;
         Integer cutoff=BatteryDetails.termVoltage(read("/proc/oplus-votable/GAUGE_TERM_VOLTAGE/status")),design=designCapacityMah();
-        String type=batteryType();byte[] coefficients=new byte[0];
+        String type=readBatteryType();byte[] coefficients=new byte[0];
         String tree="/proc/device-tree/soc/oplus,mms_gauge/";
         String[] paths=type.matches("[A-Za-z0-9_.-]+")?new String[]{tree+type+"/deep_spec,term_coeff",tree+"deep_spec,term_coeff"}:new String[]{tree+"deep_spec,term_coeff"};
         for(String path:paths)try{coefficients=Files.readAllBytes(Paths.get(path));break;}catch(IOException ignored){}
         List<int[]> table=BatteryDetails.coefficients(coefficients);
         JSONArray relationships=new JSONArray();
         for(int[] row:table)relationships.put(new JSONObject().put("cutoffMv",row[0]).put("fccOffset",row[1]).put("sohOffset",row[2]));
-        boolean noCompensation=BatteryDetails.noCompensation(cutoff,table);
-        Double rawSoh=BatteryDetails.rawSoh(soh,cutoff,table);
-        Integer rawFcc=BatteryDetails.rawFcc(fcc,rawSoh,cutoff,table,design);
-        Integer rawFccAbove=BatteryDetails.rawFccAbove(fcc,soh,cutoff,table,design);
+        Integer lowest=BatteryDetails.lowestCutoff(table);
+        boolean confirmed=BatteryDetails.confirmCompensationFloor(compensationFloorConfirmed,cutoff,lowest,fcc,tailRm);
+        boolean useFloor=confirmed&&cutoff!=null&&lowest!=null&&cutoff<lowest;
+        Integer calculationCutoff=useFloor?lowest:cutoff;
+        boolean noCompensation=BatteryDetails.noCompensation(calculationCutoff,table);
+        Double rawSoh=BatteryDetails.rawSoh(soh,calculationCutoff,table,useFloor);
+        Integer rawFcc=BatteryDetails.rawFcc(fcc,rawSoh,calculationCutoff,table,design);
+        Integer rawFccAbove=BatteryDetails.rawFccAbove(fcc,soh,calculationCutoff,table,design);
         String[] keys=read(BAT+"battery_log_head").split(",",-1),values=read(BAT+"battery_log_content").split(",",-1);
         Integer qmax=integer(ChargingLog.fields(keys,values).get("batt_qmax"));
         Integer cycles=readCycleCount();
         return new JSONObject().put("cycles",jsonValue(cycles)).put("fcc",jsonValue(fcc)).put("rawFcc",jsonValue(rawFcc)).put("rawFccAbove",jsonValue(rawFccAbove))
             .put("soh",jsonValue(soh)).put("rawSoh",jsonValue(rawSoh)).put("qmax",jsonValue(BatteryDetails.normalizeQmax(qmax,fcc,design)))
-            .put("cutoffMv",jsonValue(cutoff)).put("designCapacity",jsonValue(design)).put("noCompensation",noCompensation)
+            .put("cutoffMv",jsonValue(cutoff)).put("compensationCutoffMv",jsonValue(calculationCutoff))
+            .put("compensationFloorConfirmed",confirmed).put("designCapacity",jsonValue(design)).put("noCompensation",noCompensation)
             .put("serial",jsonValue(optionalText(read(BAT+"battery_sn"))))
             .put("manufactureDate",jsonValue(optionalText(read(BAT+"battery_manu_date"))))
             .put("batteryType",jsonValue(optionalText(type))).put("coefficients",relationships);
@@ -366,10 +376,16 @@ final class BatteryService {
         }
         reading.put("chargingProtocol",protocol);
         if(!usbOnline)return;
-        OplusVotes.Node currentVote=inputCurrentVote(type);
+        boolean lowInputVoltage=inputMillivolts>0&&inputMillivolts<=5400;
+        OplusVotes.Node currentVote=lowInputVoltage?OplusVotes.Node.WIRED_ICL:inputCurrentVote(type);
         if(currentVote==null)return;
+        reading.put("targetInputCurrentSource",currentVote.name());
         Long target=OplusVotes.readEffectiveValue(currentVote);
         if(target!=null)reading.put("targetInputCurrent",target);
+        if(currentVote==OplusVotes.Node.WIRED_ICL){
+            Long batteryLimit=OplusVotes.readEffectiveValue(OplusVotes.Node.WIRED_FCC);
+            if(batteryLimit!=null)reading.put("batteryCurrentLimit",batteryLimit);
+        }
     }
 
     private static boolean isChargingNow(double current){
@@ -380,7 +396,7 @@ final class BatteryService {
 
     private static String chargingProtocolName(int type){
         switch(type){
-            case 0:return "普通充电";
+            case 0:return "5V充电";
             case 1:return "VOOC";
             case 2:return "SUPERVOOC";
             case 3:return "USB PD";
@@ -402,8 +418,11 @@ final class BatteryService {
         }
     }
 
-    static boolean highDesignCapacity(Integer designCapacityMah){
-        return designCapacityMah!=null&&designCapacityMah>=7100;
+    boolean usesLowVoltageProfile(){
+        String model=Build.MODEL;
+        // OnePlus Ace 5 Ultra and Racing use the standard profile for estimates and warnings.
+        if("PLC110".equalsIgnoreCase(model)||"PLF110".equalsIgnoreCase(model))return false;
+        return designCapacityMah!=null&&designCapacityMah>=6600;
     }
 
 

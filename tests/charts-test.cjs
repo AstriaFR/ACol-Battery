@@ -194,6 +194,7 @@ function context(){
   save(){this.states.push([this.transform,this.lineWidth]);},restore(){[this.transform,this.lineWidth]=this.states.pop();},
   setTransform(value){this.transform=value;},setLineDash(){},beginPath(){this.segments=[];},moveTo(x,y){this.last=[x,y];},
   bezierCurveTo(...args){this.segments.push([...this.last,...args]);this.last=args.slice(-2);},
+  lineTo(x,y){this.bezierCurveTo(...this.last,x,y,x,y);},
   isPointInStroke(x,y){
    assert.equal(this.transform,1,'hit testing must use CSS pixels at every display density');
    for(const p of this.segments){
@@ -211,20 +212,31 @@ function context(){
  };
 }
 const{Chart}=await import(pathToFileURL(path.join(__dirname,'../src/main/assets/webroot/chart.js')).href);
- const ctx=context(),chart={ctx,kind:'discharge',fast:false,left:0,right:0,width:400,top:0,bottom:200,
-  enabled:new Set(['power']),signals:()=>[{key:'power',index:1}],scaleFor:()=>({}),signalWindow:Chart.prototype.signalWindow,traceSignal:Chart.prototype.traceSignal,pointPixel:row=>row.slice(0,2)};
+ let key='voltage';
+ const ctx=context(),chart=Object.assign(Object.create(Chart.prototype),{ctx,kind:'discharge',fast:false,left:0,right:0,width:400,top:0,bottom:200,
+  window:[0,400],enabled:{has:signal=>signal===key},signals:()=>[{key,index:1}],scaleFor:()=>({}),pointPixel:row=>row[7]===undefined?row.slice(0,2):[row[0],row[1],row[0]-row[7]]});
  const row=(x,y,quality=0)=>[x,y,null,null,null,null,quality],points=[row(0,0),row(200,200),row(400,0)];
- const hit=(x,y,data=points)=>Chart.prototype.hitCurve.call(chart,x,y,data);
+ const hit=(x,y,data=points,visible=data)=>{chart.points=data;return chart.hitCurve(x,y,visible);};
  assert.equal(hit(100,125),true,'point on the rendered cubic curve');
  assert.equal(hit(100,40),false,'blank plot area');
  assert.equal(hit(-1,125),false,'outside the plot');
  assert.equal(hit(200,200,[row(200,200)]),true,'single sample');
- assert.equal(hit(100,125,[row(0,0),row(200,null),row(400,0)]),false,'missing values split the path');
+ const missing=[row(0,0),row(200,null),row(400,0)];
+ assert.equal(hit(100,0,missing),true,'discharge voltage spans missing values');
+ chart.window=[170,230];chart.screenTransitions=[120,280];
+ assert.equal(hit(200,0,missing,[missing[1]]),true,'voltage stays continuous within a zoomed screen phase without samples');
+ chart.window=[0,400];chart.screenTransitions=null;
  chart.kind='charge';const gap=[row(0,0),row(200,200,1),row(400,0)];
  assert.equal(hit(100,125,gap),false,'charging gaps must not be joined');
  chart.kind='discharge';assert.equal(hit(100,125,gap),true,'ordinary discharge intentionally reconnects gaps');
  const reboot=[row(0,0),row(200,200,64|9),row(400,0)];
- assert.equal(hit(100,125,reboot),false,'a reboot boundary must interrupt the discharge curve');
+ assert.equal(hit(100,125,reboot),true,'discharge voltage spans reboot boundaries');
+ key='power';reboot[1][7]=80;reboot[2][7]=200;
+ assert.equal(hit(100,0,reboot),true,'the average power step keeps the preceding level until the next interval');
+ assert.equal(hit(120,100,reboot),true,'the average power step is vertical at the interval start');
+ key='rm';
+ assert.equal(hit(100,0,missing),false,'missing values still split other signals');
+ assert.equal(hit(100,125,reboot),false,'a reboot boundary still interrupts other signals');
  assert.equal(hit(200,200,reboot),true,'the first real sample after reboot stays visible');
  assert.equal(ctx.transform,2);assert.equal(ctx.lineWidth,1);assert.equal(ctx.states.length,0);
 }

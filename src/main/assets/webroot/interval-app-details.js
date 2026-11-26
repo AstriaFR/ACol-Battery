@@ -65,13 +65,13 @@ export class IntervalAppDetails{
     },Math.max(1000,retry.at-Date.now()));
   }
   visible(){return typeof document!=='undefined'&&!document.hidden&&!this.chart.canvas?.closest('[hidden]');}
-  inspect(row){this.inspection=row?{row,base:this.chart.tooltip.textContent}:null;this.render();}
+  inspect(row){this.inspection=row?{row,marker:this.chart.marker,base:this.chart.tooltip.textContent}:null;this.render();}
   key(record){return`${record.id}:${record.start_wall}:${record.app_revision??0}`;}
   async remove(id){this.deleted.add(id);if(this.retry?.id===id)this.pause();for(const[key]of this.records)if(key.startsWith(id+':'))this.records.delete(key);await this.cache.remove(id);}
   prune(){if(this.pruning||Date.now()<(this.pruneAt??0))return;this.pruneAt=Date.now()+60000;this.pruning=this.cache.prune(this.api).catch(()=>{}).finally(()=>this.pruning=null);}
   render(){
     const record=this.getRecord(),chart=this.chart,item=this.inspection;
-    if(!item||!this.eligible(record)||document.hidden||chart.tooltip.hidden||chart.recordId!==record.id||chart.marker!==item.row[0])return;
+    if(!item||!this.eligible(record)||document.hidden||chart.tooltip.hidden||chart.recordId!==record.id||chart.marker!==item.marker)return;
     const text=this.records.get(this.key(record))?.names.get(item.row[0]);
     chart.tooltip.textContent=item.base+(text?'\n'+text:'');chart.positionTooltip();
   }

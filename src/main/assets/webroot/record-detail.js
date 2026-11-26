@@ -30,7 +30,7 @@ export function createRecordDetail(options){
   let detail=null,activeId=null,request=0,detailBusy=0,zoomTimer,expanded=false,fullscreenAnchor=null;
   let followLive=false,followSpan=null,streamId=null,streamAfter=0,streamPoints=[],streamPreview=false,reversePlot=false;
   let followRedrawPending=false;
-  let remainingTimer,remainingGeneration=0,remainingRecordId=null,lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
+  let lastStatus=null,uiSettings={...DEFAULT_SETTINGS},bound=false;
   const chargeCache=new ChargeIntegralCache();
   let chargeEntry=null;
   const chart=new Chart($('plot'),$('tooltip'),()=>scheduleZoom());
@@ -46,37 +46,10 @@ export function createRecordDetail(options){
   chart.onInteract=()=>pauseFollowing();
   const readDetail=(...args)=>readRecordDetail(api,...args);
   const schedulePoll=()=>onRefresh();
-  const renderApps=data=>drain.render(data),hideAppEnergyTip=()=>drain.hideTip();
+  const renderApps=data=>drain.render(data,chart.energyScaleWh()),hideAppEnergyTip=()=>drain.hideTip();
   function hasRemainingMetrics(){return !!detail?.record.active&&detail.record.kind==='discharge';}
-  function remainingEligible(){return !document.hidden&&!$('detail').hidden&&!$('confirm').open&&hasRemainingMetrics()&&activeId!==null&&canEstimateRemaining(detail.record,lastStatus?.reading);}
   function clearRemaining(){
     if($('remainingWh'))$('remainingWh').textContent='—';if($('remainingTime'))$('remainingTime').textContent='—';
-  }
-  function stopRemaining(){clearTimeout(remainingTimer);remainingTimer=null;remainingRecordId=null;++remainingGeneration;clearRemaining();}
-  function startRemaining(){
-    if(!remainingEligible()){if(remainingRecordId!==null)stopRemaining();else clearRemaining();return;}
-    if(remainingRecordId===activeId)return;
-    stopRemaining();remainingRecordId=activeId;pollRemaining(remainingGeneration);
-  }
-  async function pollRemaining(generation){
-    if(generation!==remainingGeneration)return;
-    if(!remainingEligible()){stopRemaining();return;}
-    const started=performance.now();
-    try{
-      // status reads root telemetry without appending a sample or writing estimates.
-      const status=await api('status');
-      if(generation!==remainingGeneration||!remainingEligible())return;
-      if(!canEstimateRemaining(detail.record,status.reading)){stopRemaining();return;}
-      const estimate=remainingEstimate(status.reading,detail.drainSummary?.[0]?.avgPower,status.highDesignCapacity);
-      if(!estimate){clearRemaining();return;}
-      $('remainingWh').textContent=estimate.whText;$('remainingTime').textContent=remainingTime(estimate.minutes,estimate.wh);
-    }catch(e){if(generation===remainingGeneration)clearRemaining();}
-    finally{
-      if(generation===remainingGeneration){
-        if(remainingEligible())remainingTimer=setTimeout(()=>pollRemaining(generation),Math.max(100,10000-(performance.now()-started)));
-        else stopRemaining();
-      }
-    }
   }
   function remainingInfoButton(){
     const button=el('button','i','remaining-info');button.type='button';
@@ -117,7 +90,7 @@ export function createRecordDetail(options){
     const record=data.record;
     chart.readRawInspection=data.preview?async(from,to,x)=>(await api('detail_sample',record.id,from,to,x)).sample:null;
     chart.set(data.points,Math.max(1,record.end_elapsed-record.start_elapsed),view,{kind:record.kind,cellCount:recordCells(record),highDesignCapacity:data.highDesignCapacity,fast:recordFast(record),recordId:record.id,startWall:record.start_wall,ranges:data.ranges??{},live,appendOnly:data.points===streamPoints});
-    if(!data.loading){intervalAppDetails.preload(record,data.statsVersion);screenOffOverlay.update(record,data.statsVersion);}
+    if(!data.loading){intervalAppDetails.preload(record,data.statsVersion);screenOffOverlay.update(record,data.statsVersion);renderApps(data);}
     renderChartInfo();renderFollow();
   }
   function renderChartInfo(){
@@ -152,7 +125,7 @@ export function createRecordDetail(options){
     screenOffOverlay.close();
     drain.close();
     performancePanel?.close();
-    stopRemaining();
+    clearRemaining();
     hideAppEnergyTip();
     if(expanded)await toggleFullscreen(false);
     ++request;clearTimeout(zoomTimer);
@@ -166,7 +139,7 @@ export function createRecordDetail(options){
     beforeOpen();
     drain.close();
     performancePanel?.close();
-    stopRemaining();hideAppEnergyTip();
+    clearRemaining();hideAppEnergyTip();
     clearTimeout(zoomTimer);
     const token=++request;activeId=id;detail=null;streamId=null;streamPoints=[];streamAfter=0;streamPreview=false;followLive=false;followRedrawPending=false;reversePlot=false;detailBusy++;
     if(record?.id===id)showDetail({record,points:[],loading:true});
@@ -178,7 +151,7 @@ export function createRecordDetail(options){
         showDetail(data,preserve);
         const growth=chartRangeGrowth(chart,uiSettings);
         if(growth.some(Boolean))api('grow_chart_ranges',...growth).then(result=>onSettings?.(result.settings)).catch(()=>{});
-        if(data.record.active){liveChannel.seedRecord(id,streamAfter);startRemaining();}
+        if(data.record.active)liveChannel.seedRecord(id,streamAfter);
       });
     }
     catch(e){
@@ -206,7 +179,6 @@ export function createRecordDetail(options){
     if(!preserve){followLive=!!r.active;followSpan=null;chart.axisKey=null;chart.enabled=loadSelection(recordFast(r)?'game':r.kind,legendKeys(r.kind,recordCells(r),recordFast(r)));buildLegend(r.kind);}
     syncReversePlot(false);
     const end=Math.max(1,r.end_elapsed-r.start_elapsed),view=live&&followLive?followWindow(end):preserve?chart.window:[0,end];applyChart(data,view,live);
-    if(!data.loading)renderApps(data);
     renderDetailNote(data);
     if(!preserve&&(history.state?.page!=='record'||history.state.id!==r.id))history.pushState({page:'record',id:r.id},'',`${location.pathname}${location.search}#record-${r.id}`);
   }
@@ -235,7 +207,6 @@ export function createRecordDetail(options){
   }
   function renderSummary(r,failed=false){
     const summary=$('summary'),active=!!r.active,live=!failed&&recordIsLive(r,lastStatus);
-    if(!active&&remainingRecordId!==null)stopRemaining();
     const reading=live?lastStatus.reading??{}:{},flow=valid(reading.power)&&reading.power!==0?(reading.power>0?'charge':'discharge'):r.kind;
     const cells=live?(reading.cellCount??recordCells(r)):recordCells(r);
     const displayCurrent=valid(reading.displayCurrent)?reading.displayCurrent:valid(reading.current)?reading.current*(cells===2?2:1):null;
@@ -256,10 +227,14 @@ export function createRecordDetail(options){
       ['temp',number(reading.temp,1),'温度','°C',null],
       ['power',signed(reading.power),r.kind==='discharge'?'实时功率':'功率','W',flow]
     ];
-    if(active&&r.kind==='discharge')primary.push(
-      ['remainingWh',null,'估算剩余能量','Wh',null],
-      ['remainingTime',null,'估算亮屏时长','',null]
-    );
+    if(active&&r.kind==='discharge'){
+      const estimate=live&&!document.hidden&&!$('confirm').open&&canEstimateRemaining(r,reading)
+        ?remainingEstimate(reading,detail?.drainSummary?.[0]?.avgPower,lastStatus.highDesignCapacity):null;
+      primary.push(
+        ['remainingWh',estimate?.whText??'—','估算剩余能量','Wh',null],
+        ['remainingTime',estimate?remainingTime(estimate.minutes,estimate.wh):'—','估算亮屏时长','',null]
+      );
+    }
     const values=active?primary:[
       ['pct',`${fmt(r.pct_end)}%`,'结束电量','',null],
       ['change',change,'容量变化','',changeFlow],
@@ -267,13 +242,12 @@ export function createRecordDetail(options){
     ];
     const mode=active?'live':'ended',voltageCount=separateCells?'2':'1';summary.dataset.flow=r.kind;
     if(summary.dataset.recordId!==String(r.id)||summary.dataset.mode!==mode||summary.dataset.voltageCount!==voltageCount){
-      const sameRecord=summary.dataset.recordId===String(r.id),wh=sameRecord?$('remainingWh')?.textContent:'—',timeLeft=sameRecord?$('remainingTime')?.textContent:'—';
       summary.dataset.recordId=r.id;summary.dataset.mode=mode;summary.dataset.voltageCount=voltageCount;summary.replaceChildren();
       const grid=el('div',undefined,'summary-grid');
       for(const [key,,,unit]of values){
         const item=el('div',undefined,'summary-metric');item.dataset.metric=key;
         const value=el('strong'),text=el('span','','metric-value');
-        if(key==='remainingWh'||key==='remainingTime'){text.id=key;text.textContent=(key==='remainingWh'?wh:timeLeft)??'—';}
+        if(key==='remainingWh'||key==='remainingTime')text.id=key;
         value.append(text,el('span',unit,'metric-unit'));
         if(key==='remainingWh')value.append(remainingInfoButton());
         item.append(value,el('small','','metric-label'));grid.append(item);
@@ -285,7 +259,7 @@ export function createRecordDetail(options){
     }
     for(const [key,value,label,,color]of values){
       const item=summary.querySelector(`[data-metric="${key}"]`);
-      if(key!=='remainingWh'&&key!=='remainingTime')item.querySelector('.metric-value').textContent=value;
+      item.querySelector('.metric-value').textContent=value;
       item.querySelector('.metric-label').textContent=label;
       if(color)item.dataset.flow=color;else delete item.dataset.flow;
     }
@@ -412,7 +386,6 @@ export function createRecordDetail(options){
         if(activeChanged){liveChannel.setMode(detail.record.active?DETAIL_WATCH_MODE:SUMMARY_WATCH_MODE);syncRemainingExplanation();scheduleChargeIntegral(detail.record);}
       }
     }
-    if(current(token))startRemaining();
   }
   function bind(){
     if(bound)return;bound=true;
@@ -440,14 +413,23 @@ export function createRecordDetail(options){
   }
   return{bind,open:openDetail,close,pollRequest,current,receive,
     get data(){return detail;},get id(){return activeId;},get busy(){return detailBusy>0;},
-    setStatus(value){lastStatus=value;},
-    setSettings(value){uiSettings=value;if(detail){chart.draw();renderChartInfo();}},
+    setStatus(value){
+      lastStatus=value;
+      const highDesignCapacity=value?.highDesignCapacity;
+      if(detail&&!detail.loading&&detail.record.kind==='discharge'&&typeof highDesignCapacity==='boolean'&&highDesignCapacity!==detail.highDesignCapacity){
+        detail={...detail,highDesignCapacity};applyChart(detail,chart.window,true);
+      }
+    },
+    setSettings(value){
+      uiSettings=value;
+      if(detail){chart.draw();renderChartInfo();if(!detail.loading)renderApps(detail);}
+    },
     theme(){if(activeId!==null&&detail)buildLegend(detail.record.kind);chart.draw();performancePanel?.refreshTheme();},
     syncHistory:syncRemainingExplanation,
     backFullscreen(){if(performancePanel?.expanded){performancePanel.fullscreen(false);return true;}if(expanded){toggleFullscreen(false);return true;}return false;},
-    pause(){stopRemaining();drain.pause();intervalAppDetails.pause();},
-    resume(){startRemaining();drain.resume();if(detail&&!detail.loading)intervalAppDetails.preload(detail.record,detail.statsVersion);},
-    pauseRemaining:stopRemaining,resumeRemaining:startRemaining,
+    pause(){clearRemaining();drain.pause();intervalAppDetails.pause();},
+    resume(){drain.resume();if(detail&&!detail.loading)intervalAppDetails.preload(detail.record,detail.statsVersion);},
+    pauseRemaining:clearRemaining,
     prune(){drain.prune();intervalAppDetails.prune();chargeCache.prune(api).catch(()=>{});},
     removeCaches(id){drain.remove(id);intervalAppDetails.remove(id);chargeCache.remove(id);if(activeId===id){drain.close();chargeEntry=null;}},
     failure(){if(activeId!==null){$('chartInfo').textContent='正在重连…';if(detail)renderSummary(detail.record,true);}}

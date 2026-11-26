@@ -2,11 +2,12 @@ import{chartSettings}from'./config.js?v=acol-2.2s';
 import{valid,duration}from'./record-display.js?v=acol-2.2s';
 export{setChartSettings}from'./config.js?v=acol-2.2s';
 export{valid,duration};
-import{remainingEstimate,unclassifiedCells,gameEnergyDisabled}from'./estimate.js?v=acol-2.2s';
+import{remainingEstimate,unclassifiedCells,gameEnergyDisabled,dischargeRatePercentPerHour,gameSampleIsCharging}from'./estimate.js?v=acol-2.2s';
 import{batteryColor}from'./curve-colors.js?v=acol-2.2s';
 import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
 const rebootGap=64;
 const dischargeRebase=128;
+const continuousDischargeSignal=(kind,fast,key)=>kind==='discharge'&&!fast&&(key==='power'||key==='voltage');
 const cssColor=(name,fallback)=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback;
 const scaleSettingsKey=()=>JSON.stringify([chartSettings.energyWh,chartSettings.capacityAh,chartSettings.voltageMin,chartSettings.voltageMax,chartSettings.tempMin,chartSettings.tempMax]);
 const reachesHeadroom=(peak,base,full)=>Number.isFinite(peak)&&full>base
@@ -33,7 +34,7 @@ export function seriesFor(kind,cellCount=2,fast=false){return series.filter(s=>s
 export function plotPoints(points,kind,cellCount=2,fast=false,highDesignCapacity=false){
   if(kind!=='discharge')return points.map(p=>{if(!valid(p[3])||cellCount!==2||(p[6]&unclassifiedCells))return p;const row=[...p];row[3]*=2;return row;});
   const withEnergy=p=>{
-    const row=[...p],charging=fast&&(p[12]===1||p[12]===true||p[12]==null&&valid(p[5])&&p[5]<0);
+    const row=[...p],charging=fast&&gameSampleIsCharging(p[12],p[5]);
     const cells=(p[6]&unclassifiedCells)?0:cellCount;
     if(fast&&valid(row[3]))row[3]*=-(cells===2?2:1);
     row[11]=charging||(fast&&(p[6]&gameEnergyDisabled))?null:remainingEstimate({rm:p[1],voltage:p[4],cellCount:cells},null,highDesignCapacity)?.wh??null;return row;
@@ -250,9 +251,11 @@ export function softenTemperature(points,noise){
   });
 }
 // Quantized paths use time-weighted monotone tangents after plateau consolidation.
-export function smoothPath(ctx,points,quantized=false){
+export function smoothPath(ctx,points,quantized=false,connect=false){
   if(quantized)points=plateauAnchors(points);
-  if(!points.length)return;ctx.moveTo(...points[0]);if(points.length===1)return;
+  if(!points.length)return;
+  if(connect)ctx.lineTo(...points[0]);else ctx.moveTo(...points[0]);
+  if(points.length===1)return;
   const d=points.slice(1).map((p,i)=>(p[1]-points[i][1])/(p[0]-points[i][0]||1));
   const m=points.map((_,i)=>i===0?d[0]:i===points.length-1?d[d.length-1]:(d[i-1]*d[i]<=0?0:2*d[i-1]*d[i]/(d[i-1]+d[i])));
   if(quantized&&points.length>2){
@@ -276,6 +279,23 @@ export function smoothPath(ctx,points,quantized=false){
     ctx.bezierCurveTo(a[0]+dx,a[1]+m[i]*dx,b[0]-dx,b[1]-m[i+1]*dx,...b);
   }
 }
+function traceScreenSections(ctx,points,boundaries){
+  const first=points[0][0],last=points.at(-1)[0];
+  let from=first,index=0,connect=false;
+  // Extend each side with its own value up to the recorded transition.
+  for(const to of [...boundaries.filter(x=>x>first&&x<=last),Infinity]){
+    const start=index;
+    while(index<points.length&&points[index][0]<to)index++;
+    if(index>start){
+      const section=points.slice(start,index),head=section[0],tail=section.at(-1),end=Math.min(to,last);
+      if(from<head[0])section.unshift([from,head[1]]);
+      if(end>tail[0])section.push([end,tail[1]]);
+      smoothPath(ctx,section,false,connect);
+      connect=true;
+    }
+    from=to;
+  }
+}
 function pointBound(points,x,after=false){
   let lo=0,hi=points.length;
   while(lo<hi){const mid=(lo+hi)>>>1,t=points[mid][0];if(t<x||after&&t===x)lo=mid+1;else hi=mid;}
@@ -291,7 +311,7 @@ export class Chart{
     this.markerLine=document.createElement('span');this.markerLine.className='plot-marker';this.markerLine.hidden=true;
     this.markerLine.setAttribute('aria-hidden','true');canvas.after(this.markerLine);
     this.points=[];this.enabled=new Set(['rm','pct']);this.window=[0,1];this.total=1;this.pointers=new Map();this.marker=null;this.kind='discharge';this.ranges={};this.axisKey=null;this.cellCount=2;this.highDesignCapacity=false;
-    this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.startWall=null;this.wallByX=new Map();
+    this.scaleCache=new Map();this.scaleSettings=scaleSettingsKey();this.recordId=null;this.screenOffSpans=[];this.screenTransitions=null;this.startWall=null;this.wallByX=new Map();
     new ResizeObserver(()=>this.scheduleDraw()).observe(canvas.parentElement);
     globalThis.visualViewport?.addEventListener('resize',()=>this.scheduleDraw());
     canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=this.local(e);this.pointers.set(e.pointerId,p);this.gesture=this.capture();this.moved=false;this.dragMarker=this.pointers.size===1&&this.marker!==null&&Math.abs(p[0]-this.markerX())<=14?e.pointerId:null;this.beginInspectionHold(e.pointerId,p);});
@@ -322,7 +342,19 @@ export class Chart{
   }
   local(e){const r=this.canvas.getBoundingClientRect();if(this.canvas.closest('.rotate'))return[e.clientY-r.top,r.right-e.clientX];return[e.clientX-r.left,e.clientY-r.top];}
   signals(){return seriesFor(this.kind,this.cellCount,this.fast);}
-  signalWindow(signal,visible){return visible;}
+  signalWindow(signal,visible){
+    if(!continuousDischargeSignal(this.kind,this.fast,signal.key)||!this.points.length)return visible;
+    const [from,to]=this.window;
+    const start=pointBound(this.points,from),end=pointBound(this.points,to,true);
+    const hasValue=row=>valid(row[signal.index]);
+    let before=start-1,after=end;
+    while(before>=0&&!hasValue(this.points[before]))before--;
+    while(after<this.points.length&&!hasValue(this.points[after]))after++;
+    const rows=this.points.slice(start,end).filter(hasValue);
+    if(before>=0)rows.unshift(this.points[before]);
+    if(after<this.points.length)rows.push(this.points[after]);
+    return rows;
+  }
   timeAxis(width){
     const wall=this.kind==='discharge'||this.kind==='performance';
     const label=x=>wall?systemTimeLabel(chartSystemWall(this.points,this.startWall,x,this.kind,this.wallByX)):elapsedMinuteLabel(x);
@@ -341,6 +373,11 @@ export class Chart{
     const scale=signalScale(s,values,this.kind,this.fast,this.scaleCache.get(s.key));
     if(values.some(valid))this.scaleCache.set(s.key,scale);
     return scale;
+  }
+  energyScaleWh(){
+    const energy=this.signals().find(signal=>signal.key==='energy');
+    const scale=energy?this.scaleFor(energy):null;
+    return scale?.observed?scale.full:null;
   }
   markerX(){return this.left+(this.marker-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right);}
   clearInspect(){this.cancelInspectionHold();this.dragMarker=null;this.inspectionTarget=null;if(this.marker===null&&this.tooltip.hidden)return;this.marker=null;this.tooltip.hidden=true;this.onInspect?.(null);this.refreshInspection();}
@@ -362,7 +399,7 @@ export class Chart{
     const kind=options.kind??this.kind,fast=!!options.fast,cells=options.cellCount??2,highDesignCapacity=options.highDesignCapacity===true;
     const changed=kind!==this.kind||fast!==this.fast||cells!==this.cellCount||highDesignCapacity!==this.highDesignCapacity||options.recordId!==undefined&&options.recordId!==this.recordId;
     if(changed)this.scaleCache.clear();
-    if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.wallByX?.clear();}this.recordId=options.recordId;}
+    if(options.recordId!==undefined){if(options.recordId!==this.recordId){this.screenOffSpans=[];this.screenTransitions=null;this.wallByX?.clear();}this.recordId=options.recordId;}
     this.startWall=valid(options.startWall)?options.startWall:null;
     this.kind=kind;this.fast=fast;this.cellCount=cells;this.highDesignCapacity=highDesignCapacity;
     if(options.appendOnly&&!changed&&this.streamSource===points&&this.streamLength<=points.length){
@@ -398,14 +435,14 @@ export class Chart{
       // Pointer coordinates are CSS pixels, independent of the display density.
       ctx.setTransform(1,0,0,1,0,0);ctx.lineWidth=26;ctx.lineCap='round';ctx.lineJoin='round';ctx.setLineDash([]);
       for(const s of this.signals().filter(s=>this.enabled.has(s.key))){
-        let segment=[];const scale=this.scaleFor(s);
+        let segment=[];const scale=this.scaleFor(s),continuous=continuousDischargeSignal(this.kind,this.fast,s.key);
         const hit=()=>{
           if(!segment.length)return false;
-          if(segment.length===1)return Math.hypot(pixel-segment[0][0],y-segment[0][1])<=13;
+          if(segment.length===1&&segment[0][2]===undefined)return Math.hypot(pixel-segment[0][0],y-segment[0][1])<=13;
           ctx.beginPath();this.traceSignal(ctx,segment,s,scale);return ctx.isPointInStroke(pixel,y);
         };
         for(const row of this.signalWindow(s,visible)){
-          if(!valid(row[s.index])||(row[6]&gapMask)){
+          if(!continuous&&(!valid(row[s.index])||(row[6]&gapMask))){
             if(hit())return true;segment=[];
             if(!valid(row[s.index]))continue;
           }
@@ -417,29 +454,90 @@ export class Chart{
     }finally{ctx.restore();}
   }
   traceSignal(ctx,points,signal,scale){
+    if(!points.length)return;
+    if(this.kind==='discharge'&&!this.fast&&this.screenTransitions&&signal.key==='voltage'){
+      const [from,to]=this.window,pixelsPerMs=(this.width-this.left-this.right)/(to-from);
+      traceScreenSections(ctx,points,this.screenTransitions.map(x=>this.left+(x-from)*pixelsPerMs));
+      return;
+    }
+    if(this.kind==='discharge'&&!this.fast&&signal.key==='power'){
+      ctx.moveTo(points[0][2]??points[0][0],points[0][1]);
+      for(let i=0;i<points.length;i++){
+        const [x,y,intervalStart]=points[i];
+        if(i>0&&intervalStart!==undefined){
+          const [previousX,previousY]=points[i-1];
+          const boundary=Math.max(previousX,intervalStart);
+          ctx.lineTo(boundary,previousY);
+          ctx.lineTo(boundary,y);
+        }
+        ctx.lineTo(x,y);
+      }
+      return;
+    }
     if(signal.unit==='℃'){
       const pixelsPerDegree=100*(this.bottom-this.top)/((this.axisHi-this.axisLo)*(scale.full-scale.base));
       points=softenTemperature(points,0.3*pixelsPerDegree);
     }
     smoothPath(ctx,points,signal.key==='pct');
   }
-  pointPixel(row,s,scale){return[this.left+(row[0]-this.window[0])/(this.window[1]-this.window[0])*(this.width-this.left-this.right),this.bottom-(scalePercent(row[s.index],scale)-this.axisLo)/((this.axisHi??100)-this.axisLo)*(this.bottom-this.top)];}
+  pointPixel(row,s,scale){
+    const [from,to]=this.window,pixelsPerMs=(this.width-this.left-this.right)/(to-from);
+    const x=this.left+(row[0]-from)*pixelsPerMs;
+    const y=this.bottom-(scalePercent(row[s.index],scale)-this.axisLo)/((this.axisHi??100)-this.axisLo)*(this.bottom-this.top);
+    // A discharge power sample is the mean for the interval ending at this point.
+    if(this.kind==='discharge'&&!this.fast&&s.key==='power'&&valid(row[7])&&row[7]>0)
+      return[x,y,x-row[7]*pixelsPerMs];
+    return[x,y];
+  }
   inspect(pixel,y,force=false){
-    const start=pointBound(this.points,this.window[0]),end=pointBound(this.points,this.window[1],true);if(start>=end)return;
-    if(!force&&!this.hitCurve(pixel,y,this.points.slice(start,end))){this.clearInspect();return;}
-    const x=this.window[0]+(pixel-this.left)/(this.width-this.left-this.right)*(this.window[1]-this.window[0]);
+    const [from,to]=this.window;
+    const start=pointBound(this.points,from),end=pointBound(this.points,to,true),betweenSamples=start===end;
+    if(!this.points.length||(betweenSamples&&this.kind!=='discharge'&&this.kind!=='charge'))return;
+    const visible=windowPoints(this.points,from,to);
+    if(!force&&!this.hitCurve(pixel,y,visible)){this.clearInspect();return;}
+    const x=Math.max(from,Math.min(to,from+(pixel-this.left)/(this.width-this.left-this.right)*(to-from)));
+    let nearest=null;
+    if(!betweenSamples){
+      const right=Math.min(end-1,Math.max(start,pointBound(this.points,x))),left=Math.max(start,right-1);
+      const a=this.points[left],b=this.points[right];
+      nearest=x-a[0]<=b[0]-x?a:b;
+    }
+    const selected=this.signals().filter(s=>this.enabled.has(s.key));
+    if(!nearest||!selected.some(s=>valid(nearest[s.index]))){
+      let closest=null;
+      for(const s of selected){
+        if(!continuousDischargeSignal(this.kind,this.fast,s.key))continue;
+        const rows=this.signalWindow(s,visible),i=pointBound(rows,x);
+        const before=rows[i-1],after=rows[i];
+        // An average belongs to the interval ending at its sample.
+        if(s.key==='power'&&after&&valid(after[7])&&after[7]>0&&after[0]-after[7]<=x){closest=after;break;}
+        if(after?.[0]===x){closest=after;continue;}
+        if(!before||!after)continue;
+        const candidate=x-before[0]<=after[0]-x?before:after;
+        if(!closest||Math.abs(candidate[0]-x)<Math.abs(closest[0]-x))closest=candidate;
+      }
+      if(closest){this.inspectionTarget=null;this.showInspection(closest,y,x);return;}
+    }
+    const before=betweenSamples?this.points[start-1]:null,after=betweenSamples?this.points[start]:null;
+    const gapMask=this.kind==='discharge'&&!this.fast?rebootGap:3;
+    if(betweenSamples&&(!before||!after||(after[6]&gapMask)))return;
     if(this.readRawInspection){
-      const from=Math.ceil(this.window[0]),to=Math.floor(this.window[1]),target=Math.max(from,Math.min(to,Math.round(x)));
+      const first=Math.ceil(before?.[0]??from),last=Math.floor(after?.[0]??to);
+      const target=Math.max(Math.ceil(from),Math.min(Math.floor(to),Math.round(x)));
       const old=this.inspectionTarget;
-      if(old?.target===target&&old.from===from&&old.to===to){this.inspectY=y;this.positionTooltip();return;}
-      this.inspectionTarget={target,from,to,read:this.readRawInspection};
+      if(old?.target===target&&old.from===first&&old.to===last){this.inspectY=y;this.positionTooltip();return;}
+      this.inspectionTarget={target,from:first,to:last,read:this.readRawInspection};
       this.marker=target;this.inspectY=y;this.tooltip.textContent='正在读取采样点…';this.tooltip.hidden=false;this.refreshInspection();
       if(!this.inspectionBusy)this.resolveRawInspection();
       return;
     }
-    const right=Math.min(end-1,Math.max(start,pointBound(this.points,x))),left=Math.max(start,right-1);
-    const a=this.points[left],b=this.points[right],row=x-a[0]<=b[0]-x?a:b;
-    this.showInspection(row,y);
+    if(betweenSamples){
+      const row=after[0]-x<x-before[0]?after:before;
+      this.inspectionTarget=null;
+      this.showInspection(row,y,x);
+      return;
+    }
+    this.showInspection(nearest,y);
   }
   async resolveRawInspection(){
     this.inspectionBusy=true;
@@ -450,7 +548,11 @@ export class Chart{
         let row,failed=false;
         try{row=await pending.read(pending.from,pending.to,pending.target);}catch{failed=true;}
         if(pending!==this.inspectionTarget)continue;
-        if(row)this.showInspection(this.preparePoints([row])[0],this.inspectY);
+        const point=row?this.preparePoints([row])[0]:null;
+        if(point){
+          const [from,to]=this.window,x=point[0];
+          this.showInspection(point,this.inspectY,x>=from&&x<=to?x:pending.target);
+        }
         else{
           if(failed)this.inspectionTarget=null;
           this.tooltip.textContent=failed?'采样点读取失败':'该区间暂无采样点';this.positionTooltip();
@@ -458,8 +560,8 @@ export class Chart{
       }
     }finally{this.inspectionBusy=false;}
   }
-  showInspection(row,y){
-    this.marker=row[0];this.inspectY=y;
+  showInspection(row,y,marker=row[0]){
+    this.marker=marker;this.inspectY=y;
     const recordedWall=sampleSystemWall(row,this.kind,this.wallByX),wall=recordedWall??(valid(this.startWall)?this.startWall+row[0]:null);
     const quality=row[6]&rebootGap?' · 重启衔接':row[6]&8?' · 后台衔接':row[6]&~(unclassifiedCells|dischargeRebase|gameEnergyDisabled)?' · 数据异常':'';
     const signals=this.signals();
@@ -469,13 +571,13 @@ export class Chart{
         const voltage=this.kind==='discharge'&&s.key==='voltage',value=voltage&&valid(row[s.index])?row[s.index]/1000:row[s.index];
         if(s.unit==='FPS')return`${s.name}  ${recordedFpsText(value)??'缺失'} ${s.unit}`;
         if(this.kind==='discharge'&&this.fast&&(s.key==='current'||s.key==='power'))return`${s.name}  ${gameSampleText(value,s.key,s.key==='current'?0:2)} ${s.unit}`;
-        if(this.kind==='discharge'&&s.key==='power'){
-          const energy=signals.find(signal=>signal.key==='energy');
-          const scale=valid(value)&&energy?this.scaleFor(energy):null;
-          const rate=scale?.observed?-100*value/scale.full:NaN;
+        if(s.key==='power'&&(this.kind==='charge'||this.kind==='discharge')){
           const powerText=valid(value)?value.toFixed(2):'缺失';
+          const powerLine=`${s.name}  ${powerText} ${s.unit}`;
+          if(this.kind==='charge')return powerLine;
+          const rate=valid(value)?dischargeRatePercentPerHour(-value,this.energyScaleWh()):null;
           const rateText=valid(rate)?`${rate.toFixed(2)}%/h`:'缺失';
-          return`${s.name}  ${powerText} ${s.unit}\n放电速率(估算)  ${rateText}`;
+          return`${powerLine}\n放电速率(估算)  ${rateText}`;
         }
         return`${s.name}  ${s.key==='temp'?(valid(value)?value.toFixed(1):'缺失'):s.key==='energy'?(valid(value)?value.toFixed(value<2?2:1):'缺失'):sampleText(value,voltage?3:s.digits)}${s.key==='rm'?'':' '+(voltage?'V':s.unit)}`;
       }).join('\n')+
@@ -547,17 +649,20 @@ export class Chart{
     if(hi!==110){ctx.beginPath();ctx.moveTo(this.left,top);ctx.lineTo(w-this.right,top);ctx.stroke();}
     const gapMask=this.kind==='discharge'&&!this.fast?rebootGap:3;
     selected.forEach(s=>{
-      const scale=scales.get(s.key)??this.scaleFor(s);
-      const map=p=>[this.left+(p[0]-this.window[0])/(this.window[1]-this.window[0])*pw,mapY(scalePercent(p[s.index],scale))];
+      const scale=scales.get(s.key)??this.scaleFor(s),continuous=continuousDischargeSignal(this.kind,this.fast,s.key);
       const special=this.kind==='performance'||s.key==='power'||s.key==='current';
       // Leave the full stroke visible at 0% and the top boundary, above the axis border.
       ctx.save();ctx.beginPath();ctx.rect(this.left,top-2,pw,ph+4);ctx.clip();ctx.strokeStyle=s.color;ctx.lineWidth=special?.75:.9;ctx.globalAlpha=special?.7:.86;ctx.lineJoin='miter';ctx.lineCap='round';
       let segment=[];const flush=()=>{
         if(!segment.length)return;ctx.beginPath();
         this.traceSignal(ctx,segment,s,scale);
-        ctx.stroke();if(segment.length===1){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
+        ctx.stroke();if(segment.length===1&&segment[0][2]===undefined){ctx.beginPath();ctx.arc(...segment[0],1.5,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}segment=[];
       };
-      for(const p of this.signalWindow(s,visible)){if(!valid(p[s.index])){flush();continue;}if(p[6]&gapMask)flush();segment.push(map(p));}flush();ctx.restore();
+      for(const p of this.signalWindow(s,visible)){
+        if(!continuous){if(!valid(p[s.index])){flush();continue;}if(p[6]&gapMask)flush();}
+        segment.push(this.pointPixel(p,s,scale));
+      }
+      flush();ctx.restore();
     });
     if(!visible.length||!selected.length){ctx.fillStyle=cssColor('--plot-label','#64748b');ctx.textAlign='center';ctx.font='12px system-ui';ctx.fillText(selected.length?'该区间暂无数据':'勾选上方指标显示曲线',this.left+pw/2,top+ph/2);}
     this.refreshInspection();

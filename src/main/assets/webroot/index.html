@@ -24,7 +24,7 @@
     <div class="record-scroll"><div id="records" class="records"></div><button id="more" class="wide" hidden>加载更多</button></div>
   </section>
   <section id="settingsPanel" class="app-page settings-page settings-panel" aria-label="设置" hidden>
-    <header class="page-head settings-head"><div><h1>设置</h1></div><div class="settings-header-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="主题：跟随系统"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z"/></svg><span class="theme-auto-badge" aria-hidden="true">A</span></button><button id="openAdvanced" class="advanced-button" type="button">进阶设置</button></div></header>
+    <header class="page-head settings-head"><div><h1>设置</h1></div><div class="settings-header-actions"><button id="themeToggle" class="theme-toggle" type="button" aria-label="主题：跟随系统"><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.6 8.6 0 0 1 8.9 3.7 8.7 8.7 0 1 0 20.3 15.1Z"/></svg><span class="theme-auto-badge" aria-hidden="true">A</span></button><button id="openAdvanced" class="advanced-button" type="button">参数设置</button></div></header>
     <div class="page-scroll">
     <section class="card setting-card recording-control">
       <label class="setting-heading setting-switch" for="recordingEnabled"><span>记录总开关</span><input id="recordingEnabled" type="checkbox" role="switch" disabled></label>
@@ -152,18 +152,18 @@
   </div>
 </section>
 <section id="advancedPage" class="detail battery-info-panel advanced-page" aria-labelledby="advancedTitle" hidden>
-  <header class="subpage-header"><div class="page-heading"><button id="advancedBack" class="back" type="button">返回</button><h1 id="advancedTitle">进阶设置</h1></div><button id="resetAdvancedSettings" class="settings-button" type="button" disabled>恢复默认</button></header>
+  <header class="subpage-header"><div class="page-heading"><button id="advancedBack" class="back" type="button">返回</button><h1 id="advancedTitle">参数设置</h1></div><button id="resetAdvancedSettings" class="settings-button" type="button" disabled>恢复默认</button></header>
   <div class="page-scroll">
-    <section class="card advanced-card" aria-labelledby="advancedLiveTitle">
+    <section class="card advanced-card advanced-live-card" aria-labelledby="advancedLiveTitle">
       <div class="advanced-live-heading"><h2 id="advancedLiveTitle">当前生效值</h2><button id="advancedInfo" class="settings-button" type="button">参数说明</button></div>
       <dl id="advancedCapacityReadings" class="advanced-readings" aria-label="解容" hidden></dl>
       <dl id="advancedChargingReadings" class="advanced-readings" aria-label="充电"></dl>
       <p id="advancedStatus" class="small" role="status" hidden></p>
     </section>
     <section class="card advanced-card" aria-labelledby="advancedCapacityTitle">
-      <h2 id="advancedCapacityTitle">解容<small id="advancedBatteryType" class="advanced-battery-type" hidden></small></h2>
+      <h2 id="advancedCapacityTitle">解容</h2>
       <div id="advancedDischargeVoltageFields"></div>
-      <p class="advanced-setting-note">两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。</p>
+      <p class="advanced-setting-note">两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。<span id="advancedDischargeVoltageAdvice" hidden><br>稳妥设置值为<span id="advancedDischargeVoltageAdviceValue"></span>以上，过低可能导致跳过超级省电。</span></p>
       <div id="advancedFloatCorrection"></div>
       <p class="advanced-setting-note">设为FV_DEC的正数值，可以抵消系统判断的浮充电压下降(FV_DEC)。无法实际让电压超出厂商限制。</p>
       <div id="advancedFloatFields"></div>
@@ -183,8 +183,8 @@
       <p class="advanced-setting-note">谨慎修改，虽然仍会受到底层限制，但会因电压和温度墙导致充电中断。</p>
     </section>
     <section class="card advanced-card">
-      <label class="setting-heading setting-switch" for="advancedAutoRestore"><span>尝试自动恢复进阶参数</span><input id="advancedAutoRestore" type="checkbox" role="switch" disabled></label>
-      <p class="advanced-setting-note">亮屏时每半小时检查进阶参数并尝试恢复。</p>
+      <label class="setting-heading setting-switch" for="advancedAutoRestore"><span>尝试自动恢复手动参数</span><input id="advancedAutoRestore" type="checkbox" role="switch" disabled></label>
+      <p class="advanced-setting-note">亮屏时每半小时检查手动参数并尝试恢复。</p>
       <div class="advanced-field"><span id="cellCountLabel">电池电芯数量</span><div class="monitor-options advanced-options" role="group" aria-labelledby="cellCountLabel"><button id="singleCell" type="button" aria-pressed="false" disabled>单电芯</button><button id="dualCell" type="button" aria-pressed="false" disabled>双电芯</button></div></div>
     </section>
   </div>
@@ -192,7 +192,7 @@
 <section id="advancedInfoPage" class="detail battery-info-panel advanced-page" aria-labelledby="advancedInfoTitle" hidden>
   <header class="subpage-header"><div class="page-heading"><button id="advancedInfoBack" class="back" type="button">返回</button><h1 id="advancedInfoTitle">参数说明</h1></div></header>
   <div class="page-scroll">
-    <p class="advanced-info-intro"><strong>使用须知：</strong><span id="advancedSafetyText">进阶选项接口依赖OPLUS厂商节点，存在情况视机型而定。虽然这些接口都会受到更底层的限制，但若设置不当，仍可能会导致手机寿命非正常下降。修改前应了解其意义，并合理地修改。参数修改只生效一次，可直接恢复，硬重启后会失效，不影响系统分区。</span></p>
+    <p class="advanced-info-intro"><strong>使用须知：</strong><span>参数设置的接口依赖OPLUS厂商节点，存在情况视机型而定。虽然这些接口都会受到更底层的限制，但若设置不当，仍可能会导致手机寿命非正常下降。修改前应了解其意义，并合理地修改。参数修改只生效一次，可直接恢复，硬重启后会失效，不影响系统分区。</span></p>
     <p class="advanced-info-intro">「当前生效值」显示驱动接口的读回结果。电压和电流的读回值可能是阈值或协议目标，实测值还会随充电器、电池状态和温度变化。显示「接口缺失」的接口无法在这台设备上使用。</p>
     <section class="advanced-definitions" aria-labelledby="advancedInfoCapacity">
       <h2 id="advancedInfoCapacity">解容</h2>
@@ -215,7 +215,7 @@
       <p><strong>UFCS 电流（UFCS_CURR）</strong>：UFCS 融合快充模式下的协议电流目标，仅在使用 UFCS 时适用。</p>
       <p><strong>VOOC 电流（VOOC_CURR）</strong>：VOOC 或 SUPERVOOC 模式下的协议电流目标，仅在使用对应协议时适用。</p>
     </section>
-    <p class="advanced-info-intro">修改在确认时应用一次。输入页的「恢复默认」撤销这一项的手动设置，进阶设置右上角的「恢复默认」撤销本页的手动设置。恢复后的值由厂商策略决定。</p>
+    <p class="advanced-info-intro">修改在确认时应用一次。输入页的「恢复默认」撤销这一项的手动设置，参数设置右上角的「恢复默认」撤销本页的手动设置。恢复后的值由厂商策略决定。</p>
   </div>
 </section>
 <section id="coolDownDetailsPage" class="detail battery-info-panel advanced-page" aria-labelledby="coolDownDetailsTitle" hidden>
@@ -343,7 +343,10 @@
         <div><small>电池健康（battery_soh）</small><strong data-info="soh">—</strong></div>
         <div><small>原始电池健康（计算值）</small><strong data-info="rawSoh">—</strong></div>
         <div><small>电量计截止电压（GAUGE_TERM_VOLTAGE）</small><strong data-info="cutoffMv">—</strong></div>
-        <div class="battery-info-note"><span>修改截止电压后可能会不准确，需完成完整循环校准。</span><button id="batteryEstimateInfo" class="battery-estimate-info" type="button" aria-label="查看原始值和估计锁容容量的计算说明" aria-haspopup="dialog">i</button></div>
+        <div class="battery-info-note">
+          <span class="battery-info-note-reference">某些数值可能会与实际有偏差，以满充时RM为准。</span>
+          <span>修改截止电压后可能会不准确，需完成完整循环校准。</span><button id="batteryEstimateInfo" class="battery-estimate-info" type="button" aria-label="查看原始值和估计锁容容量的计算说明" aria-haspopup="dialog">i</button>
+        </div>
       </section>
       <section class="card battery-info-card">
         <div><small data-info-label="voltage">电池电压（bcc_parms）</small><strong data-info="voltage">—</strong></div>
@@ -351,8 +354,11 @@
         <div><small>充电功率</small><strong data-info="chargingPower">—</strong></div>
         <div><small>充电协议（protocol_type）</small><strong data-info="chargingProtocol">—</strong></div>
         <div><small>USB 输入电压（usb/voltage_now）</small><strong data-info="usbInputVoltage">—</strong></div>
-        <div><small>目标输入电流</small><strong data-info="targetInputCurrent">—</strong></div>
-        <div><small data-info-label="temperature">电池温度（bcc_parms）</small><strong data-info="temperature">—</strong></div>
+        <div><small data-info-label="targetInputCurrent">目标输入电流</small><strong data-info="targetInputCurrent">—</strong></div>
+        <div class="battery-temperature-row">
+          <div><small data-info-label="temperature">电池温度（bcc_parms）</small><strong data-info="temperature">—</strong></div>
+          <button id="openBatteryParameters" class="settings-button" type="button">参数设置</button>
+        </div>
       </section>
       <section class="card battery-info-card">
         <div><small>电池序列号（battery_sn）</small><strong data-info="serial">—</strong></div>
@@ -390,14 +396,14 @@
   <p>系统显示的容量和健康度，可能加过厂家为当前截止电压设置的补偿。这里尝试把补偿前的数值倒推出来。</p>
   <p><strong>原始电池健康：</strong>找到厂家对应的补偿比例，把显示的健康度按这个比例还原。</p>
   <p><strong>原始满充容量：</strong>根据还原后的健康度，估算当前的容量补偿，再从显示的满充容量里扣掉。</p>
-  <p><strong>未触发补偿时：</strong>当前截止电压低于本机补偿表的最低档位（或该档偏移为 0）时，无需还原，读取到的满充容量接近实际值。</p>
-  <p><strong>触发补偿时：</strong>当前截止电压命中本机补偿档位时，按对应参数还原，计算出的原始满充容量接近实际值（达到上限封顶时显示下界范围）。</p>
-  <p><strong>估计锁容容量：</strong>用最大化学容量减去当前绿色的满充容量（未补偿时用读取值，已补偿时用原始值），括号内的负百分比表示与最大化学容量的差值比例。</p>
+  <p><strong>未触发补偿时：</strong>命中零偏移档位，或低于最低档且当前未启用最低档补偿时，用读取到的满充容量估算。</p>
+  <p><strong>触发补偿时：</strong>按所用档位反推原始满充容量。读取到的满充容量达到上限时，显示原始值的估算下界。</p>
+  <p><strong>估计锁容容量：</strong>用最大化学容量减去满充容量（未补偿时用读取值，已补偿时用原始值），括号内的负百分比表示与最大化学容量的差值比例。</p>
   </section>
   <section data-explanation-page="1" hidden>
     <table id="batteryCoefficientTable" class="battery-coefficient-table" hidden><thead><tr><th scope="col">截止电压<br><span>mV</span></th><th scope="col">容量偏移<br><span>mAh</span></th><th scope="col">健康度偏移<br><span>%</span></th></tr></thead><tbody id="batteryCoefficientRows"></tbody></table>
     <p id="batteryCoefficientEmpty">正在读取补偿关系表…</p>
-    <p class="battery-coefficient-note">表内数值读取自本机厂家参数，按不超过当前截止电压的最高一档匹配（高亮行）；低于最低档位时不进行补偿。容量偏移还会按原始健康度折算。</p>
+    <p class="battery-coefficient-note">高亮行是计算所用的档位。通常匹配不超过实际截止电压的最高一档。尾充完成时，若截止电压低于最低档且满充容量（FCC）减剩余容量（RM）大于 200 mAh，此后低于最低档时也按最低档计算，直到某次尾充的差值小于 200 mAh。容量偏移按原始健康度折算。</p>
   </section>
   </div>
   <div class="battery-explanation-actions"><div class="battery-explanation-nav"><button id="previousBatteryExplanation" type="button" aria-label="上一页" disabled>‹</button><span id="batteryExplanationCounter" aria-live="polite">1 / 2</span><button id="nextBatteryExplanation" type="button" aria-label="下一页">›</button></div><button id="closeBatteryEstimate" type="button">知道了</button></div>
@@ -407,11 +413,6 @@
   <h3 id="gaugeIntervalTitle">电流计采样间隔覆盖</h3>
   <p>打开此开关后，启动游戏性能统计或性能监视器时，会尝试将上方的「功耗采样间隔」应用到手机电流计。此功能需要设备提供 OPLUS 的 <code>GAUGE_UPDATE</code> 投票节点。设置成功后，充电和放电时的电流读数都按此间隔更新。</p>
   <div class="game-explanation-actions"><button type="button">知道了</button></div>
-</dialog>
-<dialog id="advancedSafetyNotice" class="game-explanation" aria-labelledby="advancedSafetyTitle" aria-describedby="advancedSafetyMessage">
-  <h3 id="advancedSafetyTitle">使用须知</h3>
-  <p id="advancedSafetyMessage"></p>
-  <div class="game-explanation-actions"><button id="closeAdvancedSafetyNotice" type="button">知道了</button></div>
 </dialog>
 <dialog id="recordingConfirm" class="recording-confirm" aria-labelledby="recordingConfirmTitle" aria-describedby="recordingConfirmHint"><h3 id="recordingConfirmTitle"></h3><p id="recordingConfirmHint"></p><div class="recording-confirm-actions"><button id="cancelRecording" type="button">取消</button><button id="confirmRecording" type="button">确认</button></div></dialog>
 <dialog id="settingsKeypad" class="numeric-keypad" aria-labelledby="keypadTitle" aria-describedby="keypadRange keypadHint">

@@ -32,7 +32,7 @@ public final class BatteryHistorySnapshotTest {
   JSONObject manual=BatteryHistorySnapshot.capture(source);
   check(!manual.has("tailRm"));
   check(BatteryHistorySnapshot.withTailRm(manual,6040).getDouble("tailRm")==6040);
-  check(BatteryHistorySnapshot.withTailRm(null,0).getDouble("tailRm")==0);
+  check(BatteryHistorySnapshot.withTailRm(null,0)==null);
   check(BatteryHistorySnapshot.withTailRm(null,Double.NaN)==null);
   System.out.println("Battery history: frozen values, capture-time trust flags, low-cutoff policy, null fields and data-only snapshot passed");
  }

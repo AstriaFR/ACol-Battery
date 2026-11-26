@@ -1,6 +1,7 @@
 import{spawn,exec}from'./root-bridge.js?v=acol-2.2s';
 const client='/data/adb/aco_battery_app/runtime/bin/curve-client';
 export const DETAIL_WATCH_MODE=0, BATTERY_INFO_WATCH_MODE=1, SETTINGS_WATCH_MODE=4, HOME_WATCH_MODE=5, SUMMARY_WATCH_MODE=6;
+export const LIVE_READING_REFRESH_MS=1500;
 
 export const recordRank=record=>record.active?(Number(record.fast_seconds)>0?0:1):2;
 export function compareRecords(a,b){return recordRank(a)-recordRank(b)||b.id-a.id;}
@@ -27,7 +28,7 @@ export class LiveChannel{
   open(){
     if(this.connection&&!this.connection.closed)return;
     const connection={closed:false,pid:null,killed:false};this.connection=connection;
-    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),this.infoSnapshot?'0':'1',String(this.small),'0']);
+    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),'1',String(this.small),'0']);
     const failed=()=>{
       if(connection.closed)return;
       connection.closed=true;if(this.connection!==connection)return;

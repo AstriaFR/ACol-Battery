@@ -1,4 +1,4 @@
-const LOW_VOLTAGE_CONFIRM_MV=2650;
+const LOW_VOLTAGE_CONFIRM_MV=2700;
 const dischargeVoltageFields=[
   {key:'GAUGE_TERM_VOLTAGE',label:'电量计截止电压',unit:'mV',confirmVoltage:true},
   {key:'GAUGE_SHUTDOWN_VOLTAGE',label:'软件关机电压',unit:'mV',confirmVoltage:true}
@@ -23,6 +23,7 @@ const chargingModes=[
   {label:'无'},{key:'CHG_DISABLE',label:'暂停'},{key:'WIRED_CHARGE_SUSPEND',label:'禁止'},{key:'PLC',label:'旁路'}
 ];
 const modeReading={label:'限制充电'};
+const batteryTypeReading={label:'电池类型'};
 const groups=[
   ['advancedDischargeVoltageFields',dischargeVoltageFields],
   ['advancedFloatCorrection',[floatCorrection]],
@@ -38,7 +39,8 @@ const capacityReadings=[
   {key:'TARGET_TERM_VOLTAGE',unit:'mV'},{key:'TARGET_SHUTDOWN_VOLTAGE',unit:'mV'},
   floatCorrection,
   {key:'FV_DEC',unit:'mV'},
-  ...floatFields
+  ...floatFields,
+  batteryTypeReading
 ];
 const chargingReadings=[
   coolDown,
@@ -47,25 +49,19 @@ const chargingReadings=[
   ...wiredCurrentFields,
   ...fastCurrentFields
 ];
-const safetyNoticeKey='acol.advanced.safety_notice_seen';
-const safetyNoticeRevision='2';
 const $=id=>document.getElementById(id);
 
 export function createAdvancedPage(api,keypad){
   const root=$('advancedPage'),status=$('advancedStatus');
-  const confirmation=$('advancedConfirm'),safetyNotice=$('advancedSafetyNotice');
+  const confirmation=$('advancedConfirm');
   const reset=$('resetAdvancedSettings');
+  const voltageAdvice=$('advancedDischargeVoltageAdvice'),voltageAdviceValue=$('advancedDischargeVoltageAdviceValue');
   const autoRestore=$('advancedAutoRestore'),cellButtons=[$('singleCell'),$('dualCell')];
   const modeGroup=$('advancedChargingMode'),modeUnavailable=$('advancedChargingModeUnavailable');
   const capacityList=$('advancedCapacityReadings'),chargingList=$('advancedChargingReadings');
-  const batteryType=$('advancedBatteryType');
   const rows=new Map(),controls=new Map();
   const limitedModes=chargingModes.slice(1);
   let timer,revision=0,reading=false,refreshPending=false,applying=false,state,resetError='';
-  let safetyNoticeSeen=false;
-  try{safetyNoticeSeen=localStorage.getItem(safetyNoticeKey)===safetyNoticeRevision;}catch{}
-  $('advancedSafetyMessage').textContent=$('advancedSafetyText').textContent;
-  $('closeAdvancedSafetyNotice').onclick=()=>safetyNotice.close();
 
   for(const [list,readings] of [[capacityList,capacityReadings],[chargingList,chargingReadings]])for(const field of readings){
     const row=document.createElement('div');
@@ -73,6 +69,7 @@ export function createAdvancedPage(api,keypad){
     name.textContent=field.key??field.label;
     row.append(name,value);
     row.hidden=field!==modeReading;
+    if(field===batteryTypeReading)row.className='advanced-battery-type';
     list.append(row);
     rows.set(field,{row,value});
   }
@@ -127,13 +124,21 @@ export function createAdvancedPage(api,keypad){
   }
   function render(data,error=''){
     state=data;
-    const suffix=typeof data?.batteryType==='string'?data.batteryType.trim().match(/(?:^|[_.-])([a-z][0-9]+[a-z]?)$/i)?.[1]??'':'';
-    if(batteryType.textContent!==suffix)batteryType.textContent=suffix;
-    batteryType.hidden=!suffix;
+    voltageAdvice.hidden=typeof data?.highDesignCapacity!=='boolean';
+    if(!voltageAdvice.hidden){
+      const value=data.highDesignCapacity?'2600':'2850';
+      if(voltageAdviceValue.textContent!==value)voltageAdviceValue.textContent=value;
+    }
     const snapshot=data?.nodes,nodes=snapshot??{};
     const isMissing=key=>!!snapshot&&(!nodes[key]||nodes[key].missing===true);
     for(const [field,{row,value}] of rows){
       if(field===modeReading)continue;
+      if(field===batteryTypeReading){
+        const type=typeof data?.batteryType==='string'?data.batteryType.trim():'';
+        row.hidden=!type;
+        if(value.textContent!==type)value.textContent=type;
+        continue;
+      }
       const effective=nodes[field.key]?.effective;
       row.hidden=!snapshot;
       if(row.hidden)continue;
@@ -254,7 +259,9 @@ export function createAdvancedPage(api,keypad){
   });
   async function setChargingMode(option){
     const {button}=modeButtons[option];
-    if(applying||!state||button.disabled||button.getAttribute('aria-pressed')==='true')return;
+    if(applying||!state||button.disabled)return;
+    // Selecting no restriction also clears the saved mode, even if the driver already shows it.
+    if(option!==0&&button.getAttribute('aria-pressed')==='true')return;
     resetError='';
     applying=true;
     revision++;
@@ -268,18 +275,14 @@ export function createAdvancedPage(api,keypad){
     }
   }
   async function confirmVoltage(field,value){
-    if(value!==null&&state?.nodes[field.key]?.writeUnavailable)throw Error('当前驱动不支持关机阈值读回。');
-    const restoring=value===null;
-    const accepted=await askChange(
-      restoring?'确定恢复厂商截止电压？':'确定修改截止电压？',
-      restoring?`取消「${field.label}」的手动覆盖，交回厂商动态策略。恢复值由驱动决定。`:`${field.label}：${value} mV`);
-    if(!accepted||root.hidden)return false;
-    if(value!==null&&value<LOW_VOLTAGE_CONFIRM_MV&&state?.highDesignCapacity!==true){
-      const low=await askChange('低电压风险确认',
-        `${field.label}：${value} mV\n\n设置低于 ${LOW_VOLTAGE_CONFIRM_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用');
-      if(!low||root.hidden)return false;
+    if(value===null)return await askChange('确定恢复厂商截止电压？',
+      `取消「${field.label}」的手动覆盖，交回厂商动态策略。恢复值由驱动决定。`)&&!root.hidden;
+    if(state?.nodes[field.key]?.writeUnavailable)throw Error('当前驱动不支持关机阈值读回。');
+    if(value<LOW_VOLTAGE_CONFIRM_MV&&state?.highDesignCapacity!==true){
+      return await askChange('低电压风险确认',
+        `${field.label}：${value} mV\n\n设置低于 ${LOW_VOLTAGE_CONFIRM_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用')&&!root.hidden;
     }
-    return true;
+    return !root.hidden;
   }
   async function apply(field,value){
     let raw=null;
@@ -310,7 +313,7 @@ export function createAdvancedPage(api,keypad){
     revision++;
     reset.disabled=true;
     try{
-      if(!await askChange('恢复默认？','将进阶设置中的手动调整恢复为默认。')||root.hidden)return;
+      if(!await askChange('恢复默认？','将参数设置中的手动调整恢复为默认。')||root.hidden)return;
       try{
         const {failed}=await api('reset_oplus_votes');
         if(failed)resetError=`部分参数恢复失败。${failed}`;
@@ -345,18 +348,12 @@ export function createAdvancedPage(api,keypad){
       root.hidden=false;
       resetError='';
       render(null);
-      if(!safetyNoticeSeen){
-        safetyNotice.showModal();
-        safetyNoticeSeen=true;
-        try{localStorage.setItem(safetyNoticeKey,safetyNoticeRevision);}catch{}
-      }
       resume(true);
     },
     handleHistory:syncKeypad,
     close(){
       if(root.hidden)return;
       root.hidden=true;
-      if(safetyNotice.open)safetyNotice.close();
       if(confirmation.open)confirmation.close('cancel');
       if(keypad.editor?.commit)keypad.closeEditor();
       revision++;

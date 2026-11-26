@@ -474,17 +474,22 @@ final class DeferredStats {
         }
         return ScreenUsage.normalized(spans,from,to);
     }
-    /** Display-only overlay: read settled screen spans without backfilling UsageStats. */
+    /** Read settled screen spans for chart rendering without backfilling UsageStats. */
     JSONObject screenOffSpans(long id)throws Exception{
         JSONArray found=rows("SELECT kind,start_wall,start_elapsed,end_elapsed FROM sessions WHERE id=?",new String[]{""+id});
         if(found.length()==0)throw new IOException("记录不存在或已删除");
         JSONObject record=found.getJSONObject(0);
         if(!record.getString("kind").equals("discharge"))throw new IOException("息屏投影仅用于放电记录");
         long start=record.getLong("start_wall"),end=start+Math.max(0,record.getLong("end_elapsed")-record.getLong("start_elapsed"));
-        JSONArray intervals=new JSONArray();
-        for(ScreenUsage.Span span:screenSpans(id,start,end))if(!span.on)
-            intervals.put(new JSONArray().put(span.start-start).put(span.end-start));
-        return new JSONObject().put("ok",true).put("spans",intervals);
+        List<ScreenUsage.Span> saved=screenSpans(id,start,end);
+        JSONArray intervals=new JSONArray(),transitions=new JSONArray();
+        ScreenUsage.Span previous=null;
+        for(ScreenUsage.Span span:saved){
+            if(!span.on)intervals.put(new JSONArray().put(span.start-start).put(span.end-start));
+            if(previous!=null&&previous.end==span.start&&previous.on!=span.on)transitions.put(span.start-start);
+            previous=span;
+        }
+        return new JSONObject().put("ok",true).put("spans",intervals).put("transitions",saved.isEmpty()?JSONObject.NULL:transitions);
     }
     JSONObject screenUsage(long id,long requested,long requestedFrom,long requestedTo,int seed)throws Exception{
         JSONArray found=rows("SELECT start_wall,start_elapsed,end_elapsed,active,kind,clock_adjusted FROM sessions WHERE id=?",new String[]{""+id});

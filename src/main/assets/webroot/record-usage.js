@@ -5,6 +5,7 @@ import{RecordUsageRefresh}from'./record-usage-refresh.js?v=acol-2.2s';
 import{ScreenTimePanel}from'./screen-time.js?v=acol-2.2s';
 import{RecordEnergyCache,energyRows,formatWh}from'./record-energy-cache.js?v=acol-2.2s';
 import{recordedFpsText}from'./performance-scales.js?v=acol-2.2s';
+import{dischargeRatePercentPerHour}from'./estimate.js?v=acol-2.2s';
 
 const nextDay=wall=>{const d=new Date(wall);d.setDate(d.getDate()+1);return d.getTime();};
 const clock=hour=>`${String(hour).padStart(2,'0')}:00`;
@@ -103,7 +104,7 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
   const screenTimePanel=new RecordUsagePanel(api,{formatDuration:roundedDuration,formatDate:wall=>{const date=new Date(wall);return`${pad2(date.getMonth()+1)}/${pad2(date.getDate())}`;},minuteUnit:'分'});
   const usageRefresh=new RecordUsageRefresh(api,()=>getData()?.record,()=>!document.hidden&&!$('detail').hidden,onSettled);
   document.addEventListener('pointerdown',e=>{if(!e.target.closest('.appEnergy,.drain-item,.drain-chart'))hideAppEnergyTip();});
-  function renderApps(data){
+  function renderApps(data,energyWh=null){
     const r=data.record;
     usageRefresh.update(data);
     const key=`${r.id}:${r.start_wall}`,stamp=data.statsVersion??(recordFast(r)?Math.floor(r.end_elapsed/60000):r.end_elapsed);
@@ -115,9 +116,9 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     $('apps').hidden=r.kind==='charge';
     if(r.kind==='charge')return;
     const basis=r.stats_basis;
-    if(lastPayload&&lastPayload.apps===data.apps&&lastPayload.basis===basis&&lastPayload.pending===data.usagePending)return;
-    lastPayload={apps:data.apps,basis,pending:data.usagePending};
-    const signature=JSON.stringify([basis,data.usagePending,data.apps??[]]);
+    if(lastPayload&&lastPayload.apps===data.apps&&lastPayload.basis===basis&&lastPayload.pending===data.usagePending&&lastPayload.energyWh===energyWh)return;
+    lastPayload={apps:data.apps,basis,pending:data.usagePending,energyWh};
+    const signature=JSON.stringify([basis,data.usagePending,energyWh,data.apps??[]]);
     if(signature===appsKey)return;appsKey=signature;
     $('appStatsNote').textContent=basis==='current_integral'?'能量按电压、电流积分，按前台时长分摊；占比按 Wh 计算。≤1 分钟归入其他。':basis==='rm_minute'?'仅统计放电区间，按 RM 变化和平均电压计算 Wh，每分钟结算并按使用时段分摊。≤1 分钟归入其他。':'按放电能量与使用时段分摊；占比按 Wh 计算。≤1 分钟归入其他。平均功耗仅统计有效数据。';
     const apps=[...(data.apps??[])],sum=apps.reduce((total,a)=>total+appEnergy(a),0);
@@ -138,7 +139,7 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     for(const a of apps){
       let entry=rows.get(a.pkg);
       if(!entry){entry=appRow(a);rows.set(a.pkg,entry);watchIcon(entry);}
-      updateAppRow(entry,a,sum,game);
+      updateAppRow(entry,a,sum,game,energyWh);
       if(entry.row===anchor)anchor=anchor.nextSibling;else host.insertBefore(entry.row,anchor);
     }
   }
@@ -158,12 +159,16 @@ export function createRecordDrain(api,{getData,onSettled,readAppIcons}){
     bindAppEnergyTip(energy,()=>entry.data);
     return entry;
   }
-  function updateAppRow(entry,a,sum,game){
+  function updateAppRow(entry,a,sum,game,energyWh){
     entry.data=a;
     const share=sum>0?`${fmt(appEnergy(a)/sum*100,1)}%`:'—',wh=appWhText(a);
     const meta=[roundedDuration(a.ms)];
     const average=[];
-    if(valid(a.avgPower))average.push(`${a.avgPower.toFixed(2)}W`);
+    if(valid(a.avgPower)){
+      average.push(`${a.avgPower.toFixed(2)}W`);
+      const rate=dischargeRatePercentPerHour(a.avgPower,energyWh);
+      if(valid(rate))average.push(`约${rate.toFixed(1)}%/h`);
+    }
     const fps=game?recordedFpsText(a.avgFps):null;
     if(fps!==null)average.push(`${fps}FPS`);
     if(average.length)meta.push(`平均${average.join(' ')}`);

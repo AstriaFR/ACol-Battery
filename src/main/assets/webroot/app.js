@@ -4,7 +4,7 @@ import{installPageDepth}from'./page-navigation.js?v=acol-2.2s';
 import{installPageMotion}from'./page-motion.js?v=acol-2.2s';
 import{installLineFitting}from'./fit-lines.js?v=acol-2.2s';
 import{exec,validateApiArgs,fullScreen,cancelTopDialog,readAppIcons,requestDischargeNotificationPermission}from'./root-bridge.js?v=acol-2.2s';
-import{LiveChannel,DETAIL_WATCH_MODE,BATTERY_INFO_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE}from'./live-channel.js?v=acol-2.2s';
+import{LiveChannel,DETAIL_WATCH_MODE,BATTERY_INFO_WATCH_MODE,HOME_WATCH_MODE,SETTINGS_WATCH_MODE,SUMMARY_WATCH_MODE,LIVE_READING_REFRESH_MS}from'./live-channel.js?v=acol-2.2s';
 import{DEFAULT_SETTINGS,setChartSettings}from'./config.js?v=acol-2.2s';
 import{SettingsPanel}from'./settings-panel.js?v=acol-2.2s';
 import{BatteryInfoPanel}from'./battery-info.js?v=acol-2.2s';
@@ -33,7 +33,6 @@ document.addEventListener('selectionchange',()=>{const selection=getSelection();
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&['a','c','x'].includes(e.key.toLowerCase()))e.preventDefault();});
 const liveChannel=new LiveChannel();
 liveChannel.setMode(HOME_WATCH_MODE);
-const LIVE_READING_REFRESH_MS=1500;
 let lastStatus=null,pollTimer,liveBusy=false,queuedPoll=false,usageNavigation=0;
 let detailPage,batteryHistory,usageDetails,pendingPanel;
 const batteryHistoryRoots={'battery-history':'batteryHistoryPanel','battery-history-detail':'batteryHistoryDetail','battery-history-trend':'batteryTrendPanel'};
@@ -118,7 +117,7 @@ async function openRecord(id,record){
 }
 const recordsView=createRecords({api,liveChannel,toast,getSettings:()=>uiSettings,getStatus:()=>lastStatus,getDetail:()=>detailPage?.data,
   getTab:()=>activeTab,openRecord,onKindChange:syncTheme,
-  pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);detailPage?.resumeRemaining();},
+  pauseRemaining:()=>detailPage?.pauseRemaining(),onDialogClose(){schedulePoll(0);},
   onDeleted:id=>detailPage?.removeCaches(id),onRefresh:()=>schedulePoll(0)});
 const settingsPanel=new SettingsPanel(api,(value,result)=>{if(result?.removed>0)recordsView.invalidate();applySettings(value);refresh();},requestDischargeNotificationPermission);
 const settingsChildren={
@@ -250,7 +249,8 @@ async function showSettingsChild(page){
   if(entry?.panel?.active){entry.panel.handleHistory?.(history.state);return;}
   const navigation=++usageNavigation;
   clearTimeout(pollTimer);liveChannel.close();
-  closePendingPanel();closeSettingsChildren(page);$('appShell').hidden=true;
+  closePendingPanel();closeSettingsChildren(page);batteryPanel.close();$('appShell').hidden=true;
+  if(page==='advanced')document.title='参数设置 · ACol 电池';
   if(page==='advanced-info'){$('advancedInfoPage').hidden=false;return;}
   if(!entry.panel){
     showPendingPanel(entry.id);
@@ -262,7 +262,7 @@ async function showSettingsChild(page){
 }
 for(const [button,parent,page] of [
   ['openMonitorAppearance','settings','monitor-appearance'],['openGameMetrics','settings','game-metrics'],
-  ['openAdvanced','settings','advanced'],['advancedInfo','advanced','advanced-info'],
+  ['openAdvanced','settings','advanced'],['openBatteryParameters','battery-info','advanced'],['advancedInfo','advanced','advanced-info'],
   ['openCoolDownDetails','advanced-info','cool-down-details']
 ]){
   $(button).onclick=async event=>{
@@ -277,6 +277,7 @@ async function openBatteryInfo(){
   closePendingPanel();batteryHistory?.close();const navigation=++usageNavigation;usageDetails?.close();settingsPanel.closeEditor();
   await detailPage?.close();if(navigation!==usageNavigation)return;
   $('appShell').hidden=true;batteryPanel.open();liveChannel.setMode(BATTERY_INFO_WATCH_MODE);
+  document.title='电池信息 · ACol 电池';
   if(history.state?.page!=='battery-info')history.pushState({page:'battery-info'},'',`${location.pathname}${location.search}#battery-info`);
   refresh();
 }
@@ -333,9 +334,9 @@ async function pollLive(){
     liveBusy=false;
     const currentMode=liveChannel.mode;
     const period=failed||!batteryPanel.active&&lastStatus?.interactive===false?5000:
-      currentMode===HOME_WATCH_MODE||currentMode===DETAIL_WATCH_MODE?LIVE_READING_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
-    // Battery info packets are already paced by the recorder's power interval.
-    const waitForNextReading=!failed&&currentMode===BATTERY_INFO_WATCH_MODE;
+      currentMode===HOME_WATCH_MODE?LIVE_READING_REFRESH_MS:currentMode===SETTINGS_WATCH_MODE?2000:1000;
+    // Both page streams already arrive at the display refresh interval.
+    const waitForNextReading=!failed&&(currentMode===BATTERY_INFO_WATCH_MODE||currentMode===DETAIL_WATCH_MODE);
     schedulePoll(queuedPoll||waitForNextReading?0:Math.max(100,period-(performance.now()-started)));
   }
 }

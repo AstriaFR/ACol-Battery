@@ -11,8 +11,14 @@ const highCapacityTable=[
   [290,2850],[280,2780],[270,2700]
 ];
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
+export function dischargeRatePercentPerHour(powerWatts,energyWh){
+  return finite(powerWatts)&&finite(energyWh)&&energyWh>0?100*powerWatts/energyWh:null;
+}
 export function canEstimateRemaining(record,reading){
   return !(Number(record?.fast_seconds)>0)||(reading?.onlineKnown!==false&&reading?.online===false);
+}
+export function gameSampleIsCharging(online,power){
+  return online===1||online===true||(online==null&&finite(power)&&power<0);
 }
 export function remainingMeanVoltage(millivolts,highDesignCapacity=false){
   if(!finite(millivolts)||millivolts<=0)return null;

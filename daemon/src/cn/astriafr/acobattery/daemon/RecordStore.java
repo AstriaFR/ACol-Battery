@@ -244,7 +244,19 @@ final class RecordStore {
         }
         JSONArray result=new JSONArray();TreeMap<Long,double[]> bucket=new TreeMap<>();
         double[][] lo=new double[7][],hi=new double[7][];long group=-1;double[] first=null,last=null;
-        try(Cursor c=db.rawQuery("SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall,memory_used,memory_total FROM samples WHERE session=? AND x>=? AND x<=? ORDER BY x",new String[]{""+id,""+queryFrom,""+queryTo})) {
+        String columns="SELECT x,rm,pct,current,voltage,power,quality,interval_ms,cell1,cell2,temp,online,wall,memory_used,memory_total FROM samples WHERE session=?1";
+        String query=columns+" AND x BETWEEN ?2 AND ?3";
+        if(!rawPreview&&(queryFrom>0||queryTo<end)){
+            // Missing samples near the viewport cannot hide a valid connector farther out.
+            StringJoiner neighbors=new StringJoiner(",");
+            for(String signal:new String[]{"voltage IS NOT NULL","power BETWEEN 0 AND 15"}){
+                String neighbor="(SELECT x FROM samples WHERE session=?1 AND "+eligible+" AND "+signal;
+                if(queryFrom>0)neighbors.add(neighbor+" AND x<?2 ORDER BY x DESC LIMIT 1)");
+                if(queryTo<end)neighbors.add(neighbor+" AND x>?3 ORDER BY x LIMIT 1)");
+            }
+            query+=" UNION ALL "+columns+" AND x IN ("+neighbors+")";
+        }
+        try(Cursor c=db.rawQuery(query+" ORDER BY x",new String[]{""+id,""+queryFrom,""+queryTo})) {
             while(c.moveToNext()) {
                 double[] point=new double[16];for(int i=0;i<11;i++)point[i]=c.isNull(i)?Double.NaN:c.getDouble(i);
                 point[11]=Double.NaN;point[12]=c.isNull(11)?Double.NaN:c.getDouble(11);point[13]=c.isNull(12)?Double.NaN:c.getLong(12);
@@ -343,9 +355,10 @@ final class RecordStore {
                     String text=c.isNull(3)?"":c.getString(3);JSONObject saved=text.isEmpty()||text.equals("null")?new JSONObject():new JSONObject(text);
                     Double fccAbove=BatteryHistorySnapshot.fccLowerBound(saved);
                     Double fcc=fccAbove==null?BatteryHistorySnapshot.trustedFcc(saved):null;
+                    double qmax=saved.optDouble("qmax",Double.NaN),tailRm=saved.optDouble("tailRm",Double.NaN);
                     values.put(new JSONObject().put("id",last).put("wall",c.isNull(1)?JSONObject.NULL:c.getLong(1)).put("cycles",c.isNull(2)?JSONObject.NULL:c.getLong(2))
-                        .put("qmax",saved.opt("qmax")).put("fcc",fcc==null?JSONObject.NULL:fcc)
-                        .put("fccAbove",fccAbove==null?JSONObject.NULL:fccAbove).put("tailRm",saved.opt("tailRm")));
+                        .put("qmax",qmax>0&&Double.isFinite(qmax)?qmax:JSONObject.NULL).put("fcc",fcc==null?JSONObject.NULL:fcc)
+                        .put("fccAbove",fccAbove==null?JSONObject.NULL:fccAbove).put("tailRm",tailRm>0&&Double.isFinite(tailRm)?tailRm:JSONObject.NULL));
                 }
             }
             return o.put("items",values).put("through",through).put("nextAfter",more?last:JSONObject.NULL);

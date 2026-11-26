@@ -139,7 +139,7 @@ public final class StartupFeedback {
         if(connectionUnknown)
             out.add(new Notice("充电连接状态待确认","暂未读到可靠的供电连接状态，记录采样已暂停，后台会自动重试。已有记录保留，不会猜测为放电。"));
         int cells=data.has("cellCount")?data.optInt("cellCount"):reading==null?-1:reading.optInt("cellCount",-1);
-        if(cells==0)out.add(new Notice("无法读取电芯数量","暂按单电芯计算。请在进阶设置中手动选择单电芯或双电芯。"));
+        if(cells==0)out.add(new Notice("无法读取电芯数量","暂按单电芯计算。请在参数设置中手动选择单电芯或双电芯。"));
         if(reading!=null){
             String missing="";for(String[] item:new String[][]{{"voltage","电压"},{"current","电流"},{"temp","温度"}})
                 if(reading.has(item[0])&&(!Double.isFinite(reading.optDouble(item[0],Double.NaN))))missing+=(missing.isEmpty()?"":"、")+item[1];

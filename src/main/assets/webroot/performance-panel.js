@@ -3,6 +3,7 @@ import{fullScreen}from'./root-bridge.js?v=acol-2.2s';
 import{curveColor}from'./curve-colors.js?v=acol-2.2s';
 import{fpsLimit,cpuLimit,frequencyLimit}from'./performance-scales.js?v=acol-2.2s';
 import{bindExport,performanceCsv}from'./chart-export.js?v=acol-2.2s';
+import{LIVE_READING_REFRESH_MS}from'./live-channel.js?v=acol-2.2s';
 const $=id=>document.getElementById(id),selectionKey='acol.performance.selection';
 export class PerformanceChart extends Chart{
   constructor(...args){super(...args);this.metrics=[];this.maximum=new Map();this.frequencyRanges=new Map();this.cpuMax=0;this.cpuObservedMax=0;this.kind='performance';this.fast=true;this.cellCount=0;}
@@ -100,7 +101,7 @@ export class PerformancePanel{
       if(this.id&&!document.hidden&&!this.pageHidden&&(pollAgain||token===this.token&&this.active)){
         // A newly opened record may be waiting for the previous read to finish.
         const nextToken=this.token;
-        const delay=pollAgain?0:Math.max(500,this.interval-(performance.now()-started));
+        const delay=pollAgain?0:Math.max(100,LIVE_READING_REFRESH_MS-(performance.now()-started));
         this.timer=setTimeout(()=>this.poll(nextToken),delay);
       }
     }

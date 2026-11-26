@@ -1,7 +1,9 @@
 import{Chart,systemTimeLabel,windowPoints}from'./chart.js?v=acol-2.2s';
 import{bindExport,exportTime}from'./chart-export.js?v=acol-2.2s';
 import{lockedCapacityText,rawFccBoundText}from'./battery-info.js?v=acol-2.2s';
+import{longPressFeedback}from'./record-display.js?v=acol-2.2s';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
+const positive=v=>finite(v)&&v>0?v:null;
 const historyRefreshMs=5000;
 const tailRmMetric={key:'tailRm',index:5,name:'尾充剩余电量',legendName:'尾充电量',axis:'尾充剩余电量',unit:'mAh',color:'#9260b5',digits:0};
 export const healthMetrics=[
@@ -57,14 +59,17 @@ export function batteryHistoryDate(wall,dateOnly=false){
   return dateOnly?date:`${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 export function batteryHistoryFields(snapshot){
-  const info=snapshot??{},green=new Set(Array.isArray(info.nearActual)?info.nearActual:[]),noCompensation=info.noCompensation===true;
-  green.delete('rawSoh');
+  const info=snapshot??{},references=Array.isArray(info.nearActual)?info.nearActual:[],noCompensation=info.noCompensation===true;
   const fccBound=noCompensation?null:rawFccBoundText(info.rawFccAbove);
-  if(fccBound)green.add('rawFcc');
-  const fcc=key=>green.has(key)?ratio(info[key],info.designCapacity):number(info[key],'mAh');
+  const marked=key=>references.includes(key)&&positive(info[key])!==null;
+  const referenceKey=fccBound||!noCompensation&&marked('rawFcc')?'rawFcc':marked('fcc')?'fcc':null;
+  const fcc=key=>{
+    const value=positive(info[key]);
+    return key===referenceKey?ratio(value,info.designCapacity):number(value,'mAh');
+  };
   const locked=lockedCapacityText(info.qmax,info.lockedCapacity,noCompensation?null:info.rawFccAbove);
-  const values={qmax:ratio(info.qmax,info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(info.soh,'%'),rawSoh:noCompensation?'——':number(info.rawSoh,'%',2),cutoffMv:number(info.cutoffMv,'mV'),tailRm:number(info.tailRm,'mAh')};
-  return{values,green};
+  const values={qmax:ratio(positive(info.qmax),info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(positive(info.soh),'%'),rawSoh:noCompensation?'——':number(positive(info.rawSoh),'%',2),cutoffMv:number(info.cutoffMv,'mV'),tailRm:number(positive(info.tailRm),'mAh')};
+  return{values,referenceKey};
 }
 export class BatteryHistoryPanel{
   constructor(api,navigate,back,fullScreen){
@@ -172,7 +177,10 @@ export class BatteryHistoryPanel{
       document.getElementById('batterySnapshotDate').textContent=batteryHistoryDate(item.completed_wall);document.getElementById('batterySnapshotCycles').textContent='循环次数：'+number(item.cycles);
       const fields=batteryHistoryFields(item.snapshot);
       rmRow.hidden=!finite(item.snapshot?.tailRm);
-      for(const node of this.detail.querySelectorAll('[data-history-field]')){const key=node.dataset.historyField;node.textContent=fields.values[key];node.classList.toggle('battery-near-actual',fields.green.has(key));}
+      for(const node of this.detail.querySelectorAll('[data-history-field]')){
+        const key=node.dataset.historyField;
+        node.textContent=fields.values[key];node.classList.toggle('battery-near-actual',key===fields.referenceKey);
+      }
       document.getElementById('batterySnapshotStatus').textContent='';
       this.detailDelete.disabled=false;
     }catch(error){if(token===this.token)document.getElementById('batterySnapshotStatus').textContent=error.message;}
@@ -267,11 +275,44 @@ export class BatteryHistoryPanel{
       this.trendChart.healthScales=new Map(healthMetrics.map(s=>[s.key,healthScale(points.map(p=>p[s.index]),s.key==='cycles'?10:100)]));
       this.trendChart.set(points,Math.max(1,(items.at(-1)?.wall??start)-start),null,{kind:'health',fast:true,startWall:start,cellCount:0});
       const legend=document.getElementById('batteryTrendLegend');legend.replaceChildren();
+      const chart=this.trendChart;
+      const redraw=()=>{
+        for(const label of legend.children)label.classList.toggle('axis-active',label.dataset.series===chart.axisKey);
+        chart.clearInspect();chart.draw();
+      };
       for(const metric of healthMetrics){
-        const label=document.createElement('label');label.style.setProperty('--series',metric.color);
-        const input=document.createElement('input');input.type='checkbox';input.checked=this.trendChart.enabled.has(metric.key);
-        input.onchange=()=>{input.checked?this.trendChart.enabled.add(metric.key):this.trendChart.enabled.delete(metric.key);this.trendChart.clearInspect();this.trendChart.draw();};
-        label.onclick=e=>{if(e.target===input)return;this.trendChart.axisKey=metric.key;this.trendChart.draw();};
+        const label=document.createElement('label');label.style.setProperty('--series',metric.color);label.dataset.series=metric.key;
+        label.classList.toggle('axis-active',chart.axisKey===metric.key);
+        const input=document.createElement('input');input.type='checkbox';input.checked=chart.enabled.has(metric.key);
+        input.onchange=()=>{
+          if(input.checked)chart.enabled.add(metric.key);
+          else{
+            chart.enabled.delete(metric.key);
+            if(chart.axisKey===metric.key)chart.axisKey=null;
+          }
+          redraw();
+        };
+        let timer,start,suppressClick=false;
+        const end=()=>{clearTimeout(timer);start=null;};
+        label.addEventListener('pointerdown',e=>{
+          if(e.button!==0||!e.isPrimary)return;
+          end();suppressClick=false;start=[e.clientX,e.clientY];
+          timer=setTimeout(()=>{
+            if(token!==this.token||this.trend.hidden||!label.isConnected)return;
+            suppressClick=true;
+            chart.axisKey=chart.axisKey===metric.key?null:metric.key;
+            chart.enabled.add(metric.key);input.checked=true;
+            longPressFeedback();redraw();
+          },500);
+        });
+        label.addEventListener('pointermove',e=>{
+          if(start&&Math.hypot(e.clientX-start[0],e.clientY-start[1])>8){suppressClick=true;end();}
+        });
+        for(const event of ['pointerup','pointercancel','pointerleave'])label.addEventListener(event,end);
+        label.addEventListener('contextmenu',e=>e.preventDefault());
+        label.addEventListener('click',e=>{
+          if(suppressClick&&e.detail!==0){e.preventDefault();e.stopImmediatePropagation();}
+        },{capture:true});
         const name=document.createElement('span'),range=document.createElement('span');name.textContent=metric.legendName??metric.name;range.className='legend-scale';range.textContent=this.trendChart.scaleFor(metric).label+' '+metric.unit;
         label.append(input,name,range);legend.append(label);
       }
