@@ -7,13 +7,19 @@ export const recordRank=record=>record.active?(Number(record.fast_seconds)>0?0:1
 export function compareRecords(a,b){return recordRank(a)-recordRank(b)||b.id-a.id;}
 
 export class LiveChannel{
-  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.lists=null;this.listSequence=0;this.mode=3;this.small=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
+  constructor(){this.connection=null;this.latest=null;this.sequence=0;this.consumed=0;this.waiters=[];this.rows=new Map();this.resumeId=0;this.resumeAfter=0;this.detailId=0;this.detailAfter=0;this.lists=null;this.listSequence=0;this.mode=3;this.small=0;this.infoSnapshot=null;this.deleted=new Set();this.minimumListVersion=0;}
   selectSmall(value){
     this.small=Number(!!value);
   }
-  setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===BATTERY_INFO_WATCH_MODE)this.infoSnapshot=null;}
+  setMode(mode){if(this.mode===mode)return;this.close();this.mode=mode;this.detailId=0;this.detailAfter=0;this.latest=null;this.receivedAt=0;this.consumed=this.sequence;if(mode===BATTERY_INFO_WATCH_MODE)this.infoSnapshot=null;}
   seedRecord(id,after){
-    if(!this.connection){this.resumeId=id;this.resumeAfter=after;}
+    if(this.mode!==DETAIL_WATCH_MODE)return;
+    if(this.detailId!==id){
+      this.close();this.consumed=this.sequence;
+      this.rows.delete(id); // A general watch can have cached only the record's tail.
+      this.detailId=id;
+    }
+    this.detailAfter=after;
   }
   stopProcess(connection){
     if(!connection.pid||connection.killed)return;
@@ -28,7 +34,11 @@ export class LiveChannel{
   open(){
     if(this.connection&&!this.connection.closed)return;
     const connection={closed:false,pid:null,killed:false};this.connection=connection;
-    const child=spawn(client,['watch',String(this.resumeId),String(this.resumeAfter),String(this.mode),'1',String(this.small),'0']);
+    const pinned=this.mode===DETAIL_WATCH_MODE&&this.detailId>0;
+    const id=pinned?this.detailId:this.resumeId,after=pinned?this.detailAfter:this.resumeAfter;
+    const args=['watch',String(id),String(after),String(this.mode),'1',String(this.small),'0'];
+    if(pinned)args.push('1');
+    const child=spawn(client,args);
     const failed=()=>{
       if(connection.closed)return;
       connection.closed=true;if(this.connection!==connection)return;
@@ -65,8 +75,10 @@ export class LiveChannel{
       for(const key of ['apps','drainSummary','statsVersion','usagePending'])delete packet[key];
     }
     for(const point of packet.points??[])if(!points.length||point[0]>points.at(-1)[0])points.push(point);
-    if(points.length>24000)points.splice(0,points.length-24000);
-    this.rows.set(id,{...old,...packet,points});
+    let pointsFloor=old?.pointsFloor??(id===this.detailId?this.detailAfter:0);
+    const excess=points.length-24000;
+    if(excess>0){pointsFloor=points[excess-1][0];points.splice(0,excess);}
+    this.rows.set(id,{...old,...packet,points,pointsFloor});
     while(this.rows.size>3)this.rows.delete(this.rows.keys().next().value);
   }
   settle(record,result){
@@ -153,13 +165,17 @@ export class LiveChannel{
       total:small?this.lists.totalAll:this.lists.total,totalRecords:this.lists.totalAll,listVersion:small?this.lists.versionAll:this.lists.version};
   }
   async live(args){
-    this.selectSmall(args[3]);
+    const [id,after,wantList,small]=args;
+    this.selectSmall(small);
+    if(id>0)this.seedRecord(id,after);
     await this.wait(this.consumed);this.consumed=this.sequence;
-    const [id,after,wantList,small]=args,packet=this.latest;
+    const packet=this.latest;
     const result={ok:true,status:packet.status,activeRecord:packet.activeRecord,batteryInfo:this.infoSnapshot};
-    if(id>0&&this.rows.has(id)){
-      const row=this.rows.get(id);
-      Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter:null,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,statsEpoch:row.statsEpoch,usagePending:row.usagePending,apps:row.apps,drainSummary:row.drainSummary});
+    const row=id>0?this.rows.get(id):null;
+    // A cursor older than the retained points falls back to an exact live read.
+    if(row&&after>=(row.pointsFloor??0)){
+      const nextAfter=id===this.detailId&&Number.isFinite(row.nextAfter)&&row.nextAfter>after?row.nextAfter:null;
+      Object.assign(result,{record:row.record,points:row.points.filter(p=>p[0]>after),nextAfter,ranges:row.ranges,rawCount:row.rawCount,statsVersion:row.statsVersion,statsEpoch:row.statsEpoch,usagePending:row.usagePending,apps:row.apps,drainSummary:row.drainSummary});
     }
     if(wantList){const list=this.cachedList(small);if(list)Object.assign(result,list);}
     return result;

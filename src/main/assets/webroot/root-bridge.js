@@ -41,7 +41,7 @@ window.__acoDeliver=message=>{
 export function exec(command){return send(command);}
 export function validateApiArgs(action,args){
   if(action==='set_monitor_order'){
-    if(args.length!==1||!/^[1-7]{7}$/.test(String(args[0])))throw Error('性能监视器显示顺序无效。');
+    if(args.length!==1||!/^[1-8]{8}$/.test(String(args[0])))throw Error('性能监视器显示顺序无效。');
     return;
   }
   if(action==='set_setting'){

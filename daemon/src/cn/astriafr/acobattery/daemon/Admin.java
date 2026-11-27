@@ -93,7 +93,7 @@ public final class Admin {
     static RuntimeTransaction.Control updateControl(){
         long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
         return new RuntimeTransaction.Control(){
-            public void stop()throws Exception{stopForUpdate(deadline,true);}
+            public void stop()throws Exception{stopForUpdate(deadline,true,"service_updated");}
             public void start(){}
         };
     }
@@ -113,9 +113,9 @@ public final class Admin {
         stopForUpdate(OperationTimeout.deadline());
     }
     static void stopForUpdate(long deadline)throws Exception {
-        stopForUpdate(deadline,false);
+        stopForUpdate(deadline,false,"data_maintenance");
     }
-    static void stopForUpdate(long deadline,boolean boundedSwitch)throws Exception {
+    private static void stopForUpdate(long deadline,boolean boundedSwitch,String reason)throws Exception {
         // Quiesce the launcher as well: an old supervisor may otherwise wake from
         // its retry delay and start the old collector between the lock check and unzip.
         stopSupervisorForUpdate();
@@ -124,7 +124,7 @@ public final class Admin {
         if(current!=null&&current.optInt("resumeProtocol",0)>=1){
             int remaining=OperationTimeout.remaining(deadline);
             try{
-                JSONObject reply=AppBridge.api("shutdown",new JSONArray().put("service_updated"),boundedSwitch?Math.min(3000,remaining):remaining);
+                JSONObject reply=AppBridge.api("shutdown",new JSONArray().put(reason),boundedSwitch?Math.min(3000,remaining):remaining);
                 requireShutdownReply(reply);
             }
             catch(Exception stopFailure){
@@ -197,7 +197,7 @@ public final class Admin {
                 transaction().recover("",Admin::ownerAlive,updateControl());System.out.println("RECOVERED");
             }
             else if(action.equals("stop-update")){
-                stopForUpdate();
+                stopForUpdate(OperationTimeout.deadline(),false,"service_updated");
                 // The daemon can exit after committing before its reply arrives.
                 // The exclusive database lock, not an IPC reply, proves shutdown.
                 System.out.println("STOPPED");

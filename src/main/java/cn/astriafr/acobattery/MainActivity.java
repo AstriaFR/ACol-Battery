@@ -56,10 +56,11 @@ public final class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|
             (dark?0:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
         recordListCache=new RecordListCache(getCacheDir());
-        startup=new StartupController(this);browser=new WebViewHost(this);chartExport=new ChartExport(this,state);browser.tileSettingsPending=isTileSettingsIntent(getIntent());
+        startup=new StartupController(this,state);browser=new WebViewHost(this);chartExport=new ChartExport(this,state);browser.tileSettingsPending=isTileSettingsIntent(getIntent());
         dataTransfer=new DataTransferUi(this);if(dataTransfer.resume())return;
         if(getSharedPreferences("maintenance",MODE_PRIVATE).getBoolean("clearPending",false)){clearAllData();return;}
         worker.execute(startup::discardOldReports);
+        if(startup.resumeDatabaseBackupPicker())return;
         if(getSharedPreferences("startup",MODE_PRIVATE).getBoolean("initialized",false)&&getSharedPreferences("startup",MODE_PRIVATE).getInt("androidSdk",0)==Build.VERSION.SDK_INT){browser.showWeb();startup.connectExisting();}
         else{startup.showInitialization();startup.initialize();}
     }
@@ -105,11 +106,12 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,android.content.Intent intent){
         super.onActivityResult(request,result,intent);if(dataTransfer!=null&&(request==DataTransferUi.PICK_RESTORE||request==DataTransferUi.SAVE_BACKUP))dataTransfer.result(request,result,intent);
-        else if(request==StartupController.SAVE_DATABASE_REBUILD&&result==RESULT_OK&&intent!=null&&intent.getData()!=null)startup.rebuildDatabase(intent.getData());
+        else if(request==StartupController.SAVE_DATABASE_REBUILD&&startup!=null)startup.databaseBackupResult(result,intent);
         else if(request==ChartExport.SAVE&&chartExport!=null)chartExport.result(result,intent);
     }
     @Override protected void onSaveInstanceState(Bundle state){
         super.onSaveInstanceState(state);
+        if(startup!=null)startup.saveState(state);
         if(chartExport!=null)chartExport.saveState(state);
     }
     Button pageBackButton(Runnable action){

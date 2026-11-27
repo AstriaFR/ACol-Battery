@@ -33,7 +33,7 @@ const{pathToFileURL}=require('node:url');
   const dom=require('./helpers.cjs').recordDom();globalThis.document=dom.document;
   const makeInfoPanel=()=>{
     const fields=new Map(),labels=new Map();
-    for(const key of['voltage','batteryCurrent','chargingPower','chargingProtocol','usbInputVoltage','targetInputCurrent','temperature','rm','cycles','fcc','rawFcc','soh','rawSoh','qmax','cutoffMv','designCapacity','lockedCapacity','serial','manufactureDate','batteryType']){
+    for(const key of['voltage','batteryCurrent','chargingPower','chargingProtocol','usbInputVoltage','targetInputCurrent','temperature','rm','cycles','fcc','rawFcc','soh','rawSoh','qmax','cutoffMv','floatVoltageMaxMv','designCapacity','lockedCapacity','serial','manufactureDate','batteryType']){
       fields.set(key,dom.document.createElement('strong'));
     }
     for(const key of ['rm','voltage','batteryCurrent','targetInputCurrent','temperature'])labels.set(key,{textContent:''});

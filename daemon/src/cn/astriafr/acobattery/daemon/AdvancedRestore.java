@@ -44,8 +44,14 @@ final class AdvancedRestore {
             int savedMode=state.optInt("mode");
             if(savedMode>=1&&savedMode<=3)mode=savedMode;
             if(votes!=null)for(OplusVotes.Node node:OplusVotes.Node.values()){
-                if(node.maximum>0&&votes.has(node.name()))targets.put(node,votes.getInt(node.name()));
+                if(node.maximum>0&&votes.has(node.name())){
+                    int value=votes.getInt(node.name());
+                    if(node==OplusVotes.Node.WIRED_FCC||node==OplusVotes.Node.WIRED_ICL)value=Math.min(value,node.maximum);
+                    targets.put(node,value);
+                }
             }
+            // Older FV Target settings used a separate key for the same FV_MAX vote.
+            if(votes!=null&&votes.has("FV_TARGET"))targets.put(OplusVotes.Node.FV_MAX,votes.getInt("FV_TARGET"));
             boolean enabled=state.optBoolean("enabled");
             boolean sameBoot=Core.sameBoot(state.optString("boot"),boot);
             long now=SystemClock.elapsedRealtime();
@@ -111,7 +117,8 @@ final class AdvancedRestore {
 
     synchronized void apply(OplusVotes.Node node,Integer value)throws IOException,JSONException{
         ensureOpen();
-        if(node==OplusVotes.Node.GAUGE_SHUTDOWN_VOLTAGE&&value==null){
+        if(node==OplusVotes.Node.UFCS_DISABLE&&Integer.valueOf(0).equals(value))value=null;
+        if(value==null&&(node==OplusVotes.Node.GAUGE_SHUTDOWN_VOLTAGE||node==OplusVotes.Node.UFCS_DISABLE||node.floatingVoltage())){
             // Persist the manual release before the driver write or its fallible readback.
             targets.remove(node);
             targetsChanged();

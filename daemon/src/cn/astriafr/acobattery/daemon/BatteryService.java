@@ -300,6 +300,11 @@ final class BatteryService {
         return r;
     }
     static Integer integer(String value){try{return Integer.valueOf(value.trim());}catch(Exception e){return null;}}
+    static Map<String,String> readBatteryLog(){
+        String[] header=read(BAT+"battery_log_head").split(",",-1);
+        String[] values=read(BAT+"battery_log_content").split(",",-1);
+        return ChargingLog.fields(header,values);
+    }
     static Object jsonValue(Object value){return value==null?JSONObject.NULL:value;}
     static String optionalText(String value){return value.isEmpty()?null:value;}
     static String readBatteryType(){return read(BAT+"battery_type");}
@@ -315,6 +320,13 @@ final class BatteryService {
         return batteryInfoSnapshot(compensationFloorConfirmed,Double.NaN);
     }
     JSONObject batteryInfoSnapshot(boolean compensationFloorConfirmed,double tailRm)throws Exception {
+        return batteryInfoSnapshot(compensationFloorConfirmed,tailRm,readBatteryLog());
+    }
+    static Integer floatVoltageMaxMv(){
+        Long value=OplusVotes.readEffectiveValue(OplusVotes.Node.FV_MAX);
+        return value!=null&&Core.cellVoltage(value)?value.intValue():null;
+    }
+    JSONObject batteryInfoSnapshot(boolean compensationFloorConfirmed,double tailRm,Map<String,String> batteryLog)throws Exception {
         Integer fcc=integer(read(BAT+"battery_fcc")),soh=integer(read(BAT+"battery_soh"));
         if(fcc!=null&&fcc<=0)fcc=null;
         if(soh!=null&&(soh<=0||soh>100))soh=null;
@@ -334,12 +346,12 @@ final class BatteryService {
         Double rawSoh=BatteryDetails.rawSoh(soh,calculationCutoff,table,useFloor);
         Integer rawFcc=BatteryDetails.rawFcc(fcc,rawSoh,calculationCutoff,table,design);
         Integer rawFccAbove=BatteryDetails.rawFccAbove(fcc,soh,calculationCutoff,table,design);
-        String[] keys=read(BAT+"battery_log_head").split(",",-1),values=read(BAT+"battery_log_content").split(",",-1);
-        Integer qmax=integer(ChargingLog.fields(keys,values).get("batt_qmax"));
+        Integer qmax=integer(batteryLog.get("batt_qmax"));
         Integer cycles=readCycleCount();
         return new JSONObject().put("cycles",jsonValue(cycles)).put("fcc",jsonValue(fcc)).put("rawFcc",jsonValue(rawFcc)).put("rawFccAbove",jsonValue(rawFccAbove))
             .put("soh",jsonValue(soh)).put("rawSoh",jsonValue(rawSoh)).put("qmax",jsonValue(BatteryDetails.normalizeQmax(qmax,fcc,design)))
-            .put("cutoffMv",jsonValue(cutoff)).put("compensationCutoffMv",jsonValue(calculationCutoff))
+            .put("cutoffMv",jsonValue(cutoff)).put("floatVoltageMaxMv",jsonValue(floatVoltageMaxMv()))
+            .put("compensationCutoffMv",jsonValue(calculationCutoff))
             .put("compensationFloorConfirmed",confirmed).put("designCapacity",jsonValue(design)).put("noCompensation",noCompensation)
             .put("serial",jsonValue(optionalText(read(BAT+"battery_sn"))))
             .put("manufactureDate",jsonValue(optionalText(read(BAT+"battery_manu_date"))))
@@ -357,27 +369,17 @@ final class BatteryService {
         o.put("temp",jsonValue(nullable(r.temp))).put("tempSource",r.tempSource).put("source",r.source).put("error",r.error);return o;
     }
 
-    static void addChargingInfo(JSONObject reading)throws JSONException {
+    static void addChargingInfo(JSONObject reading,Map<String,String> batteryLog)throws JSONException {
         String usb=PS+"usb/";
-        boolean usbOnline=Boolean.TRUE.equals(PowerInputs.parseOnline(read(usb+"online")));
-        double inputMillivolts=Double.NaN;
-        if(usbOnline){
-            inputMillivolts=num(read(usb+"voltage_now"))/1000;
-            if(Core.finite(inputMillivolts)&&inputMillivolts>0)reading.put("usbInputVoltage",inputMillivolts);
-        }
-        Integer type=integer(read("/sys/class/oplus_chg/common/protocol_type"));
+        if(!Boolean.TRUE.equals(PowerInputs.parseOnline(read(usb+"online"))))return;
+        double inputMillivolts=num(read(usb+"voltage_now"))/1000;
+        if(Core.finite(inputMillivolts)&&inputMillivolts>0)reading.put("usbInputVoltage",inputMillivolts);
+        Integer type=integer(batteryLog.get("charge_type"));
         if(type==null)return;
         String protocol=chargingProtocolName(type);
         if(protocol==null)return;
-        if((type==0||!usbOnline)&&!isChargingNow(reading.optDouble("current",Double.NaN)))return;
-        if(type==0&&!(inputMillivolts>=4000&&inputMillivolts<=6000)){
-            reading.put("chargingProtocol","未知");
-            return;
-        }
         reading.put("chargingProtocol",protocol);
-        if(!usbOnline)return;
-        boolean lowInputVoltage=inputMillivolts>0&&inputMillivolts<=5400;
-        OplusVotes.Node currentVote=lowInputVoltage?OplusVotes.Node.WIRED_ICL:inputCurrentVote(type);
+        OplusVotes.Node currentVote=inputCurrentVote(type,inputMillivolts);
         if(currentVote==null)return;
         reading.put("targetInputCurrentSource",currentVote.name());
         Long target=OplusVotes.readEffectiveValue(currentVote);
@@ -388,40 +390,46 @@ final class BatteryService {
         }
     }
 
-    private static boolean isChargingNow(double current){
-        String status=read(PS+"battery/status");
-        if(status.isEmpty()||"Unknown".equalsIgnoreCase(status))return current>0;
-        return "Charging".equalsIgnoreCase(status);
-    }
-
-    private static String chargingProtocolName(int type){
+    static String chargingProtocolName(int type){
         switch(type){
-            case 0:return "5V充电";
-            case 1:return "VOOC";
-            case 2:return "SUPERVOOC";
-            case 3:return "USB PD";
-            case 4:return "QC";
-            case 5:return "USB PD PPS";
-            case 6:return "UFCS";
-            case 7:return "PE 2.0";
+            case 0:return "未知";
+            case 1:return "SDP";
+            case 2:return "DCP";
+            case 3:return "CDP";
+            case 4:return "ACA";
+            case 5:return "USB Type-C";
+            case 6:return "USB PD";
+            case 7:return "USB PD DRP";
+            case 8:return "USB PD PPS";
+            case 9:return "USB PD SDP";
+            case 10:return "Apple BrickID";
+            case 11:return "QC 2.0";
+            case 12:return "QC 3.0";
+            case 13:return "VOOC";
+            case 14:return "SUPERVOOC";
+            case 15:return "UFCS";
             default:return null;
         }
     }
 
-    private static OplusVotes.Node inputCurrentVote(int type){
+    static OplusVotes.Node inputCurrentVote(int type,double inputMillivolts){
+        if(type<1||type>15)return null;
+        if(inputMillivolts>0&&inputMillivolts<=5400)return OplusVotes.Node.WIRED_ICL;
         switch(type){
-            case 0:case 3:case 4:return OplusVotes.Node.WIRED_ICL;
-            case 1:case 2:return OplusVotes.Node.VOOC_CURR;
-            case 5:return OplusVotes.Node.PPS_CURR;
-            case 6:return OplusVotes.Node.UFCS_CURR;
-            default:return null;
+            case 13:case 14:return OplusVotes.Node.VOOC_CURR;
+            case 8:return OplusVotes.Node.PPS_CURR;
+            case 15:return OplusVotes.Node.UFCS_CURR;
+            default:return OplusVotes.Node.WIRED_ICL;
         }
     }
 
     boolean usesLowVoltageProfile(){
-        String model=Build.MODEL;
-        // OnePlus Ace 5 Ultra and Racing use the standard profile for estimates and warnings.
-        if("PLC110".equalsIgnoreCase(model)||"PLF110".equalsIgnoreCase(model))return false;
+        switch(Build.MODEL==null?"":Build.MODEL.trim().toUpperCase(java.util.Locale.ROOT)){
+            case "PLC110":case "PLF110": // OnePlus Ace 5 Ultra and Racing
+            case "RMX5060":case "RMX5080":case "RMX5062":case "RMX6688": // Realme Neo7, Neo7 SE, Neo7 Turbo and GT7
+            case "RMX5105":case "RMX5112":case "RMX5100": // Realme 15, 15T and 15 Pro
+                return false;
+        }
         return designCapacityMah!=null&&designCapacityMah>=6600;
     }
 

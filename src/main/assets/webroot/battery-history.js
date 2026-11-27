@@ -68,7 +68,7 @@ export function batteryHistoryFields(snapshot){
     return key===referenceKey?ratio(value,info.designCapacity):number(value,'mAh');
   };
   const locked=lockedCapacityText(info.qmax,info.lockedCapacity,noCompensation?null:info.rawFccAbove);
-  const values={qmax:ratio(positive(info.qmax),info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(positive(info.soh),'%'),rawSoh:noCompensation?'——':number(positive(info.rawSoh),'%',2),cutoffMv:number(info.cutoffMv,'mV'),tailRm:number(positive(info.tailRm),'mAh')};
+  const values={qmax:ratio(positive(info.qmax),info.designCapacity),fcc:fcc('fcc'),rawFcc:noCompensation?'——':fccBound??fcc('rawFcc'),lockedCapacity:locked,soh:number(positive(info.soh),'%'),rawSoh:noCompensation?'——':number(positive(info.rawSoh),'%',2),cutoffMv:number(info.cutoffMv,'mV'),floatVoltageMaxMv:number(info.floatVoltageMaxMv,'mV'),tailRm:number(positive(info.tailRm),'mAh')};
   return{values,referenceKey};
 }
 export class BatteryHistoryPanel{

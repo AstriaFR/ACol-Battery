@@ -33,6 +33,11 @@ final class RecordStore {
         SafeDatabase.requireSupportedVersion(db);
         correctDischargePower();
         ensureSampleColumns();
+        db.execSQL("UPDATE sessions SET "
+            +"pct_start=COALESCE(pct_start,(SELECT pct FROM samples WHERE session=sessions.id AND pct BETWEEN 0 AND 100 ORDER BY x LIMIT 1)),"
+            +"pct_end=COALESCE(pct_end,(SELECT pct FROM samples WHERE session=sessions.id AND pct BETWEEN 0 AND 100 ORDER BY x DESC LIMIT 1)) "
+            +"WHERE fast_seconds=0 AND (pct_start IS NULL OR pct_end IS NULL) "
+            +"AND EXISTS(SELECT 1 FROM samples WHERE session=sessions.id AND pct BETWEEN 0 AND 100)");
     }
     static void markSamplingDefaultsMigrated(SQLiteDatabase db){
         db.execSQL("INSERT OR IGNORE INTO runtime(key,value) VALUES(?,'1')",new Object[]{SAMPLING_DEFAULTS_MIGRATION});
@@ -65,6 +70,7 @@ final class RecordStore {
             try(Cursor c=db.rawQuery("PRAGMA table_info(sessions)",null)){while(c.moveToNext())sessionColumns.add(c.getString(1));}
             if(!sessionColumns.contains("cell_count"))db.execSQL("ALTER TABLE sessions ADD COLUMN cell_count INTEGER NOT NULL DEFAULT 2");
             if(!sessionColumns.contains("tail_cycles"))db.execSQL("ALTER TABLE sessions ADD COLUMN tail_cycles INTEGER");
+            if(!sessionColumns.contains("tail_float_voltage_max_mv"))db.execSQL("ALTER TABLE sessions ADD COLUMN tail_float_voltage_max_mv INTEGER");
             if(!sessionColumns.contains("fast_seconds"))db.execSQL("ALTER TABLE sessions ADD COLUMN fast_seconds INTEGER NOT NULL DEFAULT 0");
             if(!sessionColumns.contains("performance_seconds")){
                 db.execSQL("ALTER TABLE sessions ADD COLUMN performance_seconds INTEGER NOT NULL DEFAULT 0");
@@ -90,7 +96,7 @@ final class RecordStore {
     JSONObject recordBatteryHistory(JSONObject info,long wall)throws Exception {
         JSONObject snapshot=BatteryHistorySnapshot.capture(info);
         boolean available=false;
-        for(String key:new String[]{"cycles","qmax","fcc","soh","cutoffMv"})if(!snapshot.isNull(key)){available=true;break;}
+        for(String key:new String[]{"cycles","qmax","fcc","soh","cutoffMv","floatVoltageMaxMv"})if(!snapshot.isNull(key)){available=true;break;}
         if(!available)throw new IOException("当前电池信息暂不可用，请稍后重试。");
         Integer cycles=integer(snapshot.opt("cycles").toString());long id;
         db.beginTransaction();try{

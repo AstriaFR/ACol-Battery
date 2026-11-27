@@ -116,11 +116,18 @@ async function advancedOptions(){
  globalThis.history={state:null};
  get('singleCell').textContent='单电芯';
  get('dualCell').textContent='双电芯';
- let cellCount=2,advancedAutoRestore=false,rejectToggle=false,batteryType='example-type';
- const page=createAdvancedPage(async(action,value)=>{
-   if(action==='oplus_votes')return{nodes:{},cellCount,advancedAutoRestore,batteryType};
-   writes.push([action,value]);
+ let cellCount=2,advancedAutoRestore=false,rejectToggle=false,batteryType='example-type',ufcs,rejectUfcs=false;
+ const page=createAdvancedPage(async(action,...args)=>{
+   const [value,setting]=args;
+   if(action==='oplus_votes')return{nodes:ufcs?{UFCS_DISABLE:ufcs}:{},cellCount,advancedAutoRestore,batteryType};
+   writes.push([action,...args]);
    if(action==='set_cell_count')return{cellCount:cellCount=value};
+   if(action==='set_oplus_vote'){
+     assert.equal(value,'UFCS_DISABLE');
+     if(rejectUfcs)throw Error('写入读回不一致');
+     ufcs={forced:setting===1,forceValue:1};return{};
+   }
+   if(action==='reset_oplus_votes'){ufcs={forced:false,forceValue:1};return{failed:''};}
    if(rejectToggle)throw Error('后台暂不可用');
    return{advancedAutoRestore:advancedAutoRestore=value===1};
  },{keypad:{}});
@@ -129,8 +136,9 @@ async function advancedOptions(){
    page.open();
    await flush();
    const capacityReadings=get('advancedCapacityReadings').children;
-   const typeRow=capacityReadings.at(-1);
-   assert.equal(capacityReadings.at(-2).children[0].textContent,'FV_MIN');
+   const typeRow=capacityReadings.at(-3);
+   assert.deepEqual(capacityReadings.slice(2,4).map(row=>row.children[0].textContent),['FV_MAX','FV_MIN']);
+   assert.deepEqual(capacityReadings.slice(-2).map(row=>row.children[0].textContent),['TARGET_TERM_VOLTAGE','TARGET_SHUTDOWN_VOLTAGE']);
    assert.equal(typeRow.children[1].textContent,'example-type');
    assert.equal(typeRow.hidden,false);
    batteryType=undefined;
@@ -156,6 +164,26 @@ async function advancedOptions(){
    await toggle.onchange();
    assert.equal(toggle.checked,true);
    assert.deepEqual(writes.slice(1),[['set_advanced_auto_restore',1],['set_advanced_auto_restore',0]]);
+   const ufcsToggle=get('advancedDisableUfcs'),reset=get('resetAdvancedSettings');
+   assert.equal(ufcsToggle.disabled,true);
+   assert.equal(get('advancedUfcsUnavailable').hidden,false);
+   ufcs={forced:false,forceValue:0};page.pause();page.resume();await flush();
+   assert.equal(ufcsToggle.disabled,false);
+   assert.equal(get('advancedChargingReadings').children.some(row=>row.children[0].textContent==='UFCS_DISABLE'),false);
+   ufcsToggle.checked=true;await ufcsToggle.onchange();await flush();
+   assert.deepEqual(writes.at(-1),['set_oplus_vote','UFCS_DISABLE',1]);
+   assert.equal(ufcsToggle.checked,true);
+   assert.equal(reset.disabled,false);
+   rejectUfcs=true;ufcsToggle.checked=false;await ufcsToggle.onchange();await flush();
+   assert.equal(ufcsToggle.checked,true);
+   assert.match(get('advancedStatus').textContent,/写入读回不一致/);
+   rejectUfcs=false;ufcsToggle.checked=false;await ufcsToggle.onchange();await flush();
+   assert.deepEqual(writes.at(-1),['set_oplus_vote','UFCS_DISABLE','stock']);
+   assert.equal(ufcsToggle.checked,false);
+   ufcsToggle.checked=true;await ufcsToggle.onchange();await flush();
+   const resetting=reset.onclick();get('advancedConfirmApply').onclick();await resetting;await flush();
+   assert.deepEqual(writes.at(-1),['reset_oplus_votes']);
+   assert.equal(ufcsToggle.checked,false);
  }finally{page.close();}
 }
 async function selectionPreferences(){

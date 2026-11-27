@@ -1,5 +1,6 @@
 package cn.astriafr.acobattery;
 
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -14,6 +15,7 @@ import android.graphics.fonts.FontFamily;
 import android.graphics.fonts.FontStyle;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.view.Gravity;
@@ -38,6 +40,7 @@ import java.util.ArrayDeque;
 final class StartupController {
     static final String BASE=RuntimeSetup.BASE,RUNTIME=RuntimeSetup.RUNTIME;
     static final int SAVE_DATABASE_REBUILD=6103;
+    private static final String DATABASE_BACKUP_REPORT="startup.databaseBackupReport";
     static final class InitFailure extends Exception {
         final String diagnostics;
         InitFailure(String message){this(message,"");}
@@ -63,11 +66,27 @@ final class StartupController {
     ScrollView errorScroll;
     Button retry,errorView,errorCopy,rebuild,errorRebuild;
     boolean canRebuild,rebuilding,showingFallbackReport;
+    private boolean awaitingDatabaseBackup;
     LinearLayout errorActions,initializationContent;ProgressBar progress;
     String errorReport="",downgradeReport="",openedReport="";JSONObject probeReport;
     List<StartupFeedback.Notice> pendingNotices=java.util.Collections.emptyList();
     AlertDialog startupNotice;View reportHome;
-    StartupController(MainActivity app){this.app=app;}
+    StartupController(MainActivity app,Bundle state){
+        this.app=app;
+        if(state!=null&&state.containsKey(DATABASE_BACKUP_REPORT)){
+            errorReport=state.getString(DATABASE_BACKUP_REPORT,"");
+            awaitingDatabaseBackup=true;
+        }
+    }
+    void saveState(Bundle state){
+        if(awaitingDatabaseBackup)state.putString(DATABASE_BACKUP_REPORT,errorReport);
+    }
+    boolean resumeDatabaseBackupPicker(){
+        if(!awaitingDatabaseBackup)return false;
+        showInitialization();
+        phase("重建数据库","等待选择数据库备份位置。");
+        return true;
+    }
     RootSession openRoot()throws IOException{
         RootSession session=new RootSession();
         synchronized(channelLock){
@@ -150,7 +169,7 @@ final class StartupController {
                 .setStyle(new FontStyle(700,FontStyle.FONT_SLANT_UPRIGHT)).build());
         }catch(Exception ignored){name.setTypeface(null,Typeface.BOLD);}
         name.setTextColor(dark?Color.rgb(230,237,232):Color.rgb(24,38,56));names.addView(name);
-        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.7.1 · AstriaFR");}version.setTextColor(dark?Color.rgb(165,183,172):Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
+        TextView version=new TextView(app);try{version.setText(app.getPackageManager().getPackageInfo(app.getPackageName(),0).versionName+" · AstriaFR");}catch(Exception ignored){version.setText("2.7.2 · AstriaFR");}version.setTextColor(dark?Color.rgb(165,183,172):Color.rgb(96,113,133));version.setTextSize(13);names.addView(version);title.addView(names);layout.addView(title);
         stage=new TextView(app);stage.setTextSize(20);stage.setMinLines(1);stage.setIncludeFontPadding(false);stage.setTypeface(null,Typeface.BOLD);stage.setTextColor(dark?Color.rgb(117,223,164):Color.rgb(7,130,103));stage.setPadding(0,app.dp(32),0,app.dp(12));layout.addView(stage);
         detail=new TextView(app);detail.setTextSize(14);detail.setIncludeFontPadding(false);detail.setMinLines(2);detail.setMinHeight(app.dp(48));detail.setGravity(Gravity.TOP);detail.setTextColor(dark?Color.rgb(165,183,172):Color.rgb(96,113,133));detail.setLineSpacing(app.dp(5),1);layout.addView(detail);
         progress=new ProgressBar(app,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,app.dp(4));line.topMargin=app.dp(24);layout.addView(progress,line);
@@ -282,7 +301,7 @@ final class StartupController {
         app.runOnUiThread(()->showFailureUI(report));
     }
     void askRebuild(){
-        if(!canRebuild||rebuilding||app.destroyed)return;
+        if(!canRebuild||awaitingDatabaseBackup||rebuilding||app.destroyed)return;
         LinearLayout panel=new LinearLayout(app);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(app.dp(22),app.dp(20),app.dp(22),app.dp(12));
         TextView title=new TextView(app);title.setText("重建数据库？");title.setTextSize(21);title.setTypeface(null,Typeface.BOLD);panel.addView(title);
         TextView text=new TextView(app);text.setText("数据库内的记录和设置会重置，当前记录也会结束。\n请选择外部位置保存原数据库，保存并校验成功后才会重建。");text.setTextSize(15);text.setLineSpacing(app.dp(3),1.05f);text.setPadding(0,app.dp(14),0,app.dp(18));panel.addView(text);
@@ -292,20 +311,45 @@ final class StartupController {
         Button confirm=new Button(app);confirm.setText("确认重建");confirm.setTextColor(Color.rgb(190,65,65));confirm.setBackgroundColor(Color.TRANSPARENT);buttons.addView(confirm,new LinearLayout.LayoutParams(-2,-1));
         AlertDialog dialog=new AlertDialog.Builder(app).setView(panel).create();cancel.setOnClickListener(v->dialog.dismiss());confirm.setOnClickListener(v->{dialog.dismiss();chooseDatabaseBackup();});dialog.show();
     }
-    void chooseDatabaseBackup(){
-        try{String name="ACol电池-数据库备份-"+new SimpleDateFormat("yyyyMMdd-HHmmss",Locale.US).format(new Date())+".zip";
-            Intent picker=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,name);app.startActivityForResult(picker,SAVE_DATABASE_REBUILD);
-        }catch(Exception error){Toast.makeText(app,"无法打开系统文件选择器，数据库未更改。",Toast.LENGTH_LONG).show();}
+    private void chooseDatabaseBackup(){
+        if(!canRebuild||awaitingDatabaseBackup||rebuilding||app.destroyed)return;
+        try{
+            String name="ACol电池-数据库备份-"+new SimpleDateFormat("yyyyMMdd-HHmmss",Locale.US).format(new Date())+".zip";
+            Intent picker=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip").putExtra(Intent.EXTRA_TITLE,name);
+            awaitingDatabaseBackup=true;
+            app.startActivityForResult(picker,SAVE_DATABASE_REBUILD);
+        }catch(Exception error){
+            awaitingDatabaseBackup=false;
+            Toast.makeText(app,"无法打开系统文件选择器，数据库未更改。",Toast.LENGTH_LONG).show();
+        }
     }
-    void rebuildDatabase(Uri destination){
-        if(!canRebuild||rebuilding||app.destroyed)return;
+    void databaseBackupResult(int result,Intent data){
+        if(app.destroyed||rebuilding)return;
+        boolean confirmed=awaitingDatabaseBackup;
+        awaitingDatabaseBackup=false;
+        if(app.clearingData||app.transferringData)return;
+        if(!confirmed){
+            if(result==Activity.RESULT_OK)Toast.makeText(app,"重建确认已失效，请重新确认。",Toast.LENGTH_LONG).show();
+            return;
+        }
+        Uri destination=data==null?null:data.getData();
+        if(result!=Activity.RESULT_OK||destination==null){
+            showFailureUI(errorReport);
+            if(result==Activity.RESULT_OK)Toast.makeText(app,"未收到备份位置，数据库未更改。",Toast.LENGTH_LONG).show();
+            return;
+        }
+        rebuildDatabase(destination);
+    }
+    private void rebuildDatabase(Uri destination){
         canRebuild=false;rebuilding=true;closeErrorPage();retry.setVisibility(View.GONE);errorActions.setVisibility(View.GONE);progress.setVisibility(View.VISIBLE);
         phase("重建数据库","正在保存并校验原数据库。");
         app.worker.execute(()->{
-            String token=java.util.UUID.randomUUID().toString();boolean committed=false;
+            String token=java.util.UUID.randomUUID().toString();boolean exportAttempted=false,committed=false;
             try{
                 disconnect();openRoot();
                 if(!root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限。");
+                verifyOwner(root,false);
+                exportAttempted=true;
                 JSONObject result=new JSONObject(root.rebuildCommand(admin("prepare-database-export "+token)));
                 if(!result.optBoolean("ok"))throw new IOException("无法准备数据库备份。");
                 long size=result.getLong("size");String expected=result.getString("sha256");
@@ -332,7 +376,7 @@ final class StartupController {
                 RootSession authorized=root;
                 app.runOnUiThread(()->{if(!app.destroyed){rebuilding=false;Toast.makeText(app,"数据库备份已保存，正在重新初始化",Toast.LENGTH_LONG).show();initialize(authorized);}});
             }catch(Exception failure){
-                if(!committed&&root!=null)try{root.command(admin("cancel-database-export "+token),10);}catch(Exception ignored){}
+                if(exportAttempted&&!committed&&root!=null)try{root.command(admin("cancel-database-export "+token),10);}catch(Exception ignored){}
                 disconnect();fail("重建数据库",failure);
             }
         });
@@ -340,15 +384,35 @@ final class StartupController {
     static String hexDigest(byte[] bytes){StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(Locale.ROOT,"%02x",b&255));return out.toString();}
     static String digest(byte[] bytes)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))out.append(String.format("%02x",b&255));return out.toString();}
     String assetText(String name)throws IOException{try(InputStream in=app.getAssets().open(name)){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return out.toString("UTF-8").trim();}}
-    File payload()throws Exception{
-        File file=new File(app.getCacheDir(),"aco-payload.zip");try(InputStream in=app.getAssets().open("payload.zip");OutputStream out=new FileOutputStream(file)){byte[] b=new byte[8192];int n;while((n=in.read(b))>0)out.write(b,0,n);}return file;
+    private void copyPayload(File file)throws IOException{
+        try(InputStream in=app.getAssets().open("payload.zip");OutputStream out=new FileOutputStream(file)){byte[] b=new byte[8192];int n;while((n=in.read(b))>0)out.write(b,0,n);}
+    }
+    private void recoverRuntime(RootSession session)throws Exception{
+        try{session.command(RuntimeSetup.recover(),10);}
+        catch(RootSession.CommandFailure failure){
+            // An older updater can leave a journal that its own recovery cannot complete.
+            try{
+                File extracted=java.nio.file.Files.createTempDirectory(app.getCacheDir().toPath(),"aco-recovery-").toFile();
+                File archive=new File(extracted,"payload.zip");
+                try{
+                    copyPayload(archive);
+                    RuntimePayload.extract(archive,extracted,assetText("payload.sha256"));
+                    File jar=new File(extracted,"bin/daemon.dex.jar");
+                    if(!jar.setReadOnly())throw new IOException("无法准备只读的后台恢复文件。");
+                    session.command(RuntimeSetup.recover(jar),10);
+                }finally{
+                    archive.delete();
+                    RuntimePayload.discard(extracted);
+                }
+            }catch(Exception retry){retry.addSuppressed(failure);throw retry;}
+        }
     }
     String admin(String action){
         return "aco_admin="+RUNTIME+"/bin/daemon.dex.jar; if [ -f "+BASE+"/update.transaction ] && [ -f "+RuntimeSetup.STAGE+"/bin/daemon.dex.jar ]; then aco_admin="+RuntimeSetup.STAGE+"/bin/daemon.dex.jar; fi; CLASSPATH=\"$aco_admin\" /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin "+action;
     }
     void initialize(){initialize(null);}
     void initialize(RootSession authorized){
-        if(app.destroyed){if(authorized!=null)authorized.close();return;}
+        if(app.destroyed||awaitingDatabaseBackup){if(authorized!=null)authorized.close();return;}
         if(app.getSharedPreferences("maintenance",Context.MODE_PRIVATE).getBoolean("clearPending",false)){if(authorized!=null)authorized.close();app.clearAllData();return;}
         synchronized(channelLock){rootReady=false;waitingRequests.clear();}
         canRebuild=false;if(rebuild!=null)rebuild.setVisibility(View.GONE);
@@ -374,9 +438,10 @@ final class StartupController {
                 try{root.command("[ -x /system/bin/app_process ] && [ -x /system/bin/cp ] && [ -x /system/bin/chmod ] && [ -x /system/bin/mv ] || { echo '系统缺少部署独立后台所需的运行工具。'; false; }",10);}
                 catch(RootSession.CommandFailure failure){throw new InitFailure("系统缺少 app_process、cp、chmod 或 mv，无法部署独立后台。",failure.diagnostics);}
                 phase("准备独立运行环境","程序与记录保存在独立的 root 目录。");
-                File archive=payload();String version=assetText("payload.sha256");
+                File archive=new File(app.getCacheDir(),"aco-payload.zip");String version=assetText("payload.sha256");
                 verifyOwner(root,true);
-                root.command(RuntimeSetup.recover()+" && /system/bin/rm -f "+BASE+"/cleanup.request",10);
+                recoverRuntime(root);
+                root.command("/system/bin/rm -f "+BASE+"/cleanup.request",10);
                 String current=root.command("cat "+BASE+"/runtime.version 2>/dev/null || true",10);
                 boolean updating=!version.equals(current);
                 if(updating){
@@ -384,6 +449,7 @@ final class StartupController {
                     // executing their old finish-and-auto-delete shutdown behavior.
                     File extracted=java.nio.file.Files.createTempDirectory(app.getCacheDir().toPath(),"aco-runtime-").toFile();
                     try{
+                        copyPayload(archive);
                         String stagedDigest=RuntimePayload.extract(archive,extracted,version);
                         root.command(RuntimeSetup.stage(extracted),10);
                         checkProbe(RuntimeSetup.STAGE);
@@ -410,7 +476,7 @@ final class StartupController {
                 if(app.clearingData||app.transferringData)return;
                 if(updateAttempted&&!app.destroyed)try(RootSession recovery=new RootSession()){
                     verifyOwner(recovery,false);
-                    recovery.command(RuntimeSetup.recover(),10);
+                    recoverRuntime(recovery);
                     recovery.command("if [ -f "+BASE+"/initialized ] && [ -f "+RUNTIME+"/bin/daemon.dex.jar ]; then "+admin("ensure")+"; fi",10);
                 }catch(Exception recovery){e.addSuppressed(recovery);}
                 fail(currentPhase,e);
@@ -436,7 +502,7 @@ final class StartupController {
                 openRoot();if(!root.command("id -u",10).equals("0"))throw new IOException("未获得 root 权限。");
                 if(app.destroyed)return;
                 verifyOwner(root,false);
-                connectionPhase("正在连接后台…");root.command(RuntimeSetup.recover(),10);
+                connectionPhase("正在连接后台…");recoverRuntime(root);
                 String version=assetText("payload.sha256");
                 String state=root.command("if "+RuntimeSetup.hasOwner()+" && [ -f "+BASE+"/initialized ] && [ -f "+RUNTIME+"/bin/daemon.dex.jar ] && [ ! -e "+BASE+"/update.pending ] && [ ! -e "+BASE+"/cleanup.request ] && [ \"$(cat "+BASE+"/runtime.version 2>/dev/null)\" = "+RootSession.quote(version)+" ]; then echo READY; else echo SETUP; fi",10);
                 if(!state.equals("READY")){

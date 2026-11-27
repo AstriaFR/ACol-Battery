@@ -132,6 +132,7 @@ final class DataTransfer {
             db.execSQL("UPDATE sessions SET active=0,reason='backup_restored' WHERE active=1");
             db.execSQL("DELETE FROM runtime WHERE key IN ('session_progress_v1','game_progress_v1','full_tail_boot','cell_count_v1','manual_cell_count_v1')");
             db.execSQL("DELETE FROM runtime WHERE key=?",new Object[]{AdvancedRestore.KEY});
+            LegacyChargingState.discardImported(db);
             RecordStore.markSamplingDefaultsMigrated(db);
             try(android.database.Cursor checkpoint=db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)",null)){if(!checkpoint.moveToFirst()||checkpoint.getInt(0)!=0)throw new IOException("备份数据库尚未完成写入。");}
         }

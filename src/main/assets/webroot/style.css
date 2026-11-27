@@ -359,13 +359,13 @@ body:has(main:not([hidden])){overflow:hidden}
 #batteryInfoPanel{padding-bottom:calc(13.26px + env(safe-area-inset-bottom))}
 #batteryInfoPanel>.subpage-header{margin-bottom:13.6px}
 #batteryInfoPanel>.page-scroll{margin-inline:-8px}
-#batteryInfoPanel .battery-info-cards{gap:4.08px}
-#batteryInfoPanel .battery-info-card{padding:7.14px 8.16px;gap:6.12px}
-#batteryInfoPanel .battery-info-card small{font-size:12.6px;margin-bottom:1.02px}
+#batteryInfoPanel .battery-info-cards{gap:3.67px}
+#batteryInfoPanel .battery-info-card{padding:6.43px 7.34px;gap:5.51px}
+#batteryInfoPanel .battery-info-card small{font-size:12.6px;margin-bottom:.92px}
 #batteryInfoPanel .battery-info-card strong{font-size:17.1px}
-#batteryInfoPanel .battery-info-note{font-size:10.8px;gap:1.02px 4.08px}
+#batteryInfoPanel .battery-info-note{font-size:10.8px;gap:.92px 3.67px}
 #batteryInfoPanel .battery-estimate-info{width:13.2px;height:13.2px;font-size:12.6px}
-#batteryInfoPanel .battery-info-error{margin:5.1px 1.02px 0;font-size:9.9px}
+#batteryInfoPanel .battery-info-error{margin:4.59px .92px 0;font-size:9.9px}
 .summary .remaining-info{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;min-height:0;flex-shrink:0;padding:0;margin-left:2px;border:1px solid #bdc9d6;border-radius:50%;background:#fff;color:var(--muted);font:italic 600 11px Georgia,serif;letter-spacing:0;align-self:center}
 .remaining-explanation{padding:22px;max-height:80dvh;overflow-y:auto}
 .remaining-explanation h3{font-size:16px;margin:0 0 12px}
@@ -519,8 +519,7 @@ body:has(dialog[open])>.edge-scrollbar{visibility:hidden}
 :is(#monitorAppearanceControls,#gameMetricsControls) .setting-heading{min-height:36px}
 .monitor-metric-list{position:relative}
 .monitor-metric-list[data-reordering] label{cursor:grabbing}
-.monitor-metric-list [data-dragged]{position:relative;z-index:2;translate:0 var(--monitor-drag-y);background:var(--card);border-radius:8px;box-shadow:0 3px 12px #0003;outline:1px solid var(--theme-line)}
-.monitor-metric-list[data-drop]::after{content:"";position:absolute;z-index:3;top:var(--monitor-drop-y);left:0;right:0;height:2px;border-radius:2px;background:var(--accent);pointer-events:none}
+.monitor-metric-list label[data-dragged]{position:relative;z-index:2;translate:0 var(--monitor-drag-y);background:var(--card);border-radius:8px;box-shadow:0 3px 12px #0003;outline:1px solid var(--theme-line)}
 .monitor-threshold-grid{display:grid;grid-template-columns:auto repeat(3,minmax(0,1fr));gap:7px;align-items:center;text-align:center}
 .monitor-threshold-grid>span{font-size:12px;color:var(--muted)}
 .monitor-threshold-grid>span:nth-child(4n+1){text-align:left}
@@ -875,14 +874,16 @@ button.page-home{display:inline-flex;align-items:center;justify-content:center;f
 
 .battery-history-button{font-size:13px;min-height:36px;padding:7px 10px;color:var(--charge);background:var(--card);border-color:var(--line)}
 .battery-history-delete{color:var(--discharge)}
-.battery-history-rows{display:grid;gap:10px}
-.battery-history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:15px 16px;background:var(--card);border-color:var(--line);text-align:left}
+.battery-history-rows{display:grid;gap:8.5px}
+.battery-history-row{display:flex;align-items:center;justify-content:space-between;gap:10.2px;width:100%;padding:12.75px 13.6px;background:var(--card);border-color:var(--line);text-align:left}
 .battery-history-row>span:first-child{font-size:15px;font-weight:400;white-space:nowrap}
 .battery-history-row>span:last-child{font-size:24px;color:var(--muted)}
 .battery-snapshot-meta{display:flex;flex-direction:column;gap:5px;padding:15px 16px}
 .battery-snapshot-meta strong{font-size:16px;font-weight:600}
 .battery-snapshot-meta small{font-size:13px;color:var(--muted)}
-.battery-history-snapshot .battery-snapshot-meta{padding:0 0 5px}
+.battery-info-card.battery-history-snapshot{padding:10.5px 12px;gap:9px}
+.battery-history-snapshot small{margin-bottom:1.5px}
+.battery-history-snapshot .battery-snapshot-meta{gap:3.75px;padding:0 0 3.75px}
 #batteryHistoryDeleteApply{background:#c4443f;border-color:#c4443f;color:#fff}
 #batteryHistoryDeleteCancel{background:#078267;border-color:#078267;color:#fff}
 #batteryHistoryDeleteApply:active,#batteryHistoryDeleteApply:focus{background:#c4443f;color:#fff}

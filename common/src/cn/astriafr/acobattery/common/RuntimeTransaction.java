@@ -45,9 +45,11 @@ public final class RuntimeTransaction {
     }
     private static void optional(File source,File target)throws IOException{if(source.isFile())copy(source,target);}
     private static void restore(File source,File target)throws IOException{if(source.isFile())copy(source,target);else Files.deleteIfExists(target.toPath());}
-    private void permissions(File directory)throws IOException{
+    private void permissions(File directory,boolean restoring)throws IOException{
         for(String name:RuntimePayload.FILES){
-            File file=new File(directory,name);boolean executable=name.endsWith(".sh")||name.endsWith("aco-launcher");
+            File file=new File(directory,name);
+            if(restoring&&Files.notExists(file.toPath(),LinkOption.NOFOLLOW_LINKS))continue;
+            boolean executable=name.endsWith(".sh")||name.endsWith("aco-launcher");
             access.set(file,executable);
         }
     }
@@ -79,7 +81,7 @@ public final class RuntimeTransaction {
     private void install(String contentsDigest)throws Exception{
         for(String name:RuntimePayload.FILES)copy(new File(stage,name),new File(runtime,name));
         if(contentsDigest!=null)RuntimePayload.verifyContents(runtime,contentsDigest);
-        permissions(runtime);text(new File(base,"update.installed"),"1");
+        permissions(runtime,false);text(new File(base,"update.installed"),"1");
     }
 
     private void removeRetiredVoltageFiles(){
@@ -100,7 +102,7 @@ public final class RuntimeTransaction {
             restore(new File(backup,"boot.entry"),boot);
             if(boot.isFile())access.set(boot,true);
         }catch(IOException|SecurityException ignored){}
-        if(new File(runtime,"bin/daemon.dex.jar").isFile())permissions(runtime);
+        if(new File(runtime,"bin/daemon.dex.jar").isFile())permissions(runtime,true);
         clearPending();
         // Retain the snapshot until restarting the restored recorder succeeds.
         if(new File(runtime,"bin/daemon.dex.jar").isFile())control.start();

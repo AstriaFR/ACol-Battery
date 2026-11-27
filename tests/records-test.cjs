@@ -5,7 +5,8 @@ const{runCases}=require('./helpers.cjs');
 
 async function liveCursors(){
 const source=fs.readFileSync(path.join(__dirname,'../src/main/assets/webroot/live-channel.js'),'utf8').replace(/^import[^\n]+\n/,'');
- const {LiveChannel}=await import('data:text/javascript;base64,'+Buffer.from('const spawn=()=>{},exec=async()=>{};'+source).toString('base64'));
+ const stub='export const watches=[];const spawn=(_,args)=>{watches.push(args);return{stdout:{on(){}},on(){}}},exec=async()=>{};';
+ const {LiveChannel,DETAIL_WATCH_MODE,watches}=await import('data:text/javascript;base64,'+Buffer.from(stub+source).toString('base64'));
  const channel=new LiveChannel();
  const packet=(id,extra={})=>({ok:true,status:{session:id,settings:{hidePct:30}},...extra});
  channel.accept(packet(107,{record:{id:107},points:[[3600000,1000]]}));
@@ -32,6 +33,26 @@ const source=fs.readFileSync(path.join(__dirname,'../src/main/assets/webroot/liv
  channel.appendList(false,{records:[{id:19},{id:18}],total:6,totalRecords:6});assert.deepEqual(channel.cachedList(false).records.map(row=>row.id),[4,5,21,20,19,18],'pagination keeps game before concurrent ordinary record regardless of ID');
  channel.accept(packet(4,{record:game,parallelPrevious:{record:{...normal,active:0},points:[[121000,989]]},parallel:{record:{id:6,active:1,fast_seconds:0},points:[[0,989]]}}));
  assert.equal(channel.rows.get(5).record.active,0,'power-state changes close only the old ordinary stream');assert.equal(channel.rows.get(4).record.active,1);assert.equal(channel.rows.get(6).record.active,1);
+ const detail=new LiveChannel();
+ detail.accept(packet(4,{activeRecord:game,parallel:{record:normal,points:[[160000,970]]}}));
+ detail.setMode(DETAIL_WATCH_MODE);detail.seedRecord(5,119000);
+ let requested=detail.live([5,119000,0,0]);
+ assert.deepEqual(watches.at(-1),['watch','5','119000','0','1','0','0','1'],'the watch targets the open ordinary record');
+ detail.accept(packet(4,{activeRecord:game,record:normal,points:[[120000,990]],nextAfter:null}));
+ assert.deepEqual((await requested).points,[[120000,990]],'an earlier tail-only cache cannot skip samples');
+ detail.close();
+ requested=detail.live([5,120000,0,0]);
+ assert.deepEqual(watches.at(-1).slice(1,3),['5','120000'],'reconnect uses the detail cursor while the game remains active');
+ const ended={...normal,active:0};
+ detail.accept(packet(4,{activeRecord:game,record:ended,points:[[121000,989],[122000,988]],nextAfter:122000}));
+ const page=await requested;assert.deepEqual(page.points,[[121000,989],[122000,988]]);assert.equal(page.nextAfter,122000);
+ requested=detail.live([5,page.nextAfter,0,0]);
+ detail.accept(packet(4,{activeRecord:game,record:ended,points:[[123000,987]],nextAfter:null}));
+ const last=await requested;assert.deepEqual(last.points,[[123000,987]]);assert.equal(last.record.active,0);assert.equal(last.nextAfter,null);
+ requested=detail.live([5,123000,0,0]);
+ detail.accept(packet(4,{activeRecord:game,record:normal,points:Array.from({length:24001},(_,i)=>[124000+i,987]),nextAfter:null}));
+ assert.equal('record' in (await requested),false,'a cache that dropped requested samples must allow a direct catch-up read');
+ detail.close();
  const stats=new LiveChannel(),statsRecord={id:1,start_wall:1000,app_revision:0};
  const statsPacket=(epoch,version,apps)=>packet(1,{record:{...statsRecord},statsEpoch:epoch,statsVersion:version,apps,points:[]});
  stats.accept(statsPacket('first',0,[]));

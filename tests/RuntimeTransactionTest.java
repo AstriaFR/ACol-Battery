@@ -71,6 +71,22 @@ public final class RuntimeTransactionTest {
             f.transaction().recover("other",token->false,f.control);f.old();
         }
         try(Fixture f=new Fixture(true)){
+            File added=new File(f.runtime,"transfer.sh");Files.delete(added.toPath());
+            RuntimeTransaction t=new RuntimeTransaction(f.base,f.boot,(file,execute)->{
+                if(!file.isFile())throw new IOException("Cannot set permissions on a missing file");
+            });
+            f.crashStart=true;try{t.apply("new","owner-a",f.control);throw new AssertionError();}catch(Crash expected){}
+            check(added.isFile(),"Upgrade did not install the added script");
+            t.recover("",token->false,f.control);
+            check(!added.exists()&&f.starts==2,"Recovery did not restore the older set of files and restart it");
+            for(String name:RuntimePayload.FILES)if(!name.equals("transfer.sh"))
+                check(read(new File(f.runtime,name)).equals("old:"+name),"Recovery lost "+name);
+            for(String marker:new String[]{"update.pending","update.installed","update.transaction","runtime.rollback"})
+                check(!new File(f.base,marker).exists(),"Old-runtime recovery left "+marker);
+            check(read(new File(f.base,"runtime.version")).equals("old-hash"),"Old version lost");
+            f.protectedData();
+        }
+        try(Fixture f=new Fixture(true)){
             boolean[] injected={false};
             RuntimeTransaction t=new RuntimeTransaction(f.base,f.boot,(file,execute)->{
                 if(file.getPath().equals(new File(f.runtime,"bin/libcurvewait.so").getPath())&&!injected[0]){injected[0]=true;throw new IOException("permission denied");}

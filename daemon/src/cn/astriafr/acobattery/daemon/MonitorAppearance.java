@@ -4,12 +4,12 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 final class MonitorAppearance {
-    static final int FPS=1, CPU_CHART=2, CPU_FREQUENCY=4, GPU_CHART=8, GPU_FREQUENCY=16, POWER=32, TEMPERATURE=64;
+    static final int FPS=1, CPU_CHART=2, CPU_FREQUENCY=4, GPU_CHART=8, GPU_FREQUENCY=16, POWER=32, TEMPERATURE=64, VOLTAGE=128;
     static final int CPU=CPU_CHART|CPU_FREQUENCY, GPU=GPU_CHART|GPU_FREQUENCY;
-    static final int PERFORMANCE=FPS|CPU|GPU, BATTERY=POWER|TEMPERATURE;
-    static final String DEFAULT_ORDER="1234567", ORDER_KEY="monitor_metric_order";
+    static final int PERFORMANCE=FPS|CPU|GPU, BATTERY=POWER|TEMPERATURE|VOLTAGE;
+    static final String DEFAULT_ORDER="12345678", ORDER_KEY="monitor_metric_order";
     private static final int DEFAULT_OPACITY=55, DEFAULT_SIZE_PERCENT=100;
-    static final MonitorAppearance DEFAULT=new MonitorAppearance(127,DEFAULT_OPACITY,DEFAULT_OPACITY,DEFAULT_SIZE_PERCENT,true,false,false,false,
+    static final MonitorAppearance DEFAULT=new MonitorAppearance(PERFORMANCE|POWER|TEMPERATURE,DEFAULT_OPACITY,DEFAULT_OPACITY,DEFAULT_SIZE_PERCENT,true,false,false,false,
         new Thresholds(60,75,90),new Thresholds(8,12,15),new Thresholds(42,45,48),DEFAULT_ORDER);
     final int metrics, whiteOpacity, blackOpacity, sizePercent;
     final boolean blackText, landscapeBottom, followSystem, taskFpsCallback;
@@ -51,11 +51,14 @@ final class MonitorAppearance {
 
     MonitorAppearance withOrder(String next){
         if(order.equals(next))return this;
-        if(!next.matches("[1-7]{7}")||next.chars().distinct().count()!=7
-                ||Math.abs(next.indexOf('2')-next.indexOf('3'))!=1
-                ||Math.abs(next.indexOf('4')-next.indexOf('5'))!=1
-                ||Math.abs(next.indexOf('6')-next.indexOf('7'))!=1)
-            throw new IllegalArgumentException("性能监视器显示顺序无效。");
+        if(!next.matches("[1-8]{8}")||next.chars().distinct().count()!=8)throw invalidOrder();
+        int previous=0,seen=0;
+        for(int i=0;i<next.length();i++){
+            int group=groupOf(1<<(next.charAt(i)-'1'));
+            if(group!=previous&&(seen&group)!=0)throw invalidOrder();
+            previous=group;
+            seen|=group;
+        }
         return new MonitorAppearance(metrics,whiteOpacity,blackOpacity,sizePercent,blackText,
             landscapeBottom,followSystem,taskFpsCallback,cpu,power,temperature,next);
     }
@@ -82,6 +85,11 @@ final class MonitorAppearance {
 
     static MonitorAppearance load(String saved,boolean taskFpsCallback,String order){
         MonitorAppearance result=load(saved,taskFpsCallback);
+        if(order.length()==7){
+            // Preserve existing group positions and place voltage after the saved battery items.
+            int batteryEnd=Math.max(order.indexOf('6'),order.indexOf('7'))+1;
+            order=order.substring(0,batteryEnd)+'8'+order.substring(batteryEnd);
+        }
         try{return result.withOrder(order);}
         catch(IllegalArgumentException ignored){return result;}
     }
@@ -106,7 +114,7 @@ final class MonitorAppearance {
         int followSystem=length>=14?numbers[13]:0;
         int blackOpacity=length>=15?numbers[14]:DEFAULT_OPACITY;
         int sizePercent=length>=16?numbers[15]:DEFAULT_SIZE_PERCENT;
-        if(metrics>127||numbers[3]>100||opacity>100||blackOpacity>100||numbers[5]>1||landscape>1||followSystem>1)throw invalid();
+        if(metrics>(PERFORMANCE|BATTERY)||numbers[3]>100||opacity>100||blackOpacity>100||numbers[5]>1||landscape>1||followSystem>1)throw invalid();
         if(sizePercent<75||sizePercent>125||sizePercent%5!=0)throw invalid();
         Thresholds cpu=new Thresholds(numbers[1],numbers[2],numbers[3]);
         Thresholds power=length>=13?new Thresholds(numbers[7],numbers[8],numbers[9]):DEFAULT.power;
@@ -117,4 +125,5 @@ final class MonitorAppearance {
     }
 
     private static IllegalArgumentException invalid(){return new IllegalArgumentException("性能监视器设置无效。");}
+    private static IllegalArgumentException invalidOrder(){return new IllegalArgumentException("性能监视器显示顺序无效。");}
 }

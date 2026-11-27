@@ -7,10 +7,13 @@ export function installMonitorOrder(list,canReorder,onReorder){
   const byId=new Map(rows.map(row=>[ids.get(row),row]));
   const currentOrder=()=>[...list.querySelectorAll('label')].map(row=>ids.get(row)).join('');
   const midpoint=box=>(box.top+box.bottom)/2;
+  const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+  const shifts=new Map();
   let press=null,drag=null,hold=0,scrollFrame=0,suppressClickUntil=0;
 
   function apply(order){
-    if(typeof order!=='string'||!/^[1-7]{7}$/.test(order)||order===currentOrder())return;
+    if(typeof order!=='string'||order.length!==rows.length||new Set(order).size!==rows.length||
+        [...order].some(id=>!byId.has(id))||order===currentOrder())return;
     const groups=new Set();
     for(const id of order){
       const row=byId.get(id),group=row.parentElement;
@@ -19,43 +22,40 @@ export function installMonitorOrder(list,canReorder,onReorder){
     for(const group of groups)list.append(group);
   }
 
+  function animatePositions(change,except){
+    const previous=new Map(rows.filter(row=>row!==except).map(row=>[row,row.getBoundingClientRect().top]));
+    change();
+    for(const [row,top] of previous){
+      shifts.get(row)?.cancel();
+      shifts.delete(row);
+      const delta=top-row.getBoundingClientRect().top;
+      if(Math.abs(delta)<.5||reducedMotion.matches)continue;
+      shifts.set(row,row.animate([{transform:`translateY(${delta}px)`},{transform:'translateY(0)'}],
+        {duration:160,easing:'cubic-bezier(.2,.65,.3,1)'}));
+    }
+  }
+
   function position(y){
     if(!drag)return;
     drag.pointerY=y;
-    const bounds=list.getBoundingClientRect();
-    const localY=y-bounds.top;
-    const{group,groupBox,row,rowBox,peerBox,startY,others}=drag;
-    const inside=localY>=groupBox.top&&localY<=groupBox.bottom;
-    const up=peerBox&&peerBox.top<rowBox.top;
-    const withinPair=inside&&peerBox&&(up?localY<midpoint(peerBox):localY>midpoint(peerBox));
-    const moving=withinPair?row:group;
-    if(drag.moving!==moving){
-      drag.moving?.removeAttribute('data-dragged');
-      drag.moving?.style.removeProperty('--monitor-drag-y');
-      drag.moving=moving;moving.dataset.dragged='';
-    }
-    const box=withinPair?rowBox:groupBox;
-    const offset=Math.max(-box.top,Math.min(bounds.height-box.bottom,localY-startY));
-    moving.style.setProperty('--monitor-drag-y',`${offset}px`);
-
-    let target=null;
-    if(withinPair)target={parent:group,before:up?group.firstElementChild:null,y:up?groupBox.top:groupBox.bottom};
-    else if(!inside){
-      const next=others.find(item=>localY<midpoint(item.box));
-      const before=next?.node??null;
-      if(before!==group.nextElementSibling)target={parent:list,before,y:next?.box.top??bounds.height};
-    }
-    drag.target=target;
-    list.toggleAttribute('data-drop',!!target);
-    if(target)list.style.setProperty('--monitor-drop-y',`${target.y-1}px`);
+    const listTop=list.getBoundingClientRect().top;
+    const{row,slot,parent,scope,others,grab,height,originTop}=drag;
+    const top=Math.max(scope.top,Math.min(scope.bottom-height,y-listTop-grab));
+    const center=top+height/2;
+    const before=others.find(({box})=>center<midpoint(box)||center===midpoint(box)&&top<originTop)?.node??null;
+    if(before!==slot.nextElementSibling)animatePositions(()=>parent.insertBefore(slot,before),row);
+    const slotTop=row.getBoundingClientRect().top-listTop-drag.offset;
+    drag.offset=top-slotTop;
+    row.style.setProperty('--monitor-drag-y',`${drag.offset}px`);
   }
 
   function autoScroll(){
     scrollFrame=0;
     if(!drag)return;
-    const box=scroller.getBoundingClientRect(),listBox=list.getBoundingClientRect(),y=drag.pointerY;
+    const box=scroller.getBoundingClientRect(),listTop=list.getBoundingClientRect().top,y=drag.pointerY;
     const edge=Math.min(30,box.height/4);
-    const delta=y<box.top+edge&&listBox.top<box.top?-8:y>box.bottom-edge&&listBox.bottom>box.bottom?8:0;
+    const delta=y<box.top+edge&&listTop+drag.scope.top<box.top?-8:
+      y>box.bottom-edge&&listTop+drag.scope.bottom>box.bottom?8:0;
     if(!delta)return;
     const previous=scroller.scrollTop;
     scroller.scrollTop+=delta;
@@ -72,11 +72,18 @@ export function installMonitorOrder(list,canReorder,onReorder){
     press={id,x,y};
     hold=setTimeout(()=>{
       if(!canReorder()){finish(false);return;}
-      const group=row.parentElement,peer=row.nextElementSibling??row.previousElementSibling;
+      for(const shift of shifts.values())shift.cancel();
+      shifts.clear();
+      const group=row.parentElement;
+      const standalone=group.children.length===1;
+      const parent=standalone?list:group,slot=standalone?group:row;
       const top=list.getBoundingClientRect().top;
       const box=node=>{const rect=node.getBoundingClientRect();return {top:rect.top-top,bottom:rect.bottom-top};};
-      const others=[...list.children].filter(node=>node!==group).map(node=>({node,box:box(node)}));
-      drag={row,group,groupBox:box(group),rowBox:box(row),peerBox:peer?box(peer):null,others,startY:y-top};
+      const others=[...parent.children].filter(node=>node!==slot).map(node=>({node,box:box(node)}));
+      const rowBox=box(row);
+      drag={row,parent,slot,scope:box(parent),others,original:currentOrder(),originTop:rowBox.top,
+        grab:y-top-rowBox.top,height:rowBox.bottom-rowBox.top,offset:0};
+      row.dataset.dragged='';row.style.setProperty('--monitor-drag-y','0px');
       list.dataset.reordering='';longPressFeedback();position(y);
     },420);
   }
@@ -98,14 +105,16 @@ export function installMonitorOrder(list,canReorder,onReorder){
     if(event?.cancelable)event.preventDefault();
     if(scrollFrame)cancelAnimationFrame(scrollFrame);
     scrollFrame=0;
-    const{moving,target}=drag;drag=null;
+    const{row,original}=drag;drag=null;
     suppressClickUntil=performance.now()+650;
-    moving.removeAttribute('data-dragged');moving.style.removeProperty('--monitor-drag-y');
-    delete list.dataset.reordering;delete list.dataset.drop;list.style.removeProperty('--monitor-drop-y');
-    if(save&&target&&canReorder()){
-      target.parent.insertBefore(moving,target.before);
-      onReorder(currentOrder());
-    }
+    const commit=save&&canReorder();
+    animatePositions(()=>{
+      row.removeAttribute('data-dragged');row.style.removeProperty('--monitor-drag-y');
+      delete list.dataset.reordering;
+      if(!commit)apply(original);
+    });
+    const order=currentOrder();
+    if(commit&&order!==original)onReorder(order);
   }
 
   list.addEventListener('touchstart',event=>{

@@ -127,6 +127,7 @@ export class BatteryInfoPanel{
     this.field('rm',number(reading.rm,'mAh'));
     if(info&&info!==this.info){
       for(const key of['cycles','fcc','rawFcc','soh','rawSoh','qmax','cutoffMv','designCapacity'])this.field(key,number(info[key],['fcc','rawFcc','qmax','designCapacity'].includes(key)?'mAh':['soh','rawSoh'].includes(key)?'%':key==='cutoffMv'?'mV':'',key==='rawSoh'?2:0));
+      this.field('floatVoltageMaxMv',number(info.floatVoltageMaxMv,'mV'));
       this.field('qmax',capacityRatio(info.qmax,info.designCapacity));
       const cutoffKnown=finite(info.cutoffMv)&&info.cutoffMv>0,noCompensation=isBatteryUncompensated(info);
       if(noCompensation)for(const key of['rawFcc','rawSoh'])this.field(key,'——');

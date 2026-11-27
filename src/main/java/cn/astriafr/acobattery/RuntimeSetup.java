@@ -50,10 +50,12 @@ final class RuntimeSetup {
     static String install(String version,String contentsDigest){
         return "CLASSPATH="+STAGE+"/bin/daemon.dex.jar /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin apply-update "+quote(version)+" \"$$\" "+quote(contentsDigest);
     }
-    static String recover(){
+    static String recover(){return recover(null);}
+    static String recover(File verifiedJar){
         String journal=BASE+"/update.transaction",jar="/bin/daemon.dex.jar";
+        String candidates=verifiedJar==null?STAGE+jar+" "+RUNTIME+jar+" "+BASE+"/runtime.rollback"+jar:quote(verifiedJar.getAbsolutePath());
         return "(if [ ! -f "+journal+" ]; then exit 0; fi; "
-            +"for aco_recovery in "+STAGE+jar+" "+RUNTIME+jar+" "+BASE+"/runtime.rollback"+jar+"; do "
+            +"for aco_recovery in "+candidates+"; do "
             +"[ -s \"$aco_recovery\" ] || continue; "
             +"CLASSPATH=\"$aco_recovery\" /system/bin/app_process /system/bin cn.astriafr.acobattery.daemon.Admin recover-update && exit 0; "
             +"[ -f "+journal+" ] || exit 0; done; exit 1)";

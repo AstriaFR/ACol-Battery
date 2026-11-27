@@ -29,4 +29,3 @@ for name_id,value in values.items():
 font['head'].fontRevision=1.0
 font.save(assets/'acol-brand.ttf')
 print('已生成主页字标字体。')
-

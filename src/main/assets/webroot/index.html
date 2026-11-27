@@ -82,6 +82,7 @@
           <div>
             <label class="setting-heading setting-switch"><span>功耗</span><input type="checkbox" role="switch" data-monitor-bit="32"></label>
             <label class="setting-heading setting-switch"><span>温度</span><input type="checkbox" role="switch" data-monitor-bit="64"></label>
+            <label class="setting-heading setting-switch"><span>平均电压</span><input type="checkbox" role="switch" data-monitor-bit="128"></label>
           </div>
         </div>
         <div class="setting-heading"><span id="monitorFpsSourceLabel">帧率采样方式</span><div class="monitor-options" role="group" aria-labelledby="monitorFpsSourceLabel"><button type="button" data-monitor-option="17" value="0" aria-pressed="false">单图层</button><button type="button" data-monitor-option="17" value="1" aria-pressed="false">多图层</button></div></div>
@@ -164,10 +165,10 @@
       <h2 id="advancedCapacityTitle">解容</h2>
       <div id="advancedDischargeVoltageFields"></div>
       <p class="advanced-setting-note">两个电压设置一般相同，可独立设置。<br>关机/进入超级省电可能取决于电量计截止电压。<span id="advancedDischargeVoltageAdvice" hidden><br>稳妥设置值为<span id="advancedDischargeVoltageAdviceValue"></span>以上，过低可能导致跳过超级省电。</span></p>
-      <div id="advancedFloatCorrection"></div>
-      <p class="advanced-setting-note">设为FV_DEC的正数值，可以抵消系统判断的浮充电压下降(FV_DEC)。无法实际让电压超出厂商限制。</p>
       <div id="advancedFloatFields"></div>
-      <p class="advanced-setting-note">一般无需修改，仅能降低浮充电压。</p>
+      <p class="advanced-setting-note">直接修改可覆盖浮充电压，两值一般相同。<br>稳妥设置值为4525以下，过高可能导致浮充无法进行。</p>
+      <div id="advancedFloatCorrection"></div>
+      <p class="advanced-setting-note">直接修改上下限后无用。一般设置为FV_DEC的正数值。</p>
     </section>
     <section class="card advanced-card" aria-labelledby="advancedChargingTitle">
       <h2 id="advancedChargingTitle">充电</h2>
@@ -178,13 +179,14 @@
       <div id="advancedGaugeInterval"></div>
       <p class="advanced-setting-note">建议设置为1.5s，节奏合适。</p>
       <div id="advancedWiredCurrentFields"></div>
-      <p class="advanced-setting-note">可以提高5V,PD,QC等慢充的电流。<br>使用需谨慎，会导致温度上升。</p>
+      <p class="advanced-setting-note">可以提高5V,PD,QC等慢充和浮充的速度。</p>
       <div id="advancedFastCurrentFields"></div>
-      <p class="advanced-setting-note">谨慎修改，虽然仍会受到底层限制，但会因电压和温度墙导致充电中断。</p>
+      <p class="advanced-setting-note">不建议直接修改，会因触发电压或温度保护而中断充电。</p>
     </section>
     <section class="card advanced-card">
-      <label class="setting-heading setting-switch" for="advancedAutoRestore"><span>尝试自动恢复手动参数</span><input id="advancedAutoRestore" type="checkbox" role="switch" disabled></label>
-      <p class="advanced-setting-note">亮屏时每半小时检查手动参数并尝试恢复。</p>
+      <label class="setting-heading setting-switch" for="advancedAutoRestore"><span>自动恢复参数</span><input id="advancedAutoRestore" type="checkbox" role="switch" aria-describedby="advancedAutoRestoreHint" disabled></label>
+      <p id="advancedAutoRestoreHint" class="advanced-setting-note">开启后会自动检查参数是否失效并恢复。</p>
+      <label class="setting-heading setting-switch" for="advancedDisableUfcs"><span class="advanced-field-label">禁用 UFCS<small class="advanced-field-node">UFCS_DISABLE</small></span><span id="advancedUfcsUnavailable" hidden>接口缺失</span><input id="advancedDisableUfcs" type="checkbox" role="switch" disabled></label>
       <div class="advanced-field"><span id="cellCountLabel">电池电芯数量</span><div class="monitor-options advanced-options" role="group" aria-labelledby="cellCountLabel"><button id="singleCell" type="button" aria-pressed="false" disabled>单电芯</button><button id="dualCell" type="button" aria-pressed="false" disabled>双电芯</button></div></div>
     </section>
   </div>
@@ -198,11 +200,12 @@
       <h2 id="advancedInfoCapacity">解容</h2>
       <p><strong>电量计截止电压（GAUGE_TERM_VOLTAGE）</strong>：电量计估算剩余容量时使用的放电终点。调整后，低电量读数可能要经过后续充放电才会重新校准。</p>
       <p><strong>软件关机电压（GAUGE_SHUTDOWN_VOLTAGE）</strong>：供系统低电压关机策略使用的阈值。实际关机时机还受负载引起的压降和系统保护策略影响，可与电量计截止电压分开设置。</p>
-      <p><strong>厂商截止与关机目标（TARGET_TERM_VOLTAGE、TARGET_SHUTDOWN_VOLTAGE）</strong>：厂商策略为上述两个阈值计算的参考值，仅供查看，可能与手动覆盖后的生效值不同。</p>
-      <p><strong>浮充降压修正（DEC_DELTA）</strong>：参与厂商对充电目标电压的降压计算。0 表示不加手动修正；写入后由驱动在满足条件时重算，修改量不一定会立即等量反映到电压上。</p>
-      <p><strong>实际浮充降压量（FV_DEC）</strong>：驱动当前算出的降压量，只读。可用它查看修正是否已经反映到厂商的降压结果。</p>
       <p><strong>浮充电压上限（FV_MAX）</strong>：驱动为电池设定的充电目标上限，通常受温度和厂商降压策略影响。</p>
       <p><strong>浮充电压下限（FV_MIN）</strong>：驱动在浮充上限和其他电压限制中取较低值，作为有线充电的目标电压。这里的「下限」是取低值的结果，不是电池电压必须保持的最低值。</p>
+      <p><strong>浮充降压修正（DEC_DELTA）</strong>：参与厂商对充电目标电压的降压计算。0 表示不加手动修正；写入后由驱动在满足条件时重算，修改量不一定会立即等量反映到电压上。</p>
+      <p><strong>实际浮充降压量（FV_DEC）</strong>：驱动当前算出的降压量，只读。可用它查看修正是否已经反映到厂商的降压结果。</p>
+      <p><strong>电池类型（battery_type）</strong>：驱动识别到的电池类型。</p>
+      <p><strong>厂商截止与关机目标（TARGET_TERM_VOLTAGE、TARGET_SHUTDOWN_VOLTAGE）</strong>：厂商计算的截止电压和关机电压参考值，可能与手动覆盖后的生效值不同。</p>
     </section>
     <section class="advanced-definitions" aria-labelledby="advancedInfoCharging">
       <h2 id="advancedInfoCharging">充电</h2>
@@ -214,6 +217,7 @@
       <p><strong>PPS 电流（PPS_CURR）</strong>：USB PD PPS 模式下的协议电流目标，仅在使用 PPS 时适用。</p>
       <p><strong>UFCS 电流（UFCS_CURR）</strong>：UFCS 融合快充模式下的协议电流目标，仅在使用 UFCS 时适用。</p>
       <p><strong>VOOC 电流（VOOC_CURR）</strong>：VOOC 或 SUPERVOOC 模式下的协议电流目标，仅在使用对应协议时适用。</p>
+      <p><strong>禁用 UFCS（UFCS_DISABLE）</strong>：开启后强制禁用 UFCS 融合快充。关闭开关或恢复默认会解除强制禁用，由厂商策略决定可用协议。</p>
     </section>
     <p class="advanced-info-intro">修改在确认时应用一次。输入页的「恢复默认」撤销这一项的手动设置，参数设置右上角的「恢复默认」撤销本页的手动设置。恢复后的值由厂商策略决定。</p>
   </div>
@@ -343,6 +347,7 @@
         <div><small>电池健康（battery_soh）</small><strong data-info="soh">—</strong></div>
         <div><small>原始电池健康（计算值）</small><strong data-info="rawSoh">—</strong></div>
         <div><small>电量计截止电压（GAUGE_TERM_VOLTAGE）</small><strong data-info="cutoffMv">—</strong></div>
+        <div><small>浮充电压上限（FV_MAX）</small><strong data-info="floatVoltageMaxMv">—</strong></div>
         <div class="battery-info-note">
           <span class="battery-info-note-reference">某些数值可能会与实际有偏差，以满充时RM为准。</span>
           <span>修改截止电压后可能会不准确，需完成完整循环校准。</span><button id="batteryEstimateInfo" class="battery-estimate-info" type="button" aria-label="查看原始值和估计锁容容量的计算说明" aria-haspopup="dialog">i</button>
@@ -352,7 +357,7 @@
         <div><small data-info-label="voltage">电池电压（bcc_parms）</small><strong data-info="voltage">—</strong></div>
         <div><small data-info-label="batteryCurrent">电池电流（bcc_parms）</small><strong data-info="batteryCurrent">—</strong></div>
         <div><small>充电功率</small><strong data-info="chargingPower">—</strong></div>
-        <div><small>充电协议（protocol_type）</small><strong data-info="chargingProtocol">—</strong></div>
+        <div><small>充电协议（charge_type）</small><strong data-info="chargingProtocol">—</strong></div>
         <div><small>USB 输入电压（usb/voltage_now）</small><strong data-info="usbInputVoltage">—</strong></div>
         <div><small data-info-label="targetInputCurrent">目标输入电流</small><strong data-info="targetInputCurrent">—</strong></div>
         <div class="battery-temperature-row">
@@ -387,6 +392,7 @@
     <div><small>电池最大化学容量（batt_qmax）</small><strong data-history-field="qmax">—</strong></div>
     <div><small>满充容量（battery_fcc）</small><strong data-history-field="fcc">—</strong></div><div><small>原始满充容量（计算值）</small><strong data-history-field="rawFcc">—</strong></div><div><small>估计锁容容量（计算值）</small><strong data-history-field="lockedCapacity">—</strong></div><div><small>电池健康（battery_soh）</small><strong data-history-field="soh">—</strong></div><div><small>原始电池健康（计算值）</small><strong data-history-field="rawSoh">—</strong></div>
     <div><small>电量计截止电压（GAUGE_TERM_VOLTAGE）</small><strong data-history-field="cutoffMv">—</strong></div>
+    <div><small>浮充电压上限（FV_MAX）</small><strong data-history-field="floatVoltageMaxMv">—</strong></div>
   </section><p id="batterySnapshotStatus" class="small" role="status"></p></div>
 </section>
 <dialog id="batteryEstimateExplanation" class="battery-explanation" tabindex="-1" aria-labelledby="batteryEstimateTitle">

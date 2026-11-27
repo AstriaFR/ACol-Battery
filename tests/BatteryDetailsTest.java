@@ -4,7 +4,33 @@ import java.util.*;
 
 public final class BatteryDetailsTest {
     static void equal(Object actual,Object expected){if(!Objects.equals(actual,expected))throw new AssertionError(actual+" != "+expected);}
+    static void chargingProtocols(){
+        String[] reorderedHeader={"","charge_type","batt_qmax","wired_online"};
+        equal(ChargingLog.fields(reorderedHeader,new String[]{"","15","6000","1"}).get("charge_type"),"15");
+        equal(ChargingLog.fields(reorderedHeader,new String[]{"","15"}).get("charge_type"),null);
+        String[] names={"未知","SDP","DCP","CDP","ACA","USB Type-C","USB PD","USB PD DRP","USB PD PPS",
+            "USB PD SDP","Apple BrickID","QC 2.0","QC 3.0","VOOC","SUPERVOOC","UFCS"};
+        Map<Integer,OplusVotes.Node> fastVotes=new HashMap<>();
+        fastVotes.put(8,OplusVotes.Node.PPS_CURR);
+        fastVotes.put(13,OplusVotes.Node.VOOC_CURR);
+        fastVotes.put(14,OplusVotes.Node.VOOC_CURR);
+        fastVotes.put(15,OplusVotes.Node.UFCS_CURR);
+        equal(BatteryService.chargingProtocolName(0),names[0]);
+        for(double voltage:new double[]{Double.NaN,4000,5000,5400,6000,9000})
+            equal(BatteryService.inputCurrentVote(0,voltage),null);
+        for(int type=1;type<names.length;type++){
+            equal(BatteryService.chargingProtocolName(type),names[type]);
+            OplusVotes.Node expected=fastVotes.getOrDefault(type,OplusVotes.Node.WIRED_ICL);
+            equal(BatteryService.inputCurrentVote(type,5401),expected);
+            equal(BatteryService.inputCurrentVote(type,0),expected);
+            equal(BatteryService.inputCurrentVote(type,Double.NaN),expected);
+            equal(BatteryService.inputCurrentVote(type,5400),OplusVotes.Node.WIRED_ICL);
+        }
+        equal(BatteryService.chargingProtocolName(-1),null);
+        equal(BatteryService.chargingProtocolName(16),null);
+    }
     public static void main(String[] args){
+        chargingProtocols();
         equal(BatteryDetails.termVoltage("GAUGE_TERM_VOLTAGE: effective=DEBUG_FORCE_CLIENT type=Max v=3150\nOTHER: v=3000"),3150);
         equal(BatteryDetails.termVoltage("GAUGE_TERM_VOLTAGE: effective=DEEP_COUNT_VOTER type=Max v=3060\r\n"),3060);
         equal(BatteryDetails.termVoltage("GAUGE_SHUTDOWN_VOLTAGE: effective=DEBUG_FORCE_CLIENT type=Max v=3000"),null);

@@ -205,7 +205,7 @@ export class SettingsPanel{
     document.getElementById('keypadUnit').textContent=unit;
     document.getElementById('keypadRange').textContent=range;
     const restore=document.getElementById('keypadRestore');
-    document.getElementById('keypadApply').disabled=!!editor.applyDisabled;
+    document.getElementById('keypadApply').disabled=false;
     restore.hidden=!editor.restore;
     restore.disabled=editor.restoreDisabled??false;
     const hint=document.getElementById('keypadHint');
@@ -229,7 +229,7 @@ export class SettingsPanel{
     let saved=false;
     try{saved=await action()!==false;}
     catch(error){if(this.editor===editor)this.editorError(error.message);}
-    finally{this.editorBusy=false;apply.disabled=!!editor.applyDisabled;restore.disabled=wasDisabled;}
+    finally{this.editorBusy=false;apply.disabled=false;restore.disabled=wasDisabled;}
     if(saved&&this.editor===editor){
       this.closeEditor();
       if(history.state?.keypad)history.back();
@@ -249,7 +249,7 @@ export class SettingsPanel{
     this.drawEditor();
   }
   async commitEditor(){
-    const e=this.editor;if(!e||this.editorBusy||e.applyDisabled)return;
+    const e=this.editor;if(!e||this.editorBusy)return;
     if(e.key==='energyWh'&&e.draft===''){await this.applyEditorAction(e.restore);return;}
     if(!/^-?\d+(?:\.\d*)?$/.test(e.draft)){this.editorError('请输入完整数值。');return;}
     if(e.commit){

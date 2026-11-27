@@ -80,7 +80,7 @@ public final class AppBridge {
             }else if(action.equals("set_advanced_auto_restore")){
                 if(words.length!=2||!words[1].matches("[01]"))throw new IllegalArgumentException("参数无效。");
             }else if(action.equals("set_monitor_order")){
-                if(words.length!=2||!words[1].matches("[1-7]{7}"))throw new IllegalArgumentException("性能监视器显示顺序无效。");
+                if(words.length!=2||!words[1].matches("[1-8]{8}"))throw new IllegalArgumentException("性能监视器显示顺序无效。");
             }else if(action.equals("set_cell_count")){
                 if(words.length!=2||!words[1].matches("[12]"))throw new IllegalArgumentException("请选择单电芯或双电芯。");
             }else if(action.equals("set_setting")){

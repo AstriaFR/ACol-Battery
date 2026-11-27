@@ -12,10 +12,10 @@ import android.graphics.Path;
  */
 final class MonitorGlyphs {
     static final float CAP_HEIGHT = 5.8652f;
-    private static final String CHARACTERS = "0123456789.+−—%W°C";
+    private static final String CHARACTERS = "0123456789.+−—%W°CV";
     private static final Glyph[] GLYPHS = {
         zero(), one(), two(), three(), four(), five(), six(), seven(), eight(), nine(),
-        point(), plus(), minus(), dash(), percent(), watt(), degree(), celsius()
+        point(), plus(), minus(), dash(), percent(), watt(), degree(), celsius(), volt()
     };
 
     private MonitorGlyphs() {}
@@ -63,6 +63,19 @@ final class MonitorGlyphs {
             end += draw(canvas, paint, value.charAt(i), end, baseline);
         }
         return end - x;
+    }
+
+    private static Glyph volt() {
+        Path path = new Path();
+        path.moveTo(0.15f, -CAP_HEIGHT);
+        path.lineTo(1.39f, -CAP_HEIGHT);
+        path.lineTo(2.45f, -1.45f);
+        path.lineTo(3.51f, -CAP_HEIGHT);
+        path.lineTo(4.75f, -CAP_HEIGHT);
+        path.lineTo(3.02f, 0f);
+        path.lineTo(1.88f, 0f);
+        path.close();
+        return new Glyph(path, 4.9f);
     }
 
     private static Glyph zero() {

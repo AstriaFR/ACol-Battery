@@ -27,6 +27,11 @@ public final class PowerDisplayState {
     public static String frequency(double mhz){return number(mhz,0);}
     public static String power(double watts){return number(Math.abs(watts),2);}
     public static String temperature(double celsius){return number(Math.abs(celsius),1);}
+    public static String voltage(double volts){
+        if(!Double.isFinite(volts)||volts<=0||volts>=10)return "—";
+        String formatted=String.format(Locale.US,"%.2f",volts);
+        return formatted.length()==4?formatted:"—";
+    }
     public static String sign(double value,boolean showPlus){
         if(!Double.isFinite(value))return "";
         if(value<0)return "−";

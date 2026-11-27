@@ -62,7 +62,7 @@ public final class Core {
             &&(lastCharge==null||game.elapsed>lastCharge.elapsed);
     }
     public static boolean resumableStop(String reason) {
-        return "service_updated".equals(reason)||"framework_restarted".equals(reason);
+        return "service_updated".equals(reason)||"framework_restarted".equals(reason)||"data_maintenance".equals(reason);
     }
     public static int detectCellCount(String raw) {
         String[] fields=raw.trim().split(",",-1);

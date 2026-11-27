@@ -3,12 +3,15 @@ package cn.astriafr.acobattery.daemon;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.EnumSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,22 +28,25 @@ final class OplusVotes {
     private static final String[] WIRED_COOL_DOWN_TYPES={"normal","pdqc","vooc"};
     private static final int WIRED_COOL_DOWN_TABLE_LIMIT=31;
     private static final int DISCHARGE_VOLTAGE_MIN_MV=2500,DISCHARGE_VOLTAGE_MAX_MV=3500;
+    private static final int FLOAT_VOLTAGE_MAX_MV=4550;
+    private static final Range FLOAT_VOLTAGE_RANGE=new Range(4200,FLOAT_VOLTAGE_MAX_MV);
     private static final Path DEC_CV=Paths.get("/proc/charger/dec_cv_cc");
     private static final Path DEC_DELTA=Paths.get("/sys/class/oplus_chg/common/dec_delta");
     private static final Path CHARGING_ENABLE=Paths.get("/sys/class/oplus_chg/battery/mmi_charging_enable");
+    private static final Path BCC_CURRENT=Paths.get(BatteryService.BAT,"bcc_current");
     private static final Path PLC_CONTROL=Paths.get("/sys/class/oplus_chg/common/plc");
-    private static final Path SHUTDOWN_READBACK=Paths.get("/sys/class/oplus_chg/battery/vbat_uv");
     private static final Pattern EFFECTIVE=Pattern.compile("^\\w+: effective=(\\S+) .* v=(-?\\d{1,10})[ \\t]*$",Pattern.MULTILINE);
-    private static final Pattern ACTIVE_VOTE=Pattern.compile("^FV_MAX: [^\\r\\n]+:[ \\t]*en=1 v=([0-9]{1,5})[ \\t]*$",Pattern.MULTILINE);
+    private static final Pattern MIN_CURRENT=Pattern.compile("^\\w+: effective=(\\S+) type=Min v=(-?\\d{1,9})[ \\t]*$",Pattern.MULTILINE);
+    private static final Pattern CURRENT_CLIENT=Pattern.compile("^\\w+: ([^:\\r\\n]+):[ \\t]*en=([01]) v=(-?\\d{1,9})[ \\t]*$",Pattern.MULTILINE);
     private static final Pattern FV_DEC_VALUE=Pattern.compile("\\bfv_dec=(\\d{1,5})(?:,|$)");
     private static final Pattern DEC_DELTA_VALUE=Pattern.compile("^delta=(-?\\d{1,5})$");
     private static final Pattern PLC_STATUS=Pattern.compile("^status=([0-6])$");
     private static final int PLC_UNSUPPORTED=0,PLC_NOT_ALLOWED=1,PLC_ENABLED=3,PLC_WAIT=4,PLC_UNKNOWN=6;
     enum Node {
-        WIRED_FCC(4000), WIRED_ICL(4000), PPS_CURR(8000), UFCS_CURR(15000), VOOC_CURR(15000),
+        WIRED_FCC(5000), WIRED_ICL(3000), PPS_CURR(8000), UFCS_CURR(15000), VOOC_CURR(15000),
         GAUGE_UPDATE(20000), GAUGE_TERM_VOLTAGE(DISCHARGE_VOLTAGE_MAX_MV), GAUGE_SHUTDOWN_VOLTAGE(DISCHARGE_VOLTAGE_MAX_MV),
-        FV_MAX(5000), FV_MIN(5000), FV_DEC, DEC_DELTA(100), COOL_DOWN(30),
-        CHG_DISABLE, WIRED_CHARGE_SUSPEND, PLC, TARGET_TERM_VOLTAGE, TARGET_SHUTDOWN_VOLTAGE;
+        FV_MAX(FLOAT_VOLTAGE_MAX_MV), FV_MIN(FLOAT_VOLTAGE_MAX_MV), FV_DEC, DEC_DELTA(100), COOL_DOWN(30),
+        CHG_DISABLE, WIRED_CHARGE_SUSPEND, PLC, UFCS_DISABLE(1), TARGET_TERM_VOLTAGE, TARGET_SHUTDOWN_VOLTAGE;
 
         final Path directory=Paths.get("/proc/oplus-votable",name());
         final int maximum;
@@ -61,15 +67,13 @@ final class OplusVotes {
 
     static synchronized JSONObject snapshot()throws JSONException {
         JSONObject result=new JSONObject();
-        Range floating=floatRange();
         for(Node node:Node.values()){
             try{
                 JSONObject item;
                 synchronized(node){item=read(node);}
                 Range range=node.dischargeVoltage()?new Range(DISCHARGE_VOLTAGE_MIN_MV,node.maximum)
-                    :node.floatingVoltage()?floating:node==Node.COOL_DOWN?new Range(0,node.maximum):null;
+                    :node.floatingVoltage()?FLOAT_VOLTAGE_RANGE:node==Node.COOL_DOWN?new Range(0,node.maximum):null;
                 if(range!=null)item.put("min",range.min).put("max",range.max);
-                if(node==Node.GAUGE_SHUTDOWN_VOLTAGE&&!Files.isReadable(SHUTDOWN_READBACK))item.put("writeUnavailable",true);
                 result.put(node.name(),item);
             }
             catch(NoSuchFileException missing){result.put(node.name(),new JSONObject().put("missing",true));}
@@ -116,6 +120,48 @@ final class OplusVotes {
         catch(IOException unreadable){return null;}
     }
 
+    static int readForceValue(Node node)throws IOException {
+        Path directory=node.directory;
+        String active=read(directory.resolve("force_active"));
+        if("0".equals(active))return -1;
+        Integer level=BatteryService.integer(read(directory.resolve("force_val")));
+        if(!"1".equals(active)||level==null||level<0)throw new IOException("无法读取 "+node.name()+" 覆盖状态。");
+        return level;
+    }
+
+    static void releaseLegacyForce(Node node,int applied,int pending)throws IOException {
+        if(Files.notExists(node.directory.resolve("force_active")))return;
+        int force=readForceValue(node);
+        if(force==applied||force==pending)apply(node,null,null);
+    }
+
+    static void releaseLegacyBcc(int applied,int pending,int alternate)throws IOException {
+        if(applied==0&&pending==0&&alternate==0)return;
+        boolean owned=false;
+        for(Node node:new Node[]{Node.UFCS_CURR,Node.PPS_CURR,Node.VOOC_CURR}){
+            Path status=node.directory.resolve("status");
+            if(Files.notExists(status))continue;
+            Matcher client=CURRENT_CLIENT.matcher(read(status));
+            while(client.find()){
+                if(!"BCC_VOTER".equals(client.group(1))||!"1".equals(client.group(2)))continue;
+                int current=Integer.parseInt(client.group(3));
+                if(current<=0)continue;
+                if(current!=applied&&current!=pending&&current!=alternate)return;
+                owned=true;
+            }
+        }
+        if(owned)write(BCC_CURRENT,"0");
+    }
+
+    static void releaseLegacyPause()throws IOException {
+        if(!Files.notExists(CHARGING_ENABLE)&&!readSwitch(CHARGING_ENABLE))writePhysicalPause(false);
+    }
+
+    private static void writePhysicalPause(boolean pause)throws IOException {
+        write(CHARGING_ENABLE,pause?"0":"1");
+        if(readSwitch(CHARGING_ENABLE)==pause)throw new IOException("充电暂停状态读回不一致。");
+    }
+
     private static Long effectiveValue(Path status)throws IOException {
         Matcher vote=EFFECTIVE.matcher(read(status));
         if(!vote.find())return null;
@@ -125,13 +171,11 @@ final class OplusVotes {
 
     static synchronized void apply(Node node,Integer value,GaugeUpdate gaugeUpdate)throws IOException {
         if(value!=null){
-            Range range=node.dischargeVoltage()?new Range(DISCHARGE_VOLTAGE_MIN_MV,node.maximum):node.floatingVoltage()?floatRange():
-                new Range(node==Node.DEC_DELTA?-node.maximum:0,node.maximum);
-            if(range==null||value<range.min||value>range.max||node==Node.GAUGE_UPDATE&&(value<500||value%100!=0))
+            Range range=node.dischargeVoltage()?new Range(DISCHARGE_VOLTAGE_MIN_MV,node.maximum):
+                node.floatingVoltage()?FLOAT_VOLTAGE_RANGE:new Range(node==Node.DEC_DELTA?-node.maximum:0,node.maximum);
+            if(value<range.min||value>range.max||node==Node.GAUGE_UPDATE&&(value<500||value%100!=0))
                 throw new IOException("设置值超出范围。");
         }
-        if(node==Node.GAUGE_SHUTDOWN_VOLTAGE&&value!=null&&!Files.isReadable(SHUTDOWN_READBACK))
-            throw new IOException("当前驱动不支持关机阈值读回。");
         if(node==Node.DEC_DELTA){
             int target=value==null?0:value;
             write(DEC_DELTA,Integer.toString(target));
@@ -151,12 +195,10 @@ final class OplusVotes {
             String target=Integer.toString(value);
             if(read(node.directory.resolve("force_active")).equals("1")&&
                 read(node.directory.resolve("force_val")).equals(target)){
-                boolean matches;
                 try{
                     verifyForce(node,true,target);
-                    matches=node!=Node.GAUGE_SHUTDOWN_VOLTAGE||read(SHUTDOWN_READBACK).equals(target);
-                }catch(IOException changed){matches=false;}
-                if(matches)return;
+                    return;
+                }catch(IOException changed){/* Reapply when the effective vote differs. */}
             }
             apply(node,value,gaugeUpdate);
         }
@@ -171,14 +213,14 @@ final class OplusVotes {
         String target=enable?value.toString():previous;
         try{
             if(enable){
-                if(!previous.equals(target))write(setting,target);
-                write(active,"1");
-            }else if(before.equals("1")||restoringShutdown)write(active,"0");
+                if(!previous.equals(target))writeForce(node,setting,target);
+                writeForce(node,active,"1");
+            }else if(before.equals("1")||restoringShutdown)writeForce(node,active,"0");
             if(!enable&&node.dischargeVoltage()&&!previous.equals("0"))write(setting,"0");
             if(!read(active).equals(enable?"1":"0")||enable&&!read(setting).equals(target))
                 throw new IOException("写入读回不一致。");
             if(!enable&&node.dischargeVoltage()&&!read(setting).equals("0"))throw new IOException("写入读回不一致。");
-            if(node.dischargeVoltage())verifyDischargeVoltage(node,enable,target,!restoringShutdown);
+            if(node.dischargeVoltage())verifyDischargeVoltage(node,enable,target);
             else verifyForce(node,enable,target);
         }catch(IOException e){
             if(node.dischargeVoltage()){
@@ -186,41 +228,29 @@ final class OplusVotes {
                     if(!read(setting).equals(previous))write(setting,previous);
                     if(!before.equals("0")||!read(active).equals(before))write(active,before);
                     if(!read(active).equals(before)||!read(setting).equals(previous))throw new IOException();
-                    verifyDischargeVoltage(node,before.equals("1"),previous,true);
+                    verifyDischargeVoltage(node,before.equals("1"),previous);
                 }catch(IOException reset){e.addSuppressed(reset);throw new IOException("修改失败，无法确认原值已恢复。",e);}
                 throw e;
             }
             try{
-                write(active,"0");
+                writeForce(node,active,"0");
                 if(!read(active).equals("0"))throw new IOException();
             }catch(IOException reset){throw new IOException("修改失败，无法确认是否已解除覆盖。",reset);}
             throw new IOException("驱动未能应用该设置，已关闭强制覆盖。",e);
         }
-        if(restoringShutdown){
-            // Once the driver's vote is released, leave it released even if the hardware readback fails.
-            try{
-                if(!Files.isReadable(SHUTDOWN_READBACK))throw new IOException("当前驱动不支持关机阈值读回。");
-                verifyDischargeVoltage(node,false,target,true);
-            }
-            catch(IOException error){throw new IOException("已解除强制覆盖，未能确认厂商关机电压已生效。",error);}
-        }
     }
 
-    private static String verifyForce(Node node,boolean enabled,String target)throws IOException{
+    private static void verifyForce(Node node,boolean enabled,String target)throws IOException{
         Matcher effective=EFFECTIVE.matcher(read(node.directory.resolve("status")));
         if(!effective.find()||enabled!=effective.group(1).equals("DEBUG_FORCE_CLIENT")||
             enabled&&!effective.group(2).equals(target))throw new IOException("投票生效值校验失败。");
-        return effective.group(2);
     }
 
-    private static void verifyDischargeVoltage(Node node,boolean enabled,String target,boolean checkShutdownReadback)throws IOException{
+    private static void verifyDischargeVoltage(Node node,boolean enabled,String target)throws IOException{
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
         while(true){
             try{
-                String effective=verifyForce(node,enabled,target);
-                if(checkShutdownReadback&&node==Node.GAUGE_SHUTDOWN_VOLTAGE
-                    &&(effective.startsWith("-")||effective.equals("0")||!read(SHUTDOWN_READBACK).equals(effective)))
-                    throw new IOException("实际关机阈值与生效投票不一致。");
+                verifyForce(node,enabled,target);
                 return;
             }catch(IOException pending){
                 if(System.nanoTime()-deadline>=0)throw pending;
@@ -326,7 +356,9 @@ final class OplusVotes {
 
     private static void writeChargingMode(Node node,boolean enable)throws IOException {
         switch(node){
-            case CHG_DISABLE:write(CHARGING_ENABLE,enable?"0":"1");break;
+            case CHG_DISABLE:
+                writePhysicalPause(enable);
+                break;
             case WIRED_CHARGE_SUSPEND:applyForce(node,enable?1:null);break;
             case PLC:writePlc(enable);break;
             default:throw new IllegalArgumentException();
@@ -385,25 +417,6 @@ final class OplusVotes {
         Range(int min,int max){this.min=min;this.max=max;}
     }
 
-    private static Range floatRange(){
-        try{
-            ByteBuffer table=ByteBuffer.wrap(Files.readAllBytes(DEVICE_TREE.resolve("oplus,comm/oplus_spec,fv-mv")));
-            int min=Integer.MAX_VALUE,max=0;
-            while(table.remaining()>=Integer.BYTES){
-                int value=table.getInt();
-                if(value<3000||value>Node.FV_MAX.maximum)continue;
-                min=Math.min(min,value);
-                max=Math.max(max,value);
-            }
-            int votedMax=0;
-            Matcher votes=ACTIVE_VOTE.matcher(read(Node.FV_MAX.directory.resolve("status")));
-            while(votes.find())votedMax=Math.max(votedMax,Integer.parseInt(votes.group(1)));
-            max=Math.min(max,votedMax);
-            if(min<=max)return new Range(min,max);
-        }catch(IOException ignored){}
-        return null;
-    }
-
     static JSONObject coolDownDetails()throws JSONException {
         JSONObject result=new JSONObject();
         if(!Files.isReadable(Node.COOL_DOWN.directory.resolve("status")))return result;
@@ -455,5 +468,27 @@ final class OplusVotes {
 
     private static void write(Path path,String value)throws IOException {
         Files.write(path,value.getBytes(StandardCharsets.US_ASCII),StandardOpenOption.WRITE);
+    }
+
+    private static void writeForce(Node node,Path path,String value)throws IOException {
+        try{write(path,value);}
+        catch(AccessDeniedException denied){
+            if(node!=Node.UFCS_DISABLE)throw denied;
+            Set<PosixFilePermission> previous=Files.getPosixFilePermissions(path);
+            Set<PosixFilePermission> writable=EnumSet.noneOf(PosixFilePermission.class);
+            writable.addAll(previous);
+            if(!writable.add(PosixFilePermission.OWNER_WRITE))throw denied;
+            Files.setPosixFilePermissions(path,writable);
+            IOException failure=null;
+            try{write(path,value);}
+            catch(IOException error){failure=error;throw error;}
+            finally{
+                try{Files.setPosixFilePermissions(path,previous);}
+                catch(IOException cleanup){
+                    if(failure==null)throw cleanup;
+                    failure.addSuppressed(cleanup);
+                }
+            }
+        }
     }
 }

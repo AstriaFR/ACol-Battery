@@ -76,13 +76,14 @@ final class PowerIndicator implements AutoCloseable {
     private final DisplayManager.DisplayListener displayListener;
 
     static final class BatteryValues {
-        final double watts,temperature,level;
+        final double watts,temperature,volts,level;
         final boolean charging;
         BatteryValues(Core.Reading reading){
-            this(reading.power(),reading.temp,reading.pct,reading.chargingCurrent()>0&&(!reading.onlineKnown||reading.online));
+            this(reading.power(),reading.temp,reading.voltage(),reading.pct,reading.chargingCurrent()>0&&(!reading.onlineKnown||reading.online));
         }
-        BatteryValues(double watts,double temperature,double level,boolean charging){
+        BatteryValues(double watts,double temperature,double millivolts,double level,boolean charging){
             this.watts=watts;this.temperature=temperature;this.charging=charging;
+            this.volts=Core.cellVoltage(millivolts)?millivolts/1000:Double.NaN;
             this.level=Core.validPercentage(level)?level:Double.NaN;
         }
     }
@@ -192,18 +193,21 @@ final class PowerIndicator implements AutoCloseable {
         DisplayMetrics metrics=new DisplayMetrics();display.getRealMetrics(metrics);
         float cell=MonitorGlyphs.width('0')+.35f;
         boolean cpu=appearance.shows(CPU_CHART|CPU_FREQUENCY),gpu=appearance.shows(GPU_CHART|GPU_FREQUENCY);
-        boolean power=appearance.shows(POWER),temperature=appearance.shows(TEMPERATURE);
-        int groups=(appearance.shows(FPS)?1:0)+(cpu?1:0)+(gpu?1:0)+(power||temperature?1:0);
+        boolean power=appearance.shows(POWER),temperature=appearance.shows(TEMPERATURE),voltage=appearance.shows(VOLTAGE);
+        int batteryFields=(power?1:0)+(temperature?1:0)+(voltage?1:0);
+        int groups=(appearance.shows(FPS)?1:0)+(cpu?1:0)+(gpu?1:0)+(batteryFields>0?1:0);
         float contentWidth=2*PADDING+(groups-1)*GROUP_GAP;
         if(appearance.shows(FPS))contentWidth+=FPS_CELLS*cell;
         if(cpu)contentWidth+=processorWidth(appearance,CPU_CHART,CPU_FREQUENCY,CPU_CHART_WIDTH,cell);
         if(gpu)contentWidth+=processorWidth(appearance,GPU_CHART,GPU_FREQUENCY,GPU_BAR_WIDTH,cell);
-        if(power||temperature)contentWidth+=ICON_ADVANCE;
+        if(batteryFields>0)contentWidth+=ICON_ADVANCE+(batteryFields-1)*FIELD_GAP;
         if(power)contentWidth+=5*cell+MonitorGlyphs.width("W");
         if(temperature)contentWidth+=5*cell+MonitorGlyphs.width("°C");
-        if(power&&temperature)contentWidth+=FIELD_GAP;
+        float voltageWidth=4*cell+MonitorGlyphs.width("V");
+        if(voltage)contentWidth+=voltageWidth;
         float fullWidth=2*PADDING+3*ICON_ADVANCE+CPU_CHART_WIDTH+GPU_BAR_WIDTH+3*FIELD_GAP+3*GROUP_GAP+(18+FPS_CELLS)*cell
             +MonitorGlyphs.width("W")+MonitorGlyphs.width("°C");
+        if(voltage)fullWidth+=FIELD_GAP+voltageWidth;
         float baseScaleX=Math.min(metrics.density,metrics.widthPixels/fullWidth);
         if(!(baseScaleX>0)){removeLayer();return;}
         float size=Math.min(appearance.sizePercent/100f,metrics.widthPixels/(contentWidth*baseScaleX));
@@ -296,6 +300,7 @@ final class PowerIndicator implements AutoCloseable {
                 double temperature=reading==null?Double.NaN:reading.temperature;
                 appendField(content,PowerDisplayState.temperature(temperature),temperature,false,warningColor(temperature,appearance.temperature));
             }
+            if(appearance.shows(VOLTAGE))content.append(PowerDisplayState.voltage(reading==null?Double.NaN:reading.volts)).append('|');
         }
         return content.toString();
     }
@@ -374,6 +379,11 @@ final class PowerIndicator implements AutoCloseable {
                     double temperature=battery==null?Double.NaN:battery.temperature;
                     x=drawSignedField(canvas,PowerDisplayState.temperature(temperature),temperature,false,cell,x,baseline,warningColor(temperature,appearance.temperature));
                     x=drawUnit(canvas,"°C",x,baseline);
+                    break;
+                case VOLTAGE:
+                    double volts=battery==null?Double.NaN:battery.volts;
+                    x=drawField(canvas,PowerDisplayState.voltage(volts),4,cell,x,baseline);
+                    x=drawUnit(canvas,"V",x,baseline);
                     break;
             }
         }

@@ -35,7 +35,7 @@ public final class BatteryHistorySnapshot {
     }
     public static JSONObject capture(JSONObject info)throws JSONException {
         JSONObject out=new JSONObject();
-        for(String key:new String[]{"cycles","qmax","fcc","rawFcc","soh","rawSoh","cutoffMv","designCapacity"})out.put(key,info.has(key)?info.get(key):JSONObject.NULL);
+        for(String key:new String[]{"cycles","qmax","fcc","rawFcc","soh","rawSoh","cutoffMv","floatVoltageMaxMv","designCapacity"})out.put(key,info.has(key)?info.get(key):JSONObject.NULL);
         double cutoff=info.optDouble("cutoffMv",Double.NaN),qmax=info.optDouble("qmax",Double.NaN);
         boolean known=Double.isFinite(cutoff)&&cutoff>0,noCompensation=uncompensated(info,cutoff,known);
         double reference=info.optDouble(noCompensation?"fcc":"rawFcc",Double.NaN);

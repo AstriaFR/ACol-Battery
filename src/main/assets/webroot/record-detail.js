@@ -253,7 +253,7 @@ export function createRecordDetail(options){
         item.append(value,el('small','','metric-label'));grid.append(item);
       }
       const meta=el('div',undefined,'summary-meta');
-      meta.append(el('span','','summary-state'),el('span','','summary-capacity'),el('span','','summary-current-integral'),el('span','','summary-change'),el('time','','summary-time'));
+      meta.append(el('span','','summary-state'),el('span','','summary-capacity'),el('span','','summary-current-integral'),el('span','','summary-float-max'),el('span','','summary-change'),el('time','','summary-time'));
       summary.append(grid);
       summary.append(meta);
     }
@@ -266,6 +266,9 @@ export function createRecordDetail(options){
     const state=summary.querySelector('.summary-state'),delta=summary.querySelector('.summary-change'),time=summary.querySelector('.summary-time');
     state.textContent=active?`${failed?'连接失败':live?(reading.error?'读取异常':'实时'):'正在读取'} · ${duration(elapsed-r.start_elapsed)}`:
       (reasons[r.reason]??r.reason)+(r.reason==='full_tail_confirmed'?` · ${valid(r.tail_cycles)?fmt(r.tail_cycles):'—'} 次循环`:'');
+    const floatMax=summary.querySelector('.summary-float-max');
+    floatMax.hidden=active||r.reason!=='full_tail_confirmed';
+    floatMax.textContent=floatMax.hidden?'':`浮充电压上限 ${valid(r.tail_float_voltage_max_mv)?fmt(r.tail_float_voltage_max_mv)+' mV':'—'}`;
     renderChargeIntegral(r);
     const endRm=live&&valid(reading.rm)?reading.rm:r.rm_end,capacity=summary.querySelector('.summary-capacity');
     capacity.textContent=`${valid(r.rm_start)?r.rm_start.toFixed(0):'—'} → ${valid(endRm)?endRm.toFixed(0):'—'}`;

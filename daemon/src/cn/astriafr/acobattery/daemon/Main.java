@@ -183,7 +183,7 @@ public final class Main {
         if(!app.usageError.isEmpty()){app.usageErrorAt=System.currentTimeMillis();FallbackDiagnostics.record("应用使用统计服务",app.usageError);}
         app.moduleWatch=watchModule(args[1]);app.monitorScreen();
 
-        System.err.println("AColBattery App 2.7.1 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
+        System.err.println("AColBattery App 2.7.2 Android="+Build.VERSION.RELEASE+" SDK="+Build.VERSION.SDK_INT+" capabilities="+app.capabilities);
         Thread server=new Thread(app::serve,"curve-ipc");server.setDaemon(true);server.start();
         Thread collector=new Thread(()->{
             try {app.collect(attempt);System.exit("framework_restarted".equals(app.stopReason)?75:0);}
@@ -221,6 +221,7 @@ public final class Main {
         // OPLUS Android 17's default sync-mode resolver expects an app-bound array.
         // Supply both modes explicitly so a root app_process needs no app binding.
         store=new RecordStore(data);db=store.db;battery=new BatteryService(ctx);
+        LegacyChargingState.restore(db,boot);
         batteryCompensationFloor="1".equals(runtimeValue(BATTERY_COMPENSATION_FLOOR));
         advancedRestore=new AdvancedRestore(db,boot,gaugeUpdate,runtimeValue(AdvancedRestore.KEY),()->{if(!stopping)wakeCollector();});
         recordNotification=new RecordNotification(ctx,db,data);
@@ -430,6 +431,7 @@ public final class Main {
             if(adjusted>=1)capacity=adjusted;
         }
         defaults.put(2,capacity);
+        if(battery.usesLowVoltageProfile())defaults.put(4,250);
         // Capacity is in hundredths of an Ah. Convert at 3.8 V and keep whole 0.5 Wh steps.
         defaults.put(14,capacity*76/1000*50);
         return defaults;
@@ -651,7 +653,11 @@ public final class Main {
         return result.put("cellCount",cellCount).put("manualCellCount",manualCellCount);
     }
     static String smallRecordWhere(JSONObject value) {
-        return "active=0 AND fast_seconds=0 AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",DEFAULT_DELETE_PCT);
+        // Require measured start and end percentages for threshold deletion.
+        return "active=0 AND fast_seconds=0 AND (reason IS NULL OR reason<>'full_tail_confirmed')"
+            +" AND pct_start IS NOT NULL AND pct_end IS NOT NULL AND ABS(pct_end-pct_start)<="+value.optInt("deletePct",DEFAULT_DELETE_PCT)
+            +" AND EXISTS(SELECT 1 FROM samples WHERE session=sessions.id AND x=0 AND pct BETWEEN 0 AND 100)"
+            +" AND EXISTS(SELECT 1 FROM samples WHERE session=sessions.id AND x=sessions.end_elapsed-sessions.start_elapsed AND pct BETWEEN 0 AND 100)";
     }
     JSONObject saveSettings(JSONArray p)throws Exception {
         int count=p.length()-1;
@@ -783,10 +789,11 @@ public final class Main {
         return reading!=null&&Core.validPercentage(reading.pct)
             &&(!appearance.shows(POWER)||Core.finite(reading.power()))
             &&(!appearance.shows(TEMPERATURE)||Core.finite(reading.temp))
+            &&(!appearance.shows(VOLTAGE)||Core.cellVoltage(reading.voltage()))
             &&(!reading.gamePartial||!reading.online||Core.finite(reading.current));
     }
     private PowerIndicator.BatteryValues powerDisplayReading(long intervalMs,MonitorAppearance appearance){
-        boolean power=appearance.shows(POWER),temperature=appearance.shows(TEMPERATURE);
+        boolean power=appearance.shows(POWER),temperature=appearance.shows(TEMPERATURE),voltage=appearance.shows(VOLTAGE);
         long now=SystemClock.elapsedRealtime();
         Core.Reading game=gameTrack.previous;
         boolean recentGame=fastEnabled&&game!=null&&candidateAt<0&&powerRetryAt==0&&now-game.elapsed<intervalMs;
@@ -795,26 +802,28 @@ public final class Main {
         Core.Reading fresh=latest;if(uiReading!=null&&(fresh==null||uiReading.elapsed>fresh.elapsed))fresh=uiReading;
         if(coversMonitorBattery(fresh,appearance)&&now-fresh.elapsed<Math.min(1000,intervalMs))
             return new PowerIndicator.BatteryValues(fresh);
-        if(recentGame)return supplementMonitorBattery(game,power,temperature);
-        if(!power){
+        if(recentGame)return supplementMonitorBattery(game,power,temperature,voltage);
+        if(!power&&!voltage){
             MonitorTemperature sample=readMonitorTemperature(ctx);
             Core.Reading level=new Core.Reading();
             readPercentage(ctx,level);
-            return new PowerIndicator.BatteryValues(Double.NaN,sample.celsius,level.pct,sample.charging);
+            return new PowerIndicator.BatteryValues(Double.NaN,sample.celsius,Double.NaN,level.pct,sample.charging);
         }
         resolveCellProfile();
         Core.Reading reading=readGauge(ctx,cellCount,temperature);
         readPercentage(ctx,reading);
         return new PowerIndicator.BatteryValues(reading);
     }
-    private PowerIndicator.BatteryValues supplementMonitorBattery(Core.Reading game,boolean power,boolean temperature){
-        double watts=game.power(),temp=game.temp,level=game.pct;
+    private PowerIndicator.BatteryValues supplementMonitorBattery(Core.Reading game,boolean power,boolean temperature,boolean voltage){
+        double watts=game.power(),temp=game.temp,millivolts=game.voltage(),level=game.pct;
         boolean charging=game.online&&game.chargingCurrent()>0;
         boolean missingTemperature=temperature&&!Core.finite(temp);
-        if(power&&!Core.finite(watts)){
+        boolean missingPower=power&&!Core.finite(watts),missingVoltage=voltage&&!Core.cellVoltage(millivolts);
+        if(missingPower||missingVoltage){
             resolveCellProfile();
             Core.Reading gauge=readGauge(ctx,cellCount,missingTemperature);
-            watts=gauge.power();
+            if(missingPower)watts=gauge.power();
+            if(missingVoltage)millivolts=gauge.voltage();
             if(missingTemperature)temp=gauge.temp;
             charging=game.online&&gauge.chargingCurrent()>0;
         }else if(missingTemperature||game.online&&!Core.finite(game.current)){
@@ -827,7 +836,7 @@ public final class Main {
             readPercentage(ctx,reading);
             level=reading.pct;
         }
-        return new PowerIndicator.BatteryValues(watts,temp,level,charging);
+        return new PowerIndicator.BatteryValues(watts,temp,millivolts,level,charging);
     }
     private PerformanceCollector.MonitorSample sampleMonitorPerformance(long now,MonitorAppearance appearance,int recordingMetrics){
         powerIndicator.state.performanceSampled(now,performanceCadence.interval);
@@ -1046,10 +1055,16 @@ public final class Main {
                         if(state==2)fullGate.interrupt();
                         if(candidateAt<0){candidate=screenReading!=null?screenReading:hardwareReading(header);if(!candidate.onlineKnown){powerUnavailable(now);continue;}if(candidate.online!=plugged){candidate=null;powerRetryAt=now+1000;continue;}candidateAt=now;}
                         if(now-candidateAt>=3000) {
-                            if(recordingEnabled){append(candidate);finish(plugged?"plugged":"unplugged");}
-                            stableOnline=plugged;state=plugged?1:0;
-                            if(recordingEnabled)begin(candidate);
                             Core.Reading boundary=candidate;
+                            if(recordingEnabled){
+                                if(!Core.validPercentage(boundary.pct)){
+                                    Core.Reading retry=screenReading!=null?screenReading:hardwareReading(header);
+                                    if(retry.onlineKnown&&retry.online==plugged&&retry.valid())boundary=retry;
+                                }
+                                append(boundary);finish(plugged?"plugged":"unplugged");
+                            }
+                            stableOnline=plugged;state=plugged?1:0;
+                            if(recordingEnabled)begin(boundary);
                             candidate=null;candidateAt=-1;sampling.sampled(state,now);
                             collectGame(boundary,screenSample,now);
                         }
@@ -1262,7 +1277,8 @@ public final class Main {
         if(!gameContext)db.execSQL("DELETE FROM runtime WHERE key='full_tail_boot'");
         startElapsed=r.elapsed;startWall=r.wall;clockAdjusted=false;
         try(SQLiteStatement insert=db.compileStatement("INSERT INTO sessions(kind,start_wall,start_elapsed,boot,end_elapsed,pct_start,pct_end,rm_start,rm_end,cell_count,fast_seconds,performance_seconds,stats_basis,active,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,'recording')")) {
-            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,nullable(r.pct),nullable(r.pct),nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000.0:0,state==0&&gameContext?settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS):0,state==0&&gameContext?"rm_minute":"rm"};
+            Double pct=nullable(Core.validPercentage(r.pct)?r.pct:Double.NaN);
+            Object[] args={state==1?"charge":"discharge",r.wall,r.elapsed,boot,r.elapsed,pct,pct,nullable(r.rm),nullable(r.rm),r.cellCount,state==0&&gameContext?sampling.fastMs/1000.0:0,state==0&&gameContext?settings.optDouble("performanceSeconds",DEFAULT_GAME_SECONDS):0,state==0&&gameContext?"rm_minute":"rm"};
             for(int i=0;i<args.length;i++) {
                 Object v=args[i];int n=i+1;
                 if(v==null)insert.bindNull(n);
@@ -1277,7 +1293,7 @@ public final class Main {
         append(r);
     }
     void finish(String reason)throws JSONException {
-        Integer cycles=null;JSONObject batterySnapshot=null;
+        Integer cycles=null,tailFloatVoltageMax=null;JSONObject batterySnapshot=null;
         boolean tail=session>=0&&"full_tail_confirmed".equals(reason);
         boolean nextCompensationFloor=batteryCompensationFloor;
         if(tail){
@@ -1288,7 +1304,15 @@ public final class Main {
                 cycles=integer(batterySnapshot.opt("cycles").toString());
                 nextCompensationFloor=info.getBoolean("compensationFloorConfirmed");
             }
-            catch(Exception error){FallbackDiagnostics.record("尾充电池信息快照",error);cycles=battery.readCycleCount();}
+            catch(Exception error){
+                FallbackDiagnostics.record("尾充电池信息快照",error);
+                cycles=battery.readCycleCount();
+                if(batterySnapshot==null){
+                    Integer value=BatteryService.floatVoltageMaxMv();
+                    if(value!=null)batterySnapshot=new JSONObject().put("floatVoltageMaxMv",value);
+                }
+            }
+            if(batterySnapshot!=null)tailFloatVoltageMax=integer(batterySnapshot.optString("floatVoltageMaxMv"));
             batterySnapshot=BatteryHistorySnapshot.withTailRm(batterySnapshot,tailRm);
         }
         db.beginTransaction();
@@ -1301,7 +1325,8 @@ public final class Main {
                 db.execSQL("INSERT OR REPLACE INTO runtime(key,value) VALUES(?,?)",new Object[]{BATTERY_COMPENSATION_FLOOR,nextCompensationFloor?"1":"0"});
             if(session>=0) {
                 if(tail)db.execSQL("INSERT OR IGNORE INTO battery_history(source_session,completed_wall,cycles,snapshot) VALUES(?,?,?,?)",new Object[]{session,previous!=null&&previous.wall>0?previous.wall:System.currentTimeMillis(),cycles,batterySnapshot==null?null:batterySnapshot.toString()});
-                db.execSQL("UPDATE sessions SET active=0,reason=?,tail_cycles=? WHERE id=?",new Object[]{reason,cycles,session});
+                db.execSQL("UPDATE sessions SET active=0,reason=?,tail_cycles=?,tail_float_voltage_max_mv=? WHERE id=?",
+                    new Object[]{reason,cycles,tailFloatVoltageMax,session});
                 db.delete("sessions","id=? AND "+smallRecordWhere(settings),new String[]{""+session});
             }
             db.setTransactionSuccessful();
@@ -1357,12 +1382,13 @@ public final class Main {
             MemoryStats memory=MemoryStats.parse(read("/proc/meminfo"));
             r.memoryUsedGB=memory==null?Double.NaN:memory.usedGB();r.memoryTotalGB=memory==null?Double.NaN:memory.totalGB();
         }
+        Double pct=nullable(Core.validPercentage(r.pct)?r.pct:Double.NaN);
         db.beginTransaction();
         try {
             if(newClock)db.execSQL("UPDATE sessions SET clock_adjusted=1 WHERE id=?",new Object[]{session});
             if(rebased){
                 db.execSQL("UPDATE sessions SET rm_start=?,pct_start=COALESCE(?,pct_start) WHERE id=?",
-                    new Object[]{r.rm,nullable(Core.validPercentage(r.pct)?r.pct:Double.NaN),session});
+                    new Object[]{r.rm,pct,session});
                 db.execSQL("UPDATE samples SET power=NULL,quality=quality|? WHERE session=? AND x>0 AND (quality&?)=0",
                     new Object[]{Core.DISCHARGE_REBASE,session,Core.DISCHARGE_REBASE});
                 deferred.rebaseDischargeStart(session);
@@ -1390,9 +1416,9 @@ public final class Main {
                 int usageQuality=screenInterval?quality:quality|DeferredStats.SCREEN_INTERVAL_UNCERTAIN;
                 deferred.raw(session,startElapsed,r,usageQuality,sampling.maxGap());
             }
-            String endValues=fast?"pct_end=COALESCE(?,pct_end),rm_end=COALESCE(?,rm_end)":"pct_end=?,rm_end=?";
-            db.execSQL("UPDATE sessions SET end_elapsed=?,"+endValues+",missed=missed+?,anomalies=anomalies+? WHERE id=?",
-                new Object[]{r.elapsed,nullable(r.pct),nullable(r.rm),missed,(quality&6)!=0?1:0,session});
+            String endRm=fast?"COALESCE(?,rm_end)":"?";
+            db.execSQL("UPDATE sessions SET end_elapsed=?,pct_start=COALESCE(pct_start,?),pct_end=COALESCE(?,pct_end),rm_end="+endRm+",missed=missed+?,anomalies=anomalies+? WHERE id=?",
+                new Object[]{r.elapsed,fast?null:pct,pct,nullable(r.rm),missed,(quality&6)!=0?1:0,session});
             // Minute checkpoints suffice for fast accounting. Avoid adding a WAL
             // page write to every second of charging or game graph sampling.
             if(!fast||previous==null||resumed||powerBoundary)checkpoint(r);
@@ -1630,6 +1656,7 @@ public final class Main {
         long refreshMs=mode==HOME_WATCH_MODE||mode==DETAIL_WATCH_MODE?LIVE_READING_REFRESH_MS:1000;
         boolean includeList=args==null||args.optInt(5,1)==1;
         long id=args==null?0:Math.max(0,args.optLong(0,0)),after=args==null?0:Math.max(0,args.optLong(1,0));
+        boolean pinned=mode==DETAIL_WATCH_MODE&&id>0&&args.optInt(6,0)==1;
         long began=SystemClock.elapsedRealtime(),lastList=0,lastSettings=-1,normalId=-1,normalAfter=0;
         Map<Long,Long> sentUsage=new LinkedHashMap<>();
         // A bounded lease also closes an orphaned stream if a renderer dies before receiving its PID.
@@ -1637,16 +1664,17 @@ public final class Main {
             long started=SystemClock.elapsedRealtime();JSONObject packet;boolean more;
             synchronized(mutex) {
                 long preferred=preferredSession();
-                JSONObject previous=null;boolean changed=id!=preferred;
+                JSONObject previous=null;boolean changed=!pinned&&id!=preferred;
                 if(!summaryOnly&&changed&&id>0)previous=live(new JSONArray().put(id).put(after).put(0).put(0).put(preferred+1)).put("recordId",id);
                 if(changed){id=preferred;long start=id==gameTrack.session?gameTrack.startElapsed:startElapsed;after=id>0?Math.max(0,latest.elapsed-start-1):0;}
                 packet=live(new JSONArray().put(summaryOnly?0:Math.max(0,id)).put(after).put(0).put(0).put(preferred+1),mode!=SUMMARY_WATCH_MODE);
+                if(pinned)packet.put("recordId",id);
                 if(previous!=null)packet.put("previous",previous);
                 if(normalId>0&&normalId!=session){
                     packet.put("parallelPrevious",live(new JSONArray().put(normalId).put(normalAfter).put(0).put(0).put(preferred+1)));
                     normalId=-1;normalAfter=0;
                 }
-                if(!summaryOnly&&gameTrack.session>0&&session>0){
+                if(!summaryOnly&&!pinned&&gameTrack.session>0&&session>0){
                     if(normalId!=session){normalId=session;normalAfter=Math.max(0,latest.elapsed-startElapsed-1);}
                     JSONObject parallel=live(new JSONArray().put(session).put(normalAfter).put(0).put(0).put(preferred+1));
                     JSONArray normalPoints=parallel.optJSONArray("points");
@@ -1697,13 +1725,14 @@ public final class Main {
                 packet=new JSONObject().put("ok",true).put("status",status);
                 compensationFloor=batteryCompensationFloor;
             }
+            Map<String,String> batteryLog=readBatteryLog();
             if(includeSnapshot){
-                JSONObject info=battery.batteryInfoSnapshot(compensationFloor);
+                JSONObject info=battery.batteryInfoSnapshot(compensationFloor,Double.NaN,batteryLog);
                 String encoded=info.toString();
                 if(!encoded.equals(sentSnapshot)){packet.put("batteryInfo",info);sentSnapshot=encoded;}
             }
             includeSnapshot=true;
-            addChargingInfo(liveReading);
+            addChargingInfo(liveReading,batteryLog);
             socket.getOutputStream().write((packet.toString()+"\n").getBytes(StandardCharsets.UTF_8));
             Thread.sleep(Math.max(100,LIVE_READING_REFRESH_MS-(SystemClock.elapsedRealtime()-started)));
         }
@@ -1746,8 +1775,7 @@ public final class Main {
         }
         if(action.equals("reset_oplus_votes")){
             if(stopping||p.length()!=0)throw new IOException("暂时无法恢复参数设置。");
-            String failed=advancedRestore.reset();
-            return o.put("failed",failed);
+            return o.put("failed",advancedRestore.reset());
         }
         if(action.equals("set_charging_mode")||action.equals("set_oplus_vote")){
             try{
@@ -1822,7 +1850,11 @@ public final class Main {
         if(action.equals("set_discharge_notification"))return setDischargeNotification(p);
         if(action.equals("set_cell_count"))return setCellCount(o,p);
         if(action.equals("set_fast")){if(p.length()!=1||(p.getInt(0)!=0&&p.getInt(0)!=1))throw new IOException("游戏模式参数无效");return setFast(p.getInt(0)==1,p.getInt(0)==1?"fast_started":"fast_stopped");}
-        if(action.equals("shutdown")){requestStop("app_uninstalled".equals(p.optString(0))?"app_uninstalled":"service_updated");return o;}
+        if(action.equals("shutdown")){
+            String reason=p.optString(0);
+            requestStop("app_uninstalled".equals(reason)||"data_maintenance".equals(reason)?reason:"service_updated");
+            return o;
+        }
         if(action.equals("settings")){
             resolveCellProfile();
             return o.put("settings",settings).put("cellCount",cellCount).put("manualCellCount",manualCellCount).put("recordingEnabled",recordingEnabled)
@@ -1927,7 +1959,7 @@ public final class Main {
     JSONObject status()throws Exception {return status(true);}
     private JSONObject status(boolean includeReading)throws Exception {
         resolveCellProfile();
-        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.7.1").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
+        JSONObject o=new JSONObject().put("ok",true).put("recorderReady",recorderReady&&!stopping).put("version","2.7.2").put("resumeProtocol",1).put("fastEnabled",fastEnabled)
             .put("androidSdk",Build.VERSION.SDK_INT).put("androidVersion",Build.VERSION.RELEASE).put("screenEventApi",screenEventApi)
             .put("highDesignCapacity",battery.usesLowVoltageProfile());
         o.put("powerDisplayEnabled",powerIndicator.state.enabled).put("powerDisplayError",powerIndicator.error());

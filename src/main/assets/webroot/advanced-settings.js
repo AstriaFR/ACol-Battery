@@ -10,9 +10,10 @@ const floatFields=[
 ];
 const gaugeInterval={key:'GAUGE_UPDATE',label:'电流计采样间隔',unit:'s',min:0.5,max:20,scale:1000};
 const coolDown={key:'COOL_DOWN',label:'充电降温限流档位',unit:'',deviceRange:true};
+const ufcsDisableKey='UFCS_DISABLE';
 const wiredCurrentFields=[
-  {key:'WIRED_FCC',label:'普通有线电池电流',unit:'mA',max:4000},
-  {key:'WIRED_ICL',label:'普通有线输入电流',unit:'mA',max:4000}
+  {key:'WIRED_FCC',label:'普通有线电池电流',unit:'mA',max:5000},
+  {key:'WIRED_ICL',label:'普通有线输入电流',unit:'mA',max:3000}
 ];
 const fastCurrentFields=[
   {key:'PPS_CURR',label:'PPS 电流',unit:'mA',max:8000},
@@ -26,8 +27,8 @@ const modeReading={label:'限制充电'};
 const batteryTypeReading={label:'电池类型'};
 const groups=[
   ['advancedDischargeVoltageFields',dischargeVoltageFields],
-  ['advancedFloatCorrection',[floatCorrection]],
   ['advancedFloatFields',floatFields],
+  ['advancedFloatCorrection',[floatCorrection]],
   ['advancedCoolDown',[coolDown]],
   ['advancedGaugeInterval',[gaugeInterval]],
   ['advancedWiredCurrentFields',wiredCurrentFields],
@@ -36,11 +37,11 @@ const groups=[
 const fields=groups.flatMap(([,items])=>items);
 const capacityReadings=[
   ...dischargeVoltageFields,
-  {key:'TARGET_TERM_VOLTAGE',unit:'mV'},{key:'TARGET_SHUTDOWN_VOLTAGE',unit:'mV'},
+  ...floatFields,
   floatCorrection,
   {key:'FV_DEC',unit:'mV'},
-  ...floatFields,
-  batteryTypeReading
+  batteryTypeReading,
+  {key:'TARGET_TERM_VOLTAGE',unit:'mV'},{key:'TARGET_SHUTDOWN_VOLTAGE',unit:'mV'}
 ];
 const chargingReadings=[
   coolDown,
@@ -57,6 +58,7 @@ export function createAdvancedPage(api,keypad){
   const reset=$('resetAdvancedSettings');
   const voltageAdvice=$('advancedDischargeVoltageAdvice'),voltageAdviceValue=$('advancedDischargeVoltageAdviceValue');
   const autoRestore=$('advancedAutoRestore'),cellButtons=[$('singleCell'),$('dualCell')];
+  const ufcsToggle=$('advancedDisableUfcs'),ufcsUnavailable=$('advancedUfcsUnavailable');
   const modeGroup=$('advancedChargingMode'),modeUnavailable=$('advancedChargingModeUnavailable');
   const capacityList=$('advancedCapacityReadings'),chargingList=$('advancedChargingReadings');
   const rows=new Map(),controls=new Map();
@@ -149,7 +151,7 @@ export function createAdvancedPage(api,keypad){
     capacityList.hidden=!capacityReadings.some(field=>!rows.get(field).row.hidden);
     for(const field of fields){
       const node=nodes[field.key],{button,unavailable}=controls.get(field.key);
-      const missing=isMissing(field.key)||node?.controlMissing===true||(node?.writeUnavailable===true&&!node.forced);
+      const missing=isMissing(field.key)||node?.controlMissing===true;
       const canEdit=!missing&&typeof node?.forced==='boolean'&&(!field.deviceRange||Number.isFinite(node.max)||node.forced);
       const text=canEdit?
         (node.forced?[displayValue(field,node.forceValue),field.unit].filter(Boolean).join(' '):'厂商策略'):'—';
@@ -177,6 +179,11 @@ export function createAdvancedPage(api,keypad){
       missingLabel.hidden=!modeMissing;
       button.disabled=applying||!available||(index!==0&&(!known||modeMissing));
     });
+    const ufcs=nodes[ufcsDisableKey],ufcsMissing=isMissing(ufcsDisableKey)||ufcs?.controlMissing===true;
+    ufcsToggle.checked=ufcs?.forced===true&&ufcs.forceValue>0;
+    ufcsToggle.disabled=applying||ufcsMissing||typeof ufcs?.forced!=='boolean';
+    ufcsToggle.hidden=ufcsMissing;
+    ufcsUnavailable.hidden=!ufcsMissing;
     autoRestore.checked=data?.advancedAutoRestore===true;
     autoRestore.disabled=applying||!data;
     cellButtons.forEach((button,index)=>{
@@ -184,7 +191,7 @@ export function createAdvancedPage(api,keypad){
       if(button.getAttribute('aria-pressed')!==pressed)button.setAttribute('aria-pressed',pressed);
       button.disabled=applying||!data;
     });
-    reset.disabled=!data||applying||!data.hasAdvancedTargets&&!fields.some(field=>nodes[field.key]?.forced)&&!active.length;
+    reset.disabled=!data||applying||!data.hasAdvancedTargets&&!ufcs?.forced&&!fields.some(field=>nodes[field.key]?.forced)&&!active.length;
     const message=error||resetError||(!data?'正在读取…':Object.keys(nodes).length?'':'未读取到投票节点。');
     if(status.textContent!==message)status.textContent=message;
     status.hidden=!message;
@@ -257,18 +264,24 @@ export function createAdvancedPage(api,keypad){
       return updateOption('set_cell_count',count,()=>askChange(`设为${button.textContent}？`,hint));
     };
   });
-  async function setChargingMode(option){
+  ufcsToggle.onchange=()=>{
+    if(!ufcsToggle.disabled)return applyChargingChange('set_oplus_vote',ufcsDisableKey,ufcsToggle.checked?1:'stock');
+  };
+  function setChargingMode(option){
     const {button}=modeButtons[option];
     if(applying||!state||button.disabled)return;
     // Selecting no restriction also clears the saved mode, even if the driver already shows it.
     if(option!==0&&button.getAttribute('aria-pressed')==='true')return;
+    return applyChargingChange('set_charging_mode',option);
+  }
+  async function applyChargingChange(action,...args){
+    if(applying||!state)return;
     resetError='';
     applying=true;
     revision++;
     render(state);
-    try{
-      await api('set_charging_mode',option);
-    }catch(error){resetError=error.message;}
+    try{await api(action,...args);}
+    catch(error){resetError=error.message;}
     finally{
       applying=false;
       refresh();
@@ -277,7 +290,6 @@ export function createAdvancedPage(api,keypad){
   async function confirmVoltage(field,value){
     if(value===null)return await askChange('确定恢复厂商截止电压？',
       `取消「${field.label}」的手动覆盖，交回厂商动态策略。恢复值由驱动决定。`)&&!root.hidden;
-    if(state?.nodes[field.key]?.writeUnavailable)throw Error('当前驱动不支持关机阈值读回。');
     if(value<LOW_VOLTAGE_CONFIRM_MV&&state?.highDesignCapacity!==true){
       return await askChange('低电压风险确认',
         `${field.label}：${value} mV\n\n设置低于 ${LOW_VOLTAGE_CONFIRM_MV} mV 的电压可能会对电池造成损伤。是否仍要应用？`,'确认应用')&&!root.hidden;
@@ -329,7 +341,6 @@ export function createAdvancedPage(api,keypad){
     const current=node.forced?node.forceValue:node.effective;
     keypad.openEditor({
       key:field.key,draft:Number.isFinite(current)?displayValue(field,current):'',decimal:!!field.scale,signed:!!field.signed,digits:1,
-      applyDisabled:node.writeUnavailable===true,
       commit:value=>apply(field,value),restore:()=>apply(field,null)
     },field.label,field.unit,rangeLabel(field),
     push?{page:'advanced',keypad:true,key:field.key}:null);
